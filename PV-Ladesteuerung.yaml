@@ -1,7 +1,7 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.3]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.6]"
   description: >-
-    Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung (Traces: 200), proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost mit mathematisch transparentem Logging.
+    Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung, proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost mit historischem Treppen-Filter und mathematisch transparentem Logging.
   domain: automation
   
   input:
@@ -386,10 +386,10 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.1.3]"
+      bp_version: "[V2.1.6]"
 
   # ====================================================================
-  # V2.1.1 DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN
+  # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN
   # ====================================================================
   - if:
       - condition: trigger
@@ -709,7 +709,7 @@ action:
       zwangsladung_aktiv: "{{ is_state(var_zwangsladung_aktiv, 'on') }}"
       heute_schon_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
       top_balancing_noetig: >
-        {{ top_balancing_soc < 100 and aktueller_soc >= top_balancing_soc and 
+        {{ aktueller_soc >= top_balancing_soc and 
         ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage))) 
         or (states(var_timer_cooldown) == 'active' and not zwangsladung_aktiv)) }}
       
@@ -1039,16 +1039,16 @@ action:
               - condition: template
                 value_template: "{{ var_deye_float_voltage != '' }}"
             then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Zellpflege active (Balancing Timer gestartet). Deye Float-Spannung angehoben (Spannungs-Wechsel: {{ var_float_normal }}V -> {{ var_float_balancing }}V)."
+                  entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_deye_float_voltage }}"
                 data:
                   value: "{{ var_float_balancing }}"
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Zellpflege active (Balancing Timer gestartet). Deye Float-Spannung angehoben (Spannungs-Wechsel: {{ states(var_deye_float_voltage) if var_deye_float_voltage != '' else var_float_normal }}V -> {{ var_float_balancing }}V)."
-                  entity_id: !input helper_logbook_dummy
 
       - alias: "FLOAT-BOOST BEENDEN (Timer ist abgelaufen)"
         conditions:
@@ -1059,16 +1059,16 @@ action:
               - condition: template
                 value_template: "{{ var_deye_float_voltage != '' }}"
             then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Zellpflege beendet. Deye Float-Spannung zurückgesetzt (Spannungs-Wechsel: {{ var_float_balancing }}V -> {{ var_float_normal }}V)."
+                  entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_deye_float_voltage }}"
                 data:
                   value: "{{ var_float_normal }}"
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Zellpflege beendet. Deye Float-Spannung zurückgesetzt (Spannungs-Wechsel: {{ states(var_deye_float_voltage) if var_deye_float_voltage != '' else var_float_balancing }}V -> {{ var_float_normal }}V)."
-                  entity_id: !input helper_logbook_dummy
 
   - choose:
       - alias: "Zieht den Peak-Shaving Timer auf"
@@ -1173,23 +1173,23 @@ action:
                   {{ states(var_timer_cooldown) == 'idle' and not zwangsladung_aktiv and 
                   (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) }}
             then:
+              # 1. Timer starten
               - action: timer.start
                 target:
                   entity_id: !input helper_timer_cooldown
                 data:
                   duration: !input duration_top_balancing
-          - if:
-              - condition: template
-                value_template: "{{ aktueller_soc >= top_balancing_soc and not heute_schon_voll }}"
-            then:
+              # 2. Im exakt selben Moment den Helfer feuern
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
+              # 3. Gemeinsames Tracking-Logbuch
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Tracking: Batterie hat {{ top_balancing_soc }}% erreicht und wird für heute als voll markiert (Aktueller SOC: {{ aktueller_soc }}% >= Schwelle: {{ top_balancing_soc }}%)."
+                  message: "{{ bp_version }} Tracking: Zellspannung Schwelle (>= {{ top_balancing_voltage }}V) erreicht. Top-Balancing Timer gestartet und Batterie für heute als voll markiert."
                   entity_id: !input helper_logbook_dummy
+                  
           - if:
               - condition: template
                 value_template: "{{ (aktueller_ladestrom - target_p1) | abs >= 2 }}"
@@ -1197,7 +1197,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Top-Balancing): Batterie über {{ top_balancing_soc }}% und max. Zellspannung über {{ top_balancing_voltage }}V. Ladestrom auf {{ target_p1 }}A gesetzt (Bedingungen: SOC {{ aktueller_soc }}% >= {{ top_balancing_soc }}% | Vmax1: {{ vmax1 }}V, Vmax2: {{ vmax2 }}V >= {{ top_balancing_voltage }}V | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p1 }}A)."
+                  message: "{{ bp_version }} Prio 1 (Top-Balancing): Batterie über {{ top_balancing_soc }}% und max. Zellspannung über {{ top_balancing_voltage }}V. Ladestrom auf {{ target_p1 }}A gesetzt (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p1 }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
