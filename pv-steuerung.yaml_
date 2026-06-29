@@ -56,7 +56,7 @@ sensor:
   - platform: statistics
     name: "Hausverbrauch 7 Tage Durchschnitt"
     unique_id: "optimizer_sensor_hausverbrauch_7d_avg"
-    entity_id: sensor.dachterrasse_load_power
+    entity_id: none
     state_characteristic: mean
     max_age:
       days: 7
@@ -66,7 +66,7 @@ sensor:
   - platform: history_stats
     name: "Ladesteuerung Eingriff Dauer Heute"
     unique_id: "optimizer_sensor_intervention_duration_today"
-    entity_id: binary_sensor.ladesteuerung_eingriff_aktiv
+    entity_id: none
     state: "on"
     type: time
     start: "{{ now().replace(hour=0, minute=0, second=0) }}"

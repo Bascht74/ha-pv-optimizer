@@ -1,7 +1,7 @@
 blueprint:
   name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe"
   description: >-
-    [V2.1] Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung (Traces: 200), proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost.
+    [V2.1.1] Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung (Traces: 200), proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost mit mathematisch transparentem Logging.
   domain: automation
   
   input:
@@ -374,7 +374,7 @@ trigger:
     id: float_boost_ende
 
 # ====================================================================
-# [V2.1] QUEUED MODE (Schützt Timer-Events vor parallelen Triggern)
+# QUEUED MODE (Schützt Timer-Events vor parallelen Triggern)
 # ====================================================================
 mode: queued
 max: 10
@@ -383,7 +383,7 @@ trace:
 
 action:
   # ====================================================================
-  # V2.1 DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN
+  # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN
   # ====================================================================
   - if:
       - condition: trigger
@@ -565,14 +565,12 @@ action:
       next_hour_anomalie: "{{ next_hour_50 > 0 and ((next_hour_50 - next_hour_10) / next_hour_50) > 0.20 }}"
       solcast_log_addon: "{{ ' [Info: Prognose unsicher (>20% Varianz)]' if next_hour_anomalie else '' }}"
       
-      # V2.1 JSON PROFIL LADEN (48 Werte)
       json_profil: >
         {% set j_str = states(var_hausverbrauch_json) %}
         {% set default_arr = [] %}
         {% for i in range(48) %}{% set default_arr = default_arr + [hausverbrauch_durchschnitt] %}{% endfor %}
         {{ j_str | from_json if j_str is string and j_str | length > 20 else default_arr }}
 
-      # V2.1 ITERATIVER 30-MIN ARRAY-SCAN (Gesamter Tag)
       solcast_rest_blended: >
         {% set ns = namespace(val=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -583,9 +581,7 @@ action:
             {% if s_start >= current_period and s_start.date() == now().date() %}
               {% set blend = (stunde.pv_estimate + stunde.pv_estimate10) / 2 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {# JSON speichert Watt für diese 30 Min. Watt / 2000 = kWh der Halbstunde #}
               {% set haus_kwh = (json_profil[h_index] | float(0)) / 2000 %}
-              {# Wir lassen Entladung (negative Werte) voll zu! #}
               {% set netto = blend - haus_kwh %}
               {% set ns.val = ns.val + netto %}
             {% endif %}
@@ -595,7 +591,6 @@ action:
         {% endif %}
         {{ ns.val }}
 
-      # V2.1 ITERATIVER 30-MIN ARRAY-SCAN (Nach Blockade)
       solcast_nach_blockade: >
         {% set ns = namespace(val=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -661,7 +656,6 @@ action:
       freie_kwh: "{{ batterie_kapazitaet * (1 - (aktueller_soc / 100)) }}"
       potential_export: "{{ grid_export - batterie_leistung }}"
       
-      # V2.1: Da Hausverbrauch bereits in Schleife verrechnet wurde, bleibt nur der Puffer-Abzug!
       netto_tagesueberschuss: "{{ solcast_rest_blended - puffer_kwh }}"
       netto_nach_blockade: "{{ solcast_nach_blockade - puffer_kwh }}"
 
@@ -760,7 +754,7 @@ action:
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "[V2.1] BMS-Sensoren offline! Ladefreigabe auf 10A Notlauf gesetzt."
+          message: "[V2.1.1] BMS-Sensoren offline! Ladefreigabe auf 10A Notlauf gesetzt."
     else:
       - action: persistent_notification.dismiss
         data:
@@ -800,7 +794,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Safety-Reset: Zwangsladung war aktiv, aber ToU-SOC nicht auf 100%. Helfer wurde sicherheitshalber zurückgesetzt."
+                  message: "[V2.1.1] Safety-Reset: Zwangsladung war aktiv, aber ToU-SOC nicht auf 100% (ToU-SOC 1: {{ states(var_deye_tou_1) }}% < 100%). Helfer wurde sicherheitshalber zurückgesetzt."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -832,9 +826,9 @@ action:
                     data:
                       name: "PV Optimizer"
                       message: >
-                        [V2.1] SPEICHERVERLUST-TRACKER: Höchster Tages-SOC war {{ max_soc_tag }}%. Freier Platz zu diesem Zeitpunkt: {{ missing_capacity_at_max_kwh | round(2) }} kWh. 
+                        [V2.1.1] SPEICHERVERLUST-TRACKER: Höchster Tages-SOC war {{ max_soc_tag }}%. Freier Platz zu diesem Zeitpunkt: {{ missing_capacity_at_max_kwh | round(2) }} kWh. 
                         Tages-Einspeisung lag bei {{ exported_kwh | round(2) }} kWh. 
-                        Es wurden {{ lost_kwh | round(2) }} kWh als "Verschenkte Speicherkapazität" auf den Zähler addiert.
+                        Es wurden {{ lost_kwh | round(2) }} kWh als "Verschenkte Speicherkapazität" auf den Zähler addiert (Zähler Neu: {{ (current_tracker_val + lost_kwh) | round(2) }} kWh = Alt: {{ current_tracker_val | round(2) }} kWh + Min(Freiplatz: {{ missing_capacity_at_max_kwh | round(2) }} kWh, Einspeisung: {{ exported_kwh | round(2) }} kWh)).
                       entity_id: !input helper_logbook_dummy
 
           - if:
@@ -847,11 +841,11 @@ action:
               - action: persistent_notification.create
                 data:
                   title: "⚠️ PV Optimizer Warnung"
-                  message: "[V2.1] Der Akku wurde heute nicht voll ({{ top_balancing_soc }}%), obwohl die Steuerung für {{ eingriff_dauer | round(1) }} Stunden eingegriffen hat. Bitte Logik prüfen!"
+                  message: "[V2.1.1] Der Akku wurde heute nicht voll ({{ top_balancing_soc }}%), obwohl die Steuerung für {{ eingriff_dauer | round(1) }} Stunden eingegriffen hat. Bitte Logik prüfen!"
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] DIAGNOSE: Akku hat heute {{ top_balancing_soc }}% nicht erreicht, obwohl die Steuerung für > 30 Minuten ({{ eingriff_dauer | round(1) }}h) aktiv war."
+                  message: "[V2.1.1] DIAGNOSE: Akku hat heute die Schwelle nicht erreicht, obwohl die Steuerung aktiv war (Höchster Tages-SOC: {{ states(var_max_soc_heute) }}% < Ziel-Schwelle: {{ top_balancing_soc }}% | Eingriff-Dauer: {{ eingriff_dauer | round(1) }}h > 0.5h)."
                   entity_id: !input helper_logbook_dummy
 
           - if:
@@ -861,7 +855,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximalwert ({{ target_p0 }}A) gesetzt.{{ addon_p0 }}"
+                  message: "[V2.1.1] Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximalwert geöffnet (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p0 }}A | Limitierung durch Temp: {{ temperatur_limit_ampere }}A).{{ addon_p0 }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -906,7 +900,7 @@ action:
                       - action: logbook.log
                         data:
                           name: "PV Optimizer"
-                          message: "[V2.1] BMS-Balancing: 2 Tage in Folge Voll-Schwelle erreicht. ToU-Programme 1-6 auf {{ default_tou_soc }}% abgesenkt."
+                          message: "[V2.1.1] BMS-Balancing: 2 Tage in Folge Voll-Schwelle erreicht. ToU-Programme 1-6 abgesenkt (Aktueller ToU-SOC: {{ aktueller_min_soc }}% -> Ziel: {{ default_tou_soc }}%)."
                           entity_id: !input helper_logbook_dummy
               - alias: "Seit 9 Tagen nicht voll"
                 conditions:
@@ -931,7 +925,7 @@ action:
                       - action: logbook.log
                         data:
                           name: "PV Optimizer"
-                          message: "[V2.1] BMS-Balancing: Seit 9 Tagen Ziel-Schwelle nicht erreicht. ToU-Programme 1-6 auf {{ escalation_tou_soc }}% erhöht."
+                          message: "[V2.1.1] BMS-Balancing: Seit 9 Tagen Ziel-Schwelle nicht erreicht. ToU-Programme 1-6 erhöht (Letztes 100% SOC Datum: {{ letztes_100_datum }} < Grenze: {{ vor_9_tagen }} | Aktueller ToU-SOC: {{ aktueller_min_soc }}% -> Ziel: {{ escalation_tou_soc }}%)."
                           entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -970,22 +964,8 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "[V2.1] Zwangsladung GESTARTET (Seit 10 Tagen nicht voll). Schalter aktiv."
+              message: "[V2.1.1] Zwangsladung GESTARTET (Seit 10 Tagen nicht voll). Schalter aktiv (BMS1_SOC: {{ states(bms1_soc) }}%, BMS2_SOC: {{ states(bms2_soc) }}% < 100% über 10 Tage | Aktueller Monat: {{ now().month }} in [11,12,1,2])."
               entity_id: !input helper_logbook_dummy
-          - if:
-              - condition: template
-                value_template: "{{ (aktueller_ladestrom - target_p15) | abs >= 2 }}"
-            then:
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "[V2.1] Prio 1.5 (Zwangsladung läuft): Batterieeingang auf {{ target_p15 }}A gestellt, damit Netzstrom einfließen kann."
-                  entity_id: !input helper_logbook_dummy
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_deye_max_charge }}"
-                data:
-                  value: "{{ target_p15 }}"
 
       - alias: "ZWANGSLADUNG: 100% ERREICHT"
         conditions:
@@ -1006,7 +986,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "[V2.1] Zwangsladung hat 100% erreicht. Cooldown Timer (Balancing) gestartet."
+              message: "[V2.1.1] Zwangsladung hat 100% erreicht. Cooldown Timer (Balancing) gestartet (BMS1_SOC: {{ states(bms1_soc) }}% | BMS2_SOC: {{ states(bms2_soc) }}%)."
               entity_id: !input helper_logbook_dummy
 
       - alias: "ZWANGSLADUNG BEENDEN"
@@ -1037,7 +1017,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "[V2.1] Zwangsladung BEENDET. Cooldown abgelaufen. System zurück auf Normalbetrieb."
+              message: "[V2.1.1] Zwangsladung BEENDET. Cooldown abgelaufen. System zurück auf Normalbetrieb (ToU-Programme 1-6 -> {{ default_tou_soc }}%)."
               entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -1058,7 +1038,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Zellpflege aktiv (Balancing Timer gestartet). Deye Float-Spannung auf {{ var_float_balancing }}V angehoben."
+                  message: "[V2.1.1] Zellpflege active (Balancing Timer gestartet). Deye Float-Spannung angehoben (Spannungs-Wechsel: {{ states(var_deye_float_voltage) if var_deye_float_voltage != '' else var_float_normal }}V -> {{ var_float_balancing }}V)."
                   entity_id: !input helper_logbook_dummy
 
       - alias: "FLOAT-BOOST BEENDEN (Timer ist abgelaufen)"
@@ -1078,7 +1058,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Zellpflege beendet. Deye Float-Spannung auf {{ var_float_normal }}V zurückgesetzt."
+                  message: "[V2.1.1] Zellpflege beendet. Deye Float-Spannung zurückgesetzt (Spannungs-Wechsel: {{ states(var_deye_float_voltage) if var_deye_float_voltage != '' else var_float_balancing }}V -> {{ var_float_normal }}V)."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -1142,7 +1122,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                [V2.1] WP PV-Boost ausgelöst (Wasser {{ ww_temp | round(1) }}°C < PV-Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C, Überschuss {{ potential_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W). 
+                [V2.1.1] WP PV-Boost ausgelöst (Wasser {{ ww_temp | round(1) }}°C < PV-Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C, Überschuss {{ potential_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W). 
                 Ziel auf {{ var_wp_ziel_temp_pv }}°C, Hysterese auf {{ var_wp_hysterese_pv }}°C gesetzt.{{ solcast_log_addon }}
               entity_id: !input helper_logbook_dummy
 
@@ -1165,8 +1145,8 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                [V2.1] WP PV-Boost Timer abgelaufen. System kehrt zu Normalwerten zurück: 
-                Ziel auf {{ var_wp_ziel_temp_normal }}°C, Hysterese auf {{ var_wp_hysterese_normal }}°C gesetzt.
+                [V2.1.1] WP PV-Boost Timer abgelaufen. System kehrt zu Normalwerten zurück: 
+                Ziel auf {{ var_wp_ziel_temp_normal }}°C, Hysterese auf {{ var_wp_hysterese_normal }}°C gesetzt (Timer-Status: idle).
               entity_id: !input helper_logbook_dummy
 
   # ====================================================================
@@ -1199,7 +1179,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Tracking: Batterie hat {{ top_balancing_soc }}% erreicht und wird für heute als voll markiert."
+                  message: "[V2.1.1] Tracking: Batterie hat {{ top_balancing_soc }}% erreicht und wird für heute als voll markiert (Aktueller SOC: {{ aktueller_soc }}% >= Schwelle: {{ top_balancing_soc }}%)."
                   entity_id: !input helper_logbook_dummy
           - if:
               - condition: template
@@ -1208,7 +1188,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Prio 1 (Top-Balancing): Batterie über {{ top_balancing_soc }}% und max. Zellspannung über {{ top_balancing_voltage }}V. Ladestrom auf {{ target_p1 }}A gesetzt."
+                  message: "[V2.1.1] Prio 1 (Top-Balancing): Batterie über {{ top_balancing_soc }}% und max. Zellspannung über {{ top_balancing_voltage }}V. Ladestrom auf {{ target_p1 }}A gesetzt (Bedingungen: SOC {{ aktueller_soc }}% >= {{ top_balancing_soc }}% | Vmax1: {{ vmax1 }}V, Vmax2: {{ vmax2 }}V >= {{ top_balancing_voltage }}V | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p1 }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1228,7 +1208,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Prio 1.5 (Zwangsladung läuft): Batterieeingang auf {{ target_p15 }}A gestellt, damit Netzstrom einfließen kann."
+                  message: "[V2.1.1] Prio 1.5 (Zwangsladung läuft): Batterieeingang auf {{ target_p15 }}A gestellt, damit Netzstrom einfließen kann (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p15 }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1253,8 +1233,8 @@ action:
                     data:
                       name: "PV Optimizer"
                       message: >
-                        [V2.1] Prio 2 (Fallback): Netto-Tagesüberschuss ({{ netto_tagesueberschuss | round(1) }} kWh) ist kleiner als der benötigte Puffer.
-                        Batterieeingang auf {{ target_p2 }}A geöffnet. (Solcast_Blend={{ solcast_rest_blended | round(1) }} kWh).
+                        [V2.1.1] Prio 2 (Fallback): Netto-Tagesüberschuss ({{ netto_tagesueberschuss | round(1) }} kWh) ist kleiner als der benötigte Puffer.
+                        Batterieeingang auf {{ target_p2 }}A geöffnet (Berechnung: Bedarf {{ freie_kwh | round(1) }} kWh * Fallback-Faktor {{ faktor_fallback }} = {{ (freie_kwh * faktor_fallback) | round(1) }} kWh > Netto-Überschuss {{ netto_tagesueberschuss | round(1) }} kWh [Solcast-Rest: {{ solcast_rest_blended | round(1) }} kWh - Puffer: {{ puffer_kwh }} kWh] | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p2 }}A).
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
@@ -1279,7 +1259,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Peak-Shaving aktiv: WP-Laufzeit Timer wurde vorzeitig beendet. Prio 5 ist nach dem Peak wieder freigegeben."
+                  message: "[V2.1.1] Peak-Shaving aktiv: WP-Laufzeit Timer wurde vorzeitig beendet (Timer '{{ var_timer_wp_boost }}' -> idle). Prio 5 ist nach dem Peak wieder freigegeben."
                   entity_id: !input helper_logbook_dummy
           - if:
               - condition: template
@@ -1288,7 +1268,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Prio 3 (Peak-Shaving): Überschuss ({{ potential_export | round(0) }}W) liegt über Schwelle ({{ schwelle_peak_shaving | round(0) }}W). Ladestrom auf {{ target_p3 }}A gesetzt.{{ solcast_log_addon }}"
+                  message: "[V2.1.1] Prio 3 (Peak-Shaving): Überschuss liegt über Schwelle. Ladestrom auf {{ target_p3 }}A gesetzt (Berechnung: Überschuss {{ potential_export | round(0) }}W [Grid-Export: {{ grid_export | round(0) }}W - Batterie-Leistung: {{ batterie_leistung | round(0) }}W] > Schwelle {{ schwelle_peak_shaving | round(0) }}W | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1308,7 +1288,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Prio 4 (WP-Sperre): Wärmepumpe läuft an. Batterie auf 0A verriegelt."
+                  message: "[V2.1.1] Prio 4 (WP-Sperre): Wärmepumpe läuft an. Batterie auf 0A verriegelt (Timer '{{ var_timer_wp_anlauf }}' = active | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ null_ampere }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1329,8 +1309,8 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    [V2.1] Prio 4.5 (Morgen-Blockade): Netto-Überschuss NACH Blockade ({{ netto_nach_blockade | round(1) }} kWh) reicht aus. 
-                    Ladestrom auf {{ null_ampere }}A blockiert. (Solcast_Blend ab Blockade inkl. JSON-Abzug={{ solcast_nach_blockade | round(1) }} kWh).
+                    [V2.1.1] Prio 4.5 (Morgen-Blockade): Netto-Überschuss NACH Blockade ({{ netto_nach_blockade | round(1) }} kWh) reicht aus. 
+                    Ladestrom auf {{ null_ampere }}A blockiert (Berechnung: Netto nach Blockade {{ netto_nach_blockade | round(1) }} kWh [Solcast ab Blockade: {{ solcast_nach_blockade | round(1) }} kWh - Puffer: {{ puffer_kwh }} kWh] >= Ziel-Bedarf {{ freie_kwh | round(1) }} kWh * Puffer-Faktor {{ faktor_ziel_puffer }} = {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ null_ampere }}A).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1350,7 +1330,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "[V2.1] Prio 4.8 (Kompressor-Sperre): Wärmepumpe arbeitet (inkl. 11 Min. Nachlauf). Batterie auf 0A verriegelt."
+                  message: "[V2.1.1] Prio 4.8 (Kompressor-Sperre): Wärmepumpe arbeitet. Batterie auf 0A verriegelt (Kompressor-Status = {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }} | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ null_ampere }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1376,9 +1356,8 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    [V2.1] Prio 5 (Dynamisch): Lade-Quote berechnet. Batterie darf {{ (lade_quote * 100) | round(0) }}% des aktuellen Überschusses nutzen (Limit).
-                    Berechnung: ({{ freie_kwh | round(1) }} kWh * {{ faktor_ziel_puffer }}) / {{ netto_tagesueberschuss | round(1) }} kWh = {{ (lade_quote * 100) | round(0) }}%. 
-                    Ladestrom auf {{ target_p5 }}A gesetzt.{{ addon_p5 }}
+                    [V2.1.1] Prio 5 (Dynamisch): Lade-Quote berechnet. Batterie darf {{ (lade_quote * 100) | round(0) }}% des aktuellen Überschusses nutzen (Limit).
+                    Berechnung: ({{ freie_kwh | round(1) }} kWh * {{ faktor_ziel_puffer }}) / {{ netto_tagesueberschuss | round(1) }} kWh = {{ (lade_quote * 100) | round(0) }}% | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p5 }}A.{{ addon_p5 }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
