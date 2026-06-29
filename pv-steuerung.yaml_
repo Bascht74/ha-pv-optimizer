@@ -1,0 +1,133 @@
+# ==============================================================================
+# MASTER-LADESTEUERUNG: VIRTUELLE ENTITÄTEN, HELFER & ENERGIE-STATISTIKEN
+# ==============================================================================
+
+input_boolean:
+  winter_zwangsladung_aktiv:
+    name: "Winter Zwangsladung aktiv"
+    icon: mdi:snowflake-alert
+  batterie_heute_voll:
+    name: "Batterie heute voll"
+    icon: mdi:battery-check
+
+input_text:
+  pv_optimizer_log:
+    name: "PV Optimizer Logbuch"
+    icon: mdi:math-log
+  hausverbrauch_json_profil:
+    name: "Hausverbrauch Profil JSON"
+    max: 255
+    icon: mdi:code-json
+
+input_number:
+  max_soc_heute:
+    name: "Speicher Tages-Höchstwert SOC"
+    min: 0
+    max: 100
+    step: 0.1
+    unit_of_measurement: "%"
+    icon: mdi:battery-high
+    mode: box
+  speicherverlust_gesamt:
+    name: "Speicherverlust Gesamt-Zähler"
+    min: 0
+    max: 999999
+    step: 0.1
+    unit_of_measurement: "kWh"
+    icon: mdi:battery-minus
+    mode: box
+
+timer:
+  winter_zwangsladung_cooldown:
+    name: "Winter Zwangsladung Cooldown"
+    icon: mdi:timer-snowflake
+  peak_shaving_hold:
+    name: "Peak Shaving Hold"
+    icon: mdi:timer-flash
+  vitocal_anlaufphase:
+    name: "Wärmepumpe Anlaufphase"
+    icon: mdi:timer-sand
+  wp_boost:
+    name: "Wärmepumpe PV-Boost Dauer"
+    icon: mdi:timer-star
+
+sensor:
+  # --- SENSOR 1: 7-Tage-Durchschnitt des Hausverbrauchs ---
+  - platform: statistics
+    name: "Hausverbrauch 7 Tage Durchschnitt"
+    unique_id: "optimizer_sensor_hausverbrauch_7d_avg"
+    entity_id: sensor.dachterrasse_load_power
+    state_characteristic: mean
+    max_age:
+      days: 7
+    sampling_size: 20160
+
+  # --- SENSOR 2: History Stats für die tägliche Eingriffsdauer ---
+  - platform: history_stats
+    name: "Ladesteuerung Eingriff Dauer Heute"
+    unique_id: "optimizer_sensor_intervention_duration_today"
+    entity_id: binary_sensor.ladesteuerung_eingriff_aktiv
+    state: "on"
+    type: time
+    start: "{{ now().replace(hour=0, minute=0, second=0) }}"
+    end: "{{ now() }}"
+
+utility_meter:
+  # --- DIE VERBRAUCHSZÄHLER FÜR DEN SPEICHERVERLUST ---
+  speicherverlust_heute:
+    source: input_number.speicherverlust_gesamt
+    name: "Speicherverlust Heute"
+    cycle: daily
+    net_consumption: false
+    delta_values: false
+  speicherverlust_woche:
+    source: input_number.speicherverlust_gesamt
+    name: "Speicherverlust Diese Woche"
+    cycle: weekly
+    net_consumption: false
+    delta_values: false
+  speicherverlust_monatlich:
+    source: input_number.speicherverlust_gesamt
+    name: "Speicherverlust Monatlich"
+    cycle: monthly
+    net_consumption: false
+    delta_values: false
+  speicherverlust_jahr:
+    source: input_number.speicherverlust_gesamt
+    name: "Speicherverlust Dieses Jahr"
+    cycle: yearly
+    net_consumption: false
+    delta_values: false
+  hausverbrauch_halbstuendlich:
+    source: sensor.dachterrasse_today_load_consumption
+    name: "Hausverbrauch Halbstündlich"
+    cycle: daily
+    net_consumption: false
+    delta_values: false
+
+template:
+  - binary_sensor:
+      - name: "Ladesteuerung Eingriff Aktiv"
+        unique_id: "optimizer_binary_intervention_active"
+        icon: mdi:flash-alert
+        state: >
+          {% set current_limit = states('number.dachterrasse_battery_max_charging_current') | float(350) %}
+          {{ current_limit < 350 and is_state('sun.sun', 'above_horizon') }}
+
+  - trigger:
+      - platform: time
+        at: "23:57:00"
+    sensor:
+      - name: "Akku 100 Prozent Tage JSON"
+        unique_id: "optimizer_sensor_json_100_tracking"
+        icon: mdi:json
+        state: >
+          {% set current = states('sensor.akku_100_prozent_tage_json') %}
+          {% set list = current | from_json if current not in ['unknown', 'unavailable', ''] else [] %}
+          {% if is_state('input_boolean.batterie_heute_voll', 'on') %}
+            {% set today = now().strftime('%Y-%m-%d') %}
+            {% if today not in list %}
+              {% set list = (list + [today]) | sort %}
+            {% endif %}
+          {% endif %}
+          {{ list[-14:] | to_json }}
