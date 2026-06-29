@@ -1,7 +1,7 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.6]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.7]"
   description: >-
-    Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung, proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost mit historischem Treppen-Filter und mathematisch transparentem Logging.
+    Iterativer 30-Minuten JSON-Vorabscan, Queued-Ausführung, Proportion, Fallback, Top-Balancing inkl. Schatten-BMS Kalibrierung, WP-Boost und historischer Treppen-Filter.
   domain: automation
   
   input:
@@ -98,6 +98,14 @@ blueprint:
           name: "BMS 3 Max Zellspannung (Optional)"
           default: ""
           selector: {entity: {domain: sensor, device_class: voltage}}
+        battery_total_charge:
+          name: "Total Battery Charge (kWh - Für Schatten BMS)"
+          default: ""
+          selector: {entity: {domain: sensor, device_class: energy}}
+        battery_total_discharge:
+          name: "Total Battery Discharge (kWh - Für Schatten BMS)"
+          default: ""
+          selector: {entity: {domain: sensor, device_class: energy}}
 
     sec_temperature:
       name: "Thermische Limits & C-Raten (Entitäten & Werte)"
@@ -304,6 +312,14 @@ blueprint:
           name: "Timer WP Laufzeit"
           default: ""
           selector: {entity: {domain: timer}}
+        helper_tare_charge:
+          name: "Schatten-BMS: Tare Charge Helfer"
+          default: ""
+          selector: {entity: {domain: input_number}}
+        helper_tare_discharge:
+          name: "Schatten-BMS: Tare Discharge Helfer"
+          default: ""
+          selector: {entity: {domain: input_number}}
 
 trigger_variables:
   bms1_soc: !input bms1_soc_sensor
@@ -386,7 +402,11 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.1.6]"
+      bp_version: "[V2.1.7]"
+      var_battery_total_charge: !input battery_total_charge
+      var_battery_total_discharge: !input battery_total_discharge
+      var_helper_tare_charge: !input helper_tare_charge
+      var_helper_tare_discharge: !input helper_tare_discharge
 
   # ====================================================================
   # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN
@@ -1183,11 +1203,27 @@ action:
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
-              # 3. Gemeinsames Tracking-Logbuch
+              
+              # TARE FÜR DAS SCHATTEN-BMS SETZEN
+              - if:
+                  - condition: template
+                    value_template: "{{ var_helper_tare_charge != '' and var_battery_total_charge != '' }}"
+                then:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ var_helper_tare_charge }}"
+                    data:
+                      value: "{{ states(var_battery_total_charge) | float(0) }}"
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ var_helper_tare_discharge }}"
+                    data:
+                      value: "{{ states(var_battery_total_discharge) | float(0) }}"
+              # 3. Gemeinsames Tracking-Logbuch          
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Tracking: Zellspannung Schwelle (>= {{ top_balancing_voltage }}V) erreicht. Top-Balancing Timer gestartet und Batterie für heute als voll markiert."
+                  message: "{{ bp_version }} Tracking: Zellspannung Schwelle (>= {{ top_balancing_voltage }}V) erreicht. Top-Balancing Timer gestartet, Batterie als voll markiert und Schatten-BMS (Tare) auf 100% kalibriert."
                   entity_id: !input helper_logbook_dummy
                   
           - if:
