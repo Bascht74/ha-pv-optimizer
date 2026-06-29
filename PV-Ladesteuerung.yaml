@@ -1,7 +1,7 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.1]"
   description: >-
-    [V2.1.1] Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung (Traces: 200), proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost mit mathematisch transparentem Logging.
+    Iterativer 30-Minuten JSON-Vorabscan (EMA), Queued-Ausführung (Traces: 200), proportionale Take-Rate, Fallback, Top-Balancing und WP-Boost mit mathematisch transparentem Logging.
   domain: automation
   
   input:
