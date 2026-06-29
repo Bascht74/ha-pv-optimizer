@@ -675,10 +675,13 @@ action:
         {% endif %}
 
   - variables:
+      h_index_now: "{{ now().hour * 2 + (1 if now().minute >= 30 else 0) }}"
+      haus_aktuell_w: "{{ json_profil[h_index_now] | float(400) }}"
+      prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
+
       ziel_strom_berechnet_raw: >
         {% if lade_quote > 0.05 %}
-          {% set pot = [potential_export, 0] | max %}
-          {% set watt = pot * lade_quote %}
+          {% set watt = prognose_surplus * lade_quote %}
           {% set amp = (watt / nominale_spannung) | round(0) %}
           {{ [ [amp, min_ampere] | max, max_ampere ] | min }}
         {% else %}
@@ -1351,19 +1354,32 @@ action:
           - condition: template
             value_template: "{{ not wp_laufzeit_aktiv }}"
         sequence:
+          - variables:
+              diff: "{{ target_p5 - aktueller_ladestrom }}"
+              last_upd: "{{ states[var_deye_max_charge].last_changed }}"
+              min_since: "{{ ((now() - as_local(last_upd)).total_seconds() / 60) | int if last_upd is not none else 60 }}"
+              is_ausnahme: "{{ aktueller_ladestrom in [max_ampere, null_ampere, min_ampere, peak_ampere, (max_ampere - 1)] }}"
+              
+              update_freigegeben: >
+                {{ is_ausnahme or 
+                   (diff >= 10) or 
+                   (diff >= 5 and min_since >= 60) or 
+                   (diff <= -20) or 
+                   (diff <= -15 and min_since >= 60) }}
+                   
           - if:
               - condition: template
-                value_template: >
-                  {% set aus_sonderevent = aktueller_ladestrom in [max_ampere, null_ampere, min_ampere, peak_ampere, (max_ampere - 1)] %}
-                  {% if (aktueller_ladestrom - target_p5) | abs >= 2 %}{{ aus_sonderevent or true }}
-                  {% else %}false{% endif %}
+                value_template: "{{ update_freigegeben }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 5 (Dynamisch): Lade-Quote berechnet. Batterie darf {{ (lade_quote * 100) | round(0) }}% des aktuellen Überschusses nutzen (Limit).
-                    Berechnung: ({{ freie_kwh | round(1) }} kWh * {{ faktor_ziel_puffer }}) / {{ netto_tagesueberschuss | round(1) }} kWh = {{ (lade_quote * 100) | round(0) }}% | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p5 }}A.{{ temp_log_addon }}
+                    {{ bp_version }} Prio 5 (Dynamisch): Filter passiert (Diff: {{ diff | round(1) }}A | Letzte Änderung: {{ min_since }} Min).
+                    1. Quote: ({{ freie_kwh | round(1) }} kWh * {{ faktor_ziel_puffer }}) / {{ netto_tagesueberschuss | round(1) }} kWh = {{ (lade_quote * 100) | round(0) }}%.
+                    2. Leistung: Prognose ({{ pv_forecast | round(0) }}W) - Haus-Profil ({{ haus_aktuell_w | round(0) }}W) = {{ prognose_surplus | round(0) }}W. Davon {{ (lade_quote * 100) | round(0) }}% = {{ (prognose_surplus * lade_quote) | round(0) }}W.
+                    3. Ziel-Strom: {{ (prognose_surplus * lade_quote) | round(0) }}W / {{ nominale_spannung }}V = {{ ziel_strom_berechnet_raw | round(1) }}A.
+                    Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p5 }}A.{{ temp_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
