@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.8]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.9]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan, Queued-Ausführung, Proportion, Fallback, Top-Balancing inkl. Schatten-BMS Kalibrierung, WP-Boost und historischer Treppen-Filter.
   domain: automation
@@ -402,7 +402,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.1.8]"
+      bp_version: "[V2.1.9]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -734,10 +734,11 @@ action:
         {{ aktueller_soc >= top_balancing_soc and 
         ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage))) 
         or (states(var_timer_cooldown) == 'active' and not zwangsladung_aktiv)) }}
-      
+
       fehlmenge_kwh: "{{ (freie_kwh * faktor_fallback) - netto_tagesueberschuss }}"
       fallback_aktiv: >
-        {{ is_day and aktueller_soc < fallback_max_soc and fehlmenge_kwh > fallback_min_kwh and not vor_blockade_ende }}
+        {% set sticky = (aktueller_ladestrom | round(0) == target_p2 | round(0)) %}
+        {{ is_day and aktueller_soc < fallback_max_soc and (fehlmenge_kwh > fallback_min_kwh or sticky) and not vor_blockade_ende }}
       
       schnee_falle_aktiv: >
         {% set is_winter = now().month in [11, 12, 1, 2] %}
