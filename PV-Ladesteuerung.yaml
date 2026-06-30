@@ -1394,8 +1394,9 @@ action:
         sequence:
           - variables:
               diff: "{{ target_p5 - aktueller_ladestrom }}"
-              last_upd: "{{ states[var_deye_max_charge].last_changed }}"
-              min_since: "{{ ((now() - as_local(last_upd)).total_seconds() / 60) | int if last_upd is not none else 60 }}"
+              min_since: >
+                {% set lu = states[var_deye_max_charge].last_changed %}
+                {{ ((now() - lu).total_seconds() / 60) | int if lu is not none else 60 }}
               is_ausnahme: "{{ aktueller_ladestrom in [max_ampere, null_ampere, min_ampere, peak_ampere, (max_ampere - 1)] }}"
               
               update_freigegeben: >
