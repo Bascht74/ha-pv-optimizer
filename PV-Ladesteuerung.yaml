@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.7]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.1.8]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan, Queued-Ausführung, Proportion, Fallback, Top-Balancing inkl. Schatten-BMS Kalibrierung, WP-Boost und historischer Treppen-Filter.
   domain: automation
@@ -402,7 +402,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.1.7]"
+      bp_version: "[V2.1.8]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
