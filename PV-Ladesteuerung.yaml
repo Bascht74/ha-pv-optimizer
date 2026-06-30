@@ -575,8 +575,9 @@ action:
       top_balancing_soc: "{{ top_balancing_soc | float(97) }}"
       top_balancing_voltage: "{{ top_balancing_voltage | float(3.4) }}"
       
-      vor_blockade_ende: "{{ now().strftime('%H:%M:%S') < var_zeit_blockade }}"
-
+      vor_blockade_ende: >
+        {% set t = today_at(var_zeit_blockade | string) %}
+        {{ now() < t }}
       pack1_online: "{{ var_bms1_temp_min != '' and states(var_bms1_temp_min) | float(-999) != -999 }}"
       pack2_online: "{{ var_bms2_temp_min != '' and states(var_bms2_temp_min) | float(-999) != -999 }}"
       pack3_online: "{{ var_bms3_temp_min != '' and states(var_bms3_temp_min) | float(-999) != -999 }}"
@@ -623,7 +624,8 @@ action:
           {% for stunde in state_attr(var_solcast_heute, 'detailedForecast') %}
             {% set s_start = as_datetime(stunde.period_start) | as_local %}
             
-            {% if s_start >= today_at(var_zeit_blockade) and s_start.date() == now().date() %}
+            {% set blockade_time = today_at(var_zeit_blockade | string) %}
+            {% if s_start >= blockade_time and s_start.date() == now().date() %}
               {% set blend = (stunde.pv_estimate + stunde.pv_estimate10) / 2 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = (json_profil[h_index] | float(0)) / 2000 %}
