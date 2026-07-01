@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.4.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.6.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -24,11 +24,6 @@ blueprint:
           name: "PV Leistung (Geglättet)"
           default: ""
           selector: {entity: {domain: sensor, device_class: power}}
-        hausverbrauch_avg_sensor:
-          name: "Fallback Hausverbrauch (7-Tage Schnitt WATT)"
-          description: "Wird genutzt, falls das JSON-Profil noch leer ist."
-          default: ""
-          selector: {entity: {domain: sensor}}
 
     sec_solcast:
       name: "Solcast Prognose (Entitäten)"
@@ -54,7 +49,7 @@ blueprint:
           selector: {entity: {domain: sensor}}
 
     sec_battery_sensors:
-      name: "Batterie BMS (Entitäten)"
+      name: "Batterie BMS"
       icon: mdi:battery-bluetooth
       collapsed: true
       input:
@@ -98,6 +93,8 @@ blueprint:
           name: "Total Battery Discharge (kWh - Für Schatten BMS)"
           default: ""
           selector: {entity: {domain: sensor, device_class: energy}}
+        nominale_spannung: {name: "Nominale Spannung (V)", default: 51.2, selector: {number: {min: 48.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}}
+        max_ampere: {name: "Max Ampere (Offenes Tor)", default: 350, selector: {number: {min: 50, max: 350, step: 1, unit_of_measurement: "A"}}}
 
     sec_temperature:
       name: "Thermische Limits & C-Raten (Entitäten & Werte)"
@@ -167,16 +164,6 @@ blueprint:
         peak_ampere: {name: "Basis-Strom Peak Shaving", default: 48, selector: {number: {min: 20, max: 100, step: 1, unit_of_measurement: "A"}}}
         schwelle_peak_shaving: {name: "Start-Schwelle Peak-Shaving (W)", default: 6500, selector: {number: {min: 1000, max: 30000, step: 100, unit_of_measurement: "W"}}}
 
-    sec_battery_settings:
-      name: "Hardware Parameter (Werte)"
-      icon: mdi:cogs
-      collapsed: true
-      input:
-        nominale_spannung: {name: "Nominale Spannung (V)", default: 51.2, selector: {number: {min: 48.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}}
-        max_ampere: {name: "Max Ampere (Offenes Tor)", default: 350, selector: {number: {min: 50, max: 350, step: 1, unit_of_measurement: "A"}}}
-        min_ampere: {name: "Min Ampere (Balancing Bremse)", default: 7, selector: {number: {min: 2, max: 20, step: 1, unit_of_measurement: "A"}}}
-        grid_ampere_zwangsladung: {name: "Netzstrom bei Zwangsladung", default: 50, selector: {number: {min: 10, max: 140, step: 1, unit_of_measurement: "A"}}}
-
     sec_float_voltage:
       name: "Zellpflege & Balancing (Werte)"
       icon: mdi:car-battery
@@ -199,14 +186,16 @@ blueprint:
         top_balancing_voltage: {name: "Zellspannungs-Schwelle für Top-Balancing", default: 3.40, selector: {number: {min: 3.30, max: 3.60, step: 0.01, unit_of_measurement: "V"}}}
         default_tou_soc: {name: "Standard Min-SOC (ToU-Balancing)", default: 20, selector: {number: {min: 10, max: 50, step: 1, unit_of_measurement: "%"}}}
         escalation_tou_soc: {name: "Eskalations Min-SOC (Nach 9 Tagen)", default: 30, selector: {number: {min: 10, max: 60, step: 1, unit_of_measurement: "%"}}}
+        min_ampere: {name: "Min Ampere (Balancing Bremse)", default: 7, selector: {number: {min: 2, max: 20, step: 1, unit_of_measurement: "A"}}}
+        grid_ampere_zwangsladung: {name: "Netzstrom bei Zwangsladung", default: 50, selector: {number: {min: 10, max: 140, step: 1, unit_of_measurement: "A"}}}
 
     sec_tuning:
       name: "Tuning & Verhalten (Werte)"
       icon: mdi:tune
       collapsed: true
       input:
-        faktor_ziel_puffer: {name: "Faktor Ziel-Puffer (Normalfall Prio 5)", default: 1.3, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
-        faktor_fallback: {name: "Faktor Fallback (Fall B Prio 2)", default: 1.2, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
+        faktor_ziel_puffer: {name: "Ladefaktor Normal (Normalfall)", default: 1.3, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
+        faktor_fallback: {name: "Ladefaktor Max-Auslöser (strenger)", default: 1.2, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
         fallback_max_soc: {name: "Fallback Max SOC (%)", default: 95, selector: {number: {min: 50, max: 100, step: 1, unit_of_measurement: "%"}}}
         fallback_min_kwh: {name: "Fallback Min Fehlmenge (kWh)", default: 1.0, selector: {number: {min: 0.1, max: 5.0, step: 0.1, unit_of_measurement: "kWh"}}}
         puffer_kwh: {name: "Sicherheits-Puffer (kWh)", default: 1.0, selector: {number: {min: 0.0, max: 5.0, step: 0.1}}}
@@ -409,7 +398,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.4.0]"
+      bp_version: "[V2.6.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -432,15 +421,16 @@ action:
           calc_time: "{{ now() - timedelta(minutes=15) }}"
           h_index: "{{ calc_time.hour * 2 + (1 if calc_time.minute >= 30 else 0) }}"
           json_str: "{{ states(var_hausverbrauch_json) }}"
-          # Default 48-Array in kWh (0.2 kWh = 400 W über eine Halbstunde), falls Helper leer ist
-          default_arr: >
-            {% set ns = namespace(d=[]) %}
-            {% for i in range(48) %}{% set ns.d = ns.d + [0.2] %}{% endfor %}
-            {{ ns.d }}
-          current_array: >
-            {{ json_str | from_json if json_str is string and json_str | length > 20 else default_arr }}
           # Lese verbrauchte Energie der letzten 30 Min DIREKT in kWh (keine Watt-Umrechnung mehr)
           last_half_hour_kwh: "{{ states(var_hausverbrauch_kwh) | float(0) }}"
+          # KALTSTART-WERT: geclampter Messwert (0.05-0.6 kWh), schützt vor Ausreißer-Vergiftung.
+          # Wird nur als Startfüllung genutzt, wenn der Helfer noch leer ist. Der EMA korrigiert
+          # danach jeden Slot über die kommenden Tage auf sein echtes Profil.
+          kaltstart_kwh: "{{ [[last_half_hour_kwh, 0.05] | max, 0.6] | min }}"
+          # Default 48-Array: bei leerem Helfer alle Slots mit dem Kaltstart-Wert füllen.
+          default_arr: "{{ [kaltstart_kwh] * 48 }}"
+          current_array: >
+            {{ json_str | from_json if json_str is string and json_str | length > 20 else default_arr }}
           # Der 7-Tage Exponential Moving Average (EMA) auf kWh-Basis
           new_val: "{{ (current_array[h_index] * (6/7)) + (last_half_hour_kwh * (1/7)) }}"
           new_array: >
@@ -478,7 +468,6 @@ action:
       var_wp_kompressor: !input wp_kompressor_sensor
       var_solcast_heute: !input solcast_heute_sensor
       var_solcast_rest_sensor: !input solcast_rest_sensor
-      var_hausverbrauch: !input hausverbrauch_avg_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
       var_wr_max_charge: !input wr_max_charge_current
       var_wr_grid_charge_switch: !input wr_grid_charge_switch
@@ -549,7 +538,6 @@ action:
       grid_export: "{{ (states(var_grid_export) | float(0)) * -1 }}"
       aktueller_soc: "{{ states(var_battery_soc) | float(0) }}"
       ww_temp: "{{ states(var_wp_temp) | float(50) }}"
-      hausverbrauch_durchschnitt: "{{ states(var_hausverbrauch) | float(400) }}"
       aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(140) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
       pv_power: "{{ states(var_pv_power) | float(0) }}"
@@ -599,11 +587,11 @@ action:
       next_hour_anomalie: "{{ next_hour_50 > 0 and ((next_hour_50 - next_hour_10) / next_hour_50) > 0.20 }}"
       solcast_log_addon: "{{ ' [Info: Prognose unsicher (>20% Varianz)]' if next_hour_anomalie else '' }}"
 
-      # Haus-Profil ist jetzt in kWh/Halbstunde. Fallback = 7-Tage-Schnitt-Watt / 2000.
+      # Haus-Profil ist in kWh/Halbstunde. Fallback (nur bis der erste update_json-Lauf
+      # den Helfer gefüllt hat): neutrale 0.2 kWh/Halbstunde (~400 W).
       json_profil: >
         {% set j_str = states(var_hausverbrauch_json) %}
-        {% set fallback_kwh = hausverbrauch_durchschnitt / 2000 %}
-        {% set default_arr = [fallback_kwh] * 48 %}
+        {% set default_arr = [0.2] * 48 %}
         {{ j_str | from_json if j_str is string and j_str | length > 20 else default_arr }}
 
       solcast_rest_blended: >
