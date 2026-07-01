@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.2.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.4.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -29,16 +29,6 @@ blueprint:
           description: "Wird genutzt, falls das JSON-Profil noch leer ist."
           default: ""
           selector: {entity: {domain: sensor}}
-        hausverbrauch_utility_sensor:
-          name: "Utility Meter (Hausverbrauch Halbstündlich in kWh)"
-          description: "Wird durch den Blueprint automatisch alle 30 Min genullt."
-          default: ""
-          selector: {entity: {domain: sensor}}
-        hausverbrauch_json_text:
-          name: "JSON Profil Speicher (Text-Helfer)"
-          description: "Speichert das 48-Werte Array (jetzt in kWh pro Halbstunde)."
-          default: ""
-          selector: {entity: {domain: input_text}}
 
     sec_solcast:
       name: "Solcast Prognose (Entitäten)"
@@ -152,28 +142,30 @@ blueprint:
         crate_45_deg: {name: "C-Rate bei >= 45°C", default: 0.00, selector: {number: {min: 0.00, max: 0.50, step: 0.01, mode: slider}}}
 
     sec_battery_control:
-      name: "Deye Steuerung (Entitäten)"
+      name: "Wechselrichter-Steuerung (Entitäten)"
       icon: mdi:flash
       collapsed: true
       input:
-        deye_max_charge_current:
+        wr_max_charge_current:
           name: "Max Charging Current"
           default: ""
           selector: {entity: {domain: number}}
-        deye_grid_charge_switch:
+        wr_grid_charge_switch:
           name: "Grid Charging Switch"
           default: ""
           selector: {entity: {domain: switch}}
-        deye_grid_charge_current:
+        wr_grid_charge_current:
           name: "Grid Charging Current"
           default: ""
           selector: {entity: {domain: number}}
-        deye_tou_1: {name: "Time of Use SOC 1", default: "", selector: {entity: {domain: number}}}
-        deye_tou_2: {name: "Time of Use SOC 2", default: "", selector: {entity: {domain: number}}}
-        deye_tou_3: {name: "Time of Use SOC 3", default: "", selector: {entity: {domain: number}}}
-        deye_tou_4: {name: "Time of Use SOC 4", default: "", selector: {entity: {domain: number}}}
-        deye_tou_5: {name: "Time of Use SOC 5", default: "", selector: {entity: {domain: number}}}
-        deye_tou_6: {name: "Time of Use SOC 6", default: "", selector: {entity: {domain: number}}}
+        wr_tou_1: {name: "Time of Use SOC 1", default: "", selector: {entity: {domain: number}}}
+        wr_tou_2: {name: "Time of Use SOC 2", default: "", selector: {entity: {domain: number}}}
+        wr_tou_3: {name: "Time of Use SOC 3", default: "", selector: {entity: {domain: number}}}
+        wr_tou_4: {name: "Time of Use SOC 4", default: "", selector: {entity: {domain: number}}}
+        wr_tou_5: {name: "Time of Use SOC 5", default: "", selector: {entity: {domain: number}}}
+        wr_tou_6: {name: "Time of Use SOC 6", default: "", selector: {entity: {domain: number}}}
+        peak_ampere: {name: "Basis-Strom Peak Shaving", default: 48, selector: {number: {min: 20, max: 100, step: 1, unit_of_measurement: "A"}}}
+        schwelle_peak_shaving: {name: "Start-Schwelle Peak-Shaving (W)", default: 6500, selector: {number: {min: 1000, max: 30000, step: 100, unit_of_measurement: "W"}}}
 
     sec_battery_settings:
       name: "Hardware Parameter (Werte)"
@@ -183,21 +175,15 @@ blueprint:
         nominale_spannung: {name: "Nominale Spannung (V)", default: 51.2, selector: {number: {min: 48.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}}
         max_ampere: {name: "Max Ampere (Offenes Tor)", default: 350, selector: {number: {min: 50, max: 350, step: 1, unit_of_measurement: "A"}}}
         min_ampere: {name: "Min Ampere (Balancing Bremse)", default: 7, selector: {number: {min: 2, max: 20, step: 1, unit_of_measurement: "A"}}}
-        peak_ampere: {name: "Basis-Strom Peak Shaving", default: 48, selector: {number: {min: 20, max: 100, step: 1, unit_of_measurement: "A"}}}
-        schwelle_peak_shaving: {name: "Start-Schwelle Peak-Shaving (W)", default: 6500, selector: {number: {min: 1000, max: 30000, step: 100, unit_of_measurement: "W"}}}
         grid_ampere_zwangsladung: {name: "Netzstrom bei Zwangsladung", default: 50, selector: {number: {min: 10, max: 140, step: 1, unit_of_measurement: "A"}}}
-        default_tou_soc: {name: "Standard Min-SOC", default: 20, selector: {number: {min: 10, max: 50, step: 1, unit_of_measurement: "%"}}}
-        escalation_tou_soc: {name: "Eskalations Min-SOC (Nach 9 Tagen)", default: 30, selector: {number: {min: 10, max: 60, step: 1, unit_of_measurement: "%"}}}
-        top_balancing_soc: {name: "SOC-Schwelle für Top-Balancing", default: 97, selector: {number: {min: 70, max: 100, step: 1, unit_of_measurement: "%"}}}
-        top_balancing_voltage: {name: "Zellspannungs-Schwelle für Top-Balancing", default: 3.40, selector: {number: {min: 3.30, max: 3.60, step: 0.01, unit_of_measurement: "V"}}}
 
     sec_float_voltage:
-      name: "Zellpflege (Float-Spannung & Balancing)"
+      name: "Zellpflege & Balancing (Werte)"
       icon: mdi:car-battery
       collapsed: true
       input:
-        deye_float_voltage_sensor:
-          name: "Deye Float Spannung (Entität - Optional)"
+        wr_float_voltage_sensor:
+          name: "Wechselrichter Float Spannung (Entität - Optional)"
           description: "Wird angehoben, solange der Cooldown-Timer (Balancing) läuft."
           default: ""
           selector: {entity: {domain: number}}
@@ -209,6 +195,10 @@ blueprint:
           name: "Float Spannung Balancing (V)"
           default: 55.2
           selector: {number: {min: 50.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}
+        top_balancing_soc: {name: "SOC-Schwelle für Top-Balancing", default: 97, selector: {number: {min: 70, max: 100, step: 1, unit_of_measurement: "%"}}}
+        top_balancing_voltage: {name: "Zellspannungs-Schwelle für Top-Balancing", default: 3.40, selector: {number: {min: 3.30, max: 3.60, step: 0.01, unit_of_measurement: "V"}}}
+        default_tou_soc: {name: "Standard Min-SOC (ToU-Balancing)", default: 20, selector: {number: {min: 10, max: 50, step: 1, unit_of_measurement: "%"}}}
+        escalation_tou_soc: {name: "Eskalations Min-SOC (Nach 9 Tagen)", default: 30, selector: {number: {min: 10, max: 60, step: 1, unit_of_measurement: "%"}}}
 
     sec_tuning:
       name: "Tuning & Verhalten (Werte)"
@@ -322,6 +312,21 @@ blueprint:
           name: "Schatten-BMS: Tare Discharge Helfer"
           default: ""
           selector: {entity: {domain: input_number}}
+        helper_lade_modus:
+          name: "Lade-Modus (Select - ersetzt Magic-Numbers)"
+          description: "Status-Helfer: speichert, welche Priorität den Ladestrom zuletzt gesetzt hat. Optionen: normal, fall_b_max, top_balancing, zwangsladung, peak_shaving, wp_sperre, blockade, nacht."
+          default: ""
+          selector: {entity: {domain: input_select}}
+        hausverbrauch_utility_sensor:
+          name: "Utility Meter (Hausverbrauch Halbstündlich in kWh)"
+          description: "Wird durch den Blueprint automatisch alle 30 Min genullt."
+          default: ""
+          selector: {entity: {domain: sensor}}
+        hausverbrauch_json_text:
+          name: "JSON Profil Speicher (Text-Helfer)"
+          description: "Speichert das 48-Werte Array (jetzt in kWh pro Halbstunde)."
+          default: ""
+          selector: {entity: {domain: input_text}}
 
 trigger_variables:
   bms1_soc: !input bms1_soc_sensor
@@ -404,11 +409,12 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.2.0]"
+      bp_version: "[V2.4.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
       var_helper_tare_discharge: !input helper_tare_discharge
+      var_lade_modus: !input helper_lade_modus
 
   # ====================================================================
   # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN (JETZT kWh)
@@ -474,8 +480,8 @@ action:
       var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch: !input hausverbrauch_avg_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
-      var_deye_max_charge: !input deye_max_charge_current
-      var_deye_grid_charge_switch: !input deye_grid_charge_switch
+      var_wr_max_charge: !input wr_max_charge_current
+      var_wr_grid_charge_switch: !input wr_grid_charge_switch
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
       var_pv_forecast: !input solcast_current_sensor
@@ -495,14 +501,14 @@ action:
       var_zwangsladung_aktiv: !input helper_zwangsladung_aktiv
       var_batterie_heute_voll: !input helper_batterie_heute_voll
       var_json_tracking: !input json_tracking_sensor
-      var_deye_tou_1: !input deye_tou_1
+      var_wr_tou_1: !input wr_tou_1
       var_eingriff_dauer: !input eingriff_dauer_sensor
       var_timer_wp_anlauf: !input helper_timer_wp_anlauf
       var_timer_wp_boost: !input helper_timer_wp_boost
       var_timer_peak: !input helper_timer_peak
       var_timer_cooldown: !input helper_timer_cooldown
       var_wp_boost_aktiv: !input wp_boost_aktiv
-      var_deye_float_voltage: !input deye_float_voltage_sensor
+      var_wr_float_voltage: !input wr_float_voltage_sensor
       var_schwelle_peak_shaving: !input schwelle_peak_shaving
       var_schwelle_wp_boost: !input schwelle_wp_boost
 
@@ -544,7 +550,7 @@ action:
       aktueller_soc: "{{ states(var_battery_soc) | float(0) }}"
       ww_temp: "{{ states(var_wp_temp) | float(50) }}"
       hausverbrauch_durchschnitt: "{{ states(var_hausverbrauch) | float(400) }}"
-      aktueller_ladestrom: "{{ states(var_deye_max_charge) | float(140) }}"
+      aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(140) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
       pv_power: "{{ states(var_pv_power) | float(0) }}"
       pv_forecast: "{{ states(var_pv_forecast) | float(0) }}"
@@ -597,8 +603,7 @@ action:
       json_profil: >
         {% set j_str = states(var_hausverbrauch_json) %}
         {% set fallback_kwh = hausverbrauch_durchschnitt / 2000 %}
-        {% set default_arr = [] %}
-        {% for i in range(48) %}{% set default_arr = default_arr + [fallback_kwh] %}{% endfor %}
+        {% set default_arr = [fallback_kwh] * 48 %}
         {{ j_str | from_json if j_str is string and j_str | length > 20 else default_arr }}
 
       solcast_rest_blended: >
@@ -757,7 +762,7 @@ action:
       # Fall (b): erreicht die strengere ×1,2-Rechnung selbst schon Max?
       fall_b_aktiv: "{{ (amp_roh_12 | round(0)) >= (max_ampere | round(0)) }}"
 
-      temp_log_addon: " (Deckel durch Batterietemperatur: {{ temperatur_limit_ampere }}A bei Min: {{ temp_min_live }}°C / Max: {{ temp_max_live }}°C / {{ temp_limit_crate }}C)"
+      temp_log_addon: " (Deckel durch Batterietemperatur: {{ temperatur_limit_ampere | round(0) }}A bei Min: {{ temp_min_live | round(1) }}°C / Max: {{ temp_max_live | round(1) }}°C / {{ temp_limit_crate | round(2) }}C)"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
@@ -769,6 +774,7 @@ action:
   - variables:
       zwangsladung_aktiv: "{{ is_state(var_zwangsladung_aktiv, 'on') }}"
       heute_schon_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
+      aktueller_modus: "{{ states(var_lade_modus) if var_lade_modus != '' else 'normal' }}"
       top_balancing_noetig: >
         {{ aktueller_soc >= top_balancing_soc and
         ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)))
@@ -837,6 +843,15 @@ action:
               entity_id: !input helper_batterie_heute_voll
           - if:
               - condition: template
+                value_template: "{{ var_lade_modus != '' }}"
+            then:
+              - action: input_select.select_option
+                target:
+                  entity_id: "{{ var_lade_modus }}"
+                data:
+                  option: "normal"
+          - if:
+              - condition: template
                 value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
             then:
               - action: input_number.set_value
@@ -849,18 +864,18 @@ action:
                 entity_id: !input helper_zwangsladung_aktiv
                 state: "on"
               - condition: template
-                value_template: "{{ states(var_deye_tou_1) | float(0) < 100 }}"
+                value_template: "{{ states(var_wr_tou_1) | float(0) < 100 }}"
             then:
               - action: input_boolean.turn_off
                 target:
                   entity_id: !input helper_zwangsladung_aktiv
               - action: switch.turn_off
                 target:
-                  entity_id: "{{ var_deye_grid_charge_switch }}"
+                  entity_id: "{{ var_wr_grid_charge_switch }}"
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Safety-Reset: Zwangsladung war aktiv, aber ToU-SOC nicht auf 100% (ToU-SOC 1: {{ states(var_deye_tou_1) }}% < 100%). Helfer wurde sicherheitshalber zurückgesetzt."
+                  message: "{{ bp_version }} Safety-Reset: Zwangsladung war aktiv, aber ToU-SOC nicht auf 100% (ToU-SOC 1: {{ states(var_wr_tou_1) }}% < 100%). Helfer wurde sicherheitshalber zurückgesetzt."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -921,13 +936,22 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximalwert geöffnet (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p0 }}A | Limitierung durch Temp: {{ temperatur_limit_ampere }}A).{{ temp_log_addon }}"
+                  message: "{{ bp_version }} Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximalwert geöffnet (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p0 }}A | Limitierung durch Temp: {{ temperatur_limit_ampere | round(0) }}A).{{ temp_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p0 }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "nacht"
 
   - choose:
       - alias: "BMS Balancing Logic"
@@ -941,7 +965,7 @@ action:
               gestern: "{{ (now() - timedelta(days=1)).strftime('%Y-%m-%d') }}"
               vor_9_tagen: "{{ (now() - timedelta(days=9)).strftime('%Y-%m-%d') }}"
               letztes_100_datum: "{{ tage_liste | max if tage_liste | length > 0 else '2000-01-01' }}"
-              aktueller_min_soc: "{{ states(var_deye_tou_1) | float(20) }}"
+              aktueller_min_soc: "{{ states(var_wr_tou_1) | float(20) }}"
           - choose:
               - alias: "Zwei Tage in Folge voll"
                 conditions:
@@ -955,12 +979,12 @@ action:
                       - action: number.set_value
                         target:
                           entity_id:
-                            - !input deye_tou_1
-                            - !input deye_tou_2
-                            - !input deye_tou_3
-                            - !input deye_tou_4
-                            - !input deye_tou_5
-                            - !input deye_tou_6
+                            - !input wr_tou_1
+                            - !input wr_tou_2
+                            - !input wr_tou_3
+                            - !input wr_tou_4
+                            - !input wr_tou_5
+                            - !input wr_tou_6
                         data:
                           value: "{{ default_tou_soc }}"
                       - action: logbook.log
@@ -980,12 +1004,12 @@ action:
                       - action: number.set_value
                         target:
                           entity_id:
-                            - !input deye_tou_1
-                            - !input deye_tou_2
-                            - !input deye_tou_3
-                            - !input deye_tou_4
-                            - !input deye_tou_5
-                            - !input deye_tou_6
+                            - !input wr_tou_1
+                            - !input wr_tou_2
+                            - !input wr_tou_3
+                            - !input wr_tou_4
+                            - !input wr_tou_5
+                            - !input wr_tou_6
                         data:
                           value: "{{ escalation_tou_soc }}"
                       - action: logbook.log
@@ -1010,21 +1034,21 @@ action:
               entity_id: !input helper_zwangsladung_aktiv
           - action: switch.turn_on
             target:
-              entity_id: "{{ var_deye_grid_charge_switch }}"
+              entity_id: "{{ var_wr_grid_charge_switch }}"
           - action: number.set_value
             target:
-              entity_id: !input deye_grid_charge_current
+              entity_id: !input wr_grid_charge_current
             data:
               value: "{{ grid_ampere_zwangsladung }}"
           - action: number.set_value
             target:
               entity_id:
-                - !input deye_tou_1
-                - !input deye_tou_2
-                - !input deye_tou_3
-                - !input deye_tou_4
-                - !input deye_tou_5
-                - !input deye_tou_6
+                - !input wr_tou_1
+                - !input wr_tou_2
+                - !input wr_tou_3
+                - !input wr_tou_4
+                - !input wr_tou_5
+                - !input wr_tou_6
             data:
               value: 100
           - action: logbook.log
@@ -1068,16 +1092,16 @@ action:
               entity_id: !input helper_zwangsladung_aktiv
           - action: switch.turn_off
             target:
-              entity_id: "{{ var_deye_grid_charge_switch }}"
+              entity_id: "{{ var_wr_grid_charge_switch }}"
           - action: number.set_value
             target:
               entity_id:
-                - !input deye_tou_1
-                - !input deye_tou_2
-                - !input deye_tou_3
-                - !input deye_tou_4
-                - !input deye_tou_5
-                - !input deye_tou_6
+                - !input wr_tou_1
+                - !input wr_tou_2
+                - !input wr_tou_3
+                - !input wr_tou_4
+                - !input wr_tou_5
+                - !input wr_tou_6
             data:
               value: "{{ default_tou_soc }}"
           - action: logbook.log
@@ -1094,16 +1118,16 @@ action:
         sequence:
           - if:
               - condition: template
-                value_template: "{{ var_deye_float_voltage != '' }}"
+                value_template: "{{ var_wr_float_voltage != '' }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Zellpflege active (Balancing Timer gestartet). Deye Float-Spannung angehoben (Spannungs-Wechsel: {{ var_float_normal }}V -> {{ var_float_balancing }}V)."
+                  message: "{{ bp_version }} Zellpflege active (Balancing Timer gestartet). Wechselrichter Float-Spannung angehoben (Spannungs-Wechsel: {{ var_float_normal | round(3) }}V -> {{ var_float_balancing | round(3) }}V)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_float_voltage }}"
+                  entity_id: "{{ var_wr_float_voltage }}"
                 data:
                   value: "{{ var_float_balancing }}"
 
@@ -1114,16 +1138,16 @@ action:
         sequence:
           - if:
               - condition: template
-                value_template: "{{ var_deye_float_voltage != '' }}"
+                value_template: "{{ var_wr_float_voltage != '' }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Zellpflege beendet. Deye Float-Spannung zurückgesetzt (Spannungs-Wechsel: {{ var_float_balancing }}V -> {{ var_float_normal }}V)."
+                  message: "{{ bp_version }} Zellpflege beendet. Wechselrichter Float-Spannung zurückgesetzt (Spannungs-Wechsel: {{ var_float_balancing | round(3) }}V -> {{ var_float_normal | round(3) }}V)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_float_voltage }}"
+                  entity_id: "{{ var_wr_float_voltage }}"
                 data:
                   value: "{{ var_float_normal }}"
 
@@ -1219,7 +1243,7 @@ action:
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM
   # ====================================================================
   - choose:
-      - alias: "DEYE PRIO 1: TOP-BALANCING"
+      - alias: "PRIO 1: TOP-BALANCING"
         conditions:
           - condition: template
             value_template: "{{ top_balancing_noetig }}"
@@ -1260,7 +1284,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Tracking: Zellspannung Schwelle (>= {{ top_balancing_voltage }}V) erreicht. Top-Balancing Timer gestartet, Batterie als voll markiert und Schatten-BMS (Tare) auf 100% kalibriert."
+                  message: "{{ bp_version }} Tracking: Zellspannung Schwelle (>= {{ top_balancing_voltage | round(3) }}V) erreicht. Top-Balancing Timer gestartet, Batterie als voll markiert und Schatten-BMS (Tare) auf 100% kalibriert."
                   entity_id: !input helper_logbook_dummy
 
           - if:
@@ -1270,15 +1294,24 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Top-Balancing): Batterie über {{ top_balancing_soc }}% und max. Zellspannung über {{ top_balancing_voltage }}V. Ladestrom auf {{ target_p1 }}A gesetzt (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p1 }}A)."
+                  message: "{{ bp_version }} Prio 1 (Top-Balancing): Batterie über {{ top_balancing_soc }}% und max. Zellspannung über {{ top_balancing_voltage | round(3) }}V. Ladestrom auf {{ target_p1 }}A gesetzt (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p1 }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p1 }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "top_balancing"
 
-      - alias: "DEYE PRIO 1.5: WINTER-ZWANGSLADUNG LÄUFT"
+      - alias: "PRIO 1.5: WINTER-ZWANGSLADUNG LÄUFT"
         conditions:
           - condition: template
             value_template: "{{ zwangsladung_aktiv }}"
@@ -1290,36 +1323,54 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1.5 (Zwangsladung läuft): Batterieeingang auf {{ target_p15 }}A gestellt, damit Netzstrom einfließen kann (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p15 }}A)."
+                  message: "{{ bp_version }} Prio 1.5 (Zwangsladung läuft): Batterieeingang auf {{ target_p15 }}A gestellt, damit Netzstrom einfließen kann (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p15 }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p15 }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "zwangsladung"
 
-      - alias: "DEYE PRIO 2: FALL (B) - ZEIT REICHT NICHT (MAX)"
+      - alias: "PRIO 2: FALL (B) - ZEIT REICHT NICHT (MAX)"
         conditions:
           - condition: template
             value_template: "{{ is_day and aktueller_soc < 97 and fall_b_aktiv }}"
         sequence:
           - if:
               - condition: template
-                value_template: "{{ (aktueller_ladestrom | round(0)) != ((max_ampere - 1) | round(0)) }}"
+                value_template: "{{ aktueller_modus != 'fall_b_max' }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 2 (Fall B): Selbst mit Faktor {{ faktor_fallback }} reicht die verbleibende Ladezeit nicht ({{ verf_stunden | round(1) }}h für {{ benoetigt_kwh | round(1) }} kWh [frei: {{ freie_kwh | round(1) }} + Defizit: {{ defizit_kwh | round(1) }}] -> {{ amp_roh_12 | round(0) }}A >= Max {{ max_ampere }}A). Ladestrom auf Max ({{ max_ampere - 1 }}A) verriegelt (Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ max_ampere - 1 }}A).{{ solcast_log_addon }}
+                    {{ bp_version }} Prio 2 (Fall B): Selbst mit Faktor {{ faktor_fallback }} reicht die verbleibende Ladezeit nicht ({{ verf_stunden | round(1) }}h für {{ benoetigt_kwh | round(1) }} kWh [frei: {{ freie_kwh | round(1) }} + Defizit: {{ defizit_kwh | round(1) }}] -> {{ amp_roh_12 | round(0) }}A >= Max {{ max_ampere | round(0) }}A). Ladestrom auf Max ({{ max_ampere | round(0) }}A) verriegelt, Modus 'fall_b_max' gesetzt (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ max_ampere | round(0) }}A).{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
-                  value: "{{ max_ampere - 1 }}"
+                  value: "{{ max_ampere }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "fall_b_max"
 
-      - alias: "DEYE PRIO 3: PEAK SHAVING"
+      - alias: "PRIO 3: PEAK SHAVING"
         conditions:
           - condition: template
             value_template: "{{ states(var_timer_wp_anlauf) != 'active' }}"
@@ -1345,15 +1396,24 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 3 (Peak-Shaving): Überschuss liegt über Schwelle. Ladestrom auf {{ target_p3 }}A gesetzt (Berechnung: Überschuss {{ potential_export | round(0) }}W [Grid-Export: {{ grid_export | round(0) }}W - Batterie-Leistung: {{ batterie_leistung | round(0) }}W] > Schwelle {{ schwelle_peak_shaving | round(0) }}W | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 3 (Peak-Shaving): Überschuss liegt über Schwelle. Ladestrom auf {{ target_p3 }}A gesetzt (Berechnung: Überschuss {{ potential_export | round(0) }}W [Grid-Export: {{ grid_export | round(0) }}W - Batterie-Leistung: {{ batterie_leistung | round(0) }}W] > Schwelle {{ schwelle_peak_shaving | round(0) }}W | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p3 }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "peak_shaving"
 
-      - alias: "DEYE PRIO 4: WP-ANLAUFSPERRE (0A)"
+      - alias: "PRIO 4: WP-ANLAUFSPERRE (0A)"
         conditions:
           - condition: template
             value_template: "{{ wp_sperre_aktiv }}"
@@ -1365,15 +1425,24 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 4 (WP-Sperre): Wärmepumpe läuft an. Batterie auf 0A verriegelt (Timer '{{ var_timer_wp_anlauf }}' = active | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ null_ampere }}A)."
+                  message: "{{ bp_version }} Prio 4 (WP-Sperre): Wärmepumpe läuft an. Batterie auf 0A verriegelt (Timer '{{ var_timer_wp_anlauf }}' = active | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ null_ampere }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "wp_sperre"
 
-      - alias: "DEYE PRIO 4.5: MORGEN-BLOCKADE (0A)"
+      - alias: "PRIO 4.5: MORGEN-BLOCKADE (0A)"
         conditions:
           - condition: template
             value_template: "{{ blockade_aktiv }}"
@@ -1387,15 +1456,24 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 4.5 (Morgen-Blockade): Netto-Überschuss NACH Blockade ({{ netto_nach_blockade | round(1) }} kWh) reicht aus.
-                    Ladestrom auf {{ null_ampere }}A blockiert (Berechnung: Netto nach Blockade {{ netto_nach_blockade | round(1) }} kWh [Solcast ab Blockade: {{ solcast_nach_blockade | round(1) }} kWh - Puffer: {{ puffer_kwh }} kWh] >= Ziel-Bedarf {{ freie_kwh | round(1) }} kWh * Puffer-Faktor {{ faktor_ziel_puffer }} = {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ null_ampere }}A).
+                    Ladestrom auf {{ null_ampere }}A blockiert (Berechnung: Netto nach Blockade {{ netto_nach_blockade | round(1) }} kWh [Solcast ab Blockade: {{ solcast_nach_blockade | round(1) }} kWh - Puffer: {{ puffer_kwh }} kWh] >= Ziel-Bedarf {{ freie_kwh | round(1) }} kWh * Puffer-Faktor {{ faktor_ziel_puffer }} = {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ null_ampere }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "blockade"
 
-      - alias: "DEYE PRIO 4.8: WP-KOMPRESSOR SPERRE (0A)"
+      - alias: "PRIO 4.8: WP-KOMPRESSOR SPERRE (0A)"
         conditions:
           - condition: template
             value_template: "{{ wp_kompressor_aktiv }}"
@@ -1407,43 +1485,53 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 4.8 (Kompressor-Sperre): Wärmepumpe arbeitet. Batterie auf 0A verriegelt (Kompressor-Status = {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }} | Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ null_ampere }}A)."
+                  message: "{{ bp_version }} Prio 4.8 (Kompressor-Sperre): Wärmepumpe arbeitet. Batterie auf 0A verriegelt (Kompressor-Status = {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }} | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
-                  entity_id: "{{ var_deye_max_charge }}"
+                  entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ null_ampere }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "wp_sperre"
 
-      - alias: "DEYE PRIO 5: DYNAMISCHES FERTIGLADEN (ZEIT-BASIERT)"
+      - alias: "PRIO 5: DYNAMISCHES FERTIGLADEN (ZEIT-BASIERT)"
         conditions:
           - condition: template
             value_template: "{{ is_day and aktueller_soc < 97 }}"
           - condition: template
             value_template: "{{ not wp_laufzeit_aktiv }}"
         sequence:
-          # Innere Prüfung: Fall-(b)-Marker (Max-1) gesetzt? Dann NICHTS tun (im Trace sichtbar).
+          # Innere Prüfung: Fall-(b)-Modus gesetzt? Dann NICHTS tun (im Trace sichtbar).
           - choose:
-              - alias: "Max-Marker aktiv -> kein Rückregeln"
+              - alias: "Fall-B-Modus aktiv -> kein Rückregeln"
                 conditions:
                   - condition: template
-                    value_template: "{{ (aktueller_ladestrom | round(0)) == ((max_ampere - 1) | round(0)) }}"
+                    value_template: "{{ aktueller_modus == 'fall_b_max' }}"
                 sequence:
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
-                      message: "{{ bp_version }} Prio 5 übersprungen: Fall-(b)-Marker (Max-1 = {{ (max_ampere - 1) | round(0) }}A) aktiv. Kein Rückregeln bis Reset."
+                      message: "{{ bp_version }} Prio 5 übersprungen: Modus 'fall_b_max' aktiv. Kein Rückregeln bis Reset (Mitternacht/Sonnenuntergang)."
                       entity_id: !input helper_logbook_dummy
             default:
               - variables:
                   diff: "{{ target_p5 - aktueller_ladestrom }}"
                   min_since: >
-                    {% set lu = states[var_deye_max_charge].last_changed %}
+                    {% set lu = states[var_wr_max_charge].last_changed %}
                     {{ ((now() - lu).total_seconds() / 60) | int if lu is not none else 60 }}
-                  # max_ampere und max_ampere-1 sind NICHT mehr Ausnahme (kein Sofort-Rückfall).
-                  is_ausnahme: "{{ (aktueller_ladestrom | round(0)) in [(null_ampere | round(0)), (min_ampere | round(0)), (peak_ampere | round(0))] }}"
+                  # Modus-basierter Bypass: Wenn ein ANDERER Block zuletzt gesetzt hat
+                  # (Modus != 'normal'), darf Prio 5 einmalig sofort durchregeln.
+                  fremder_modus: "{{ aktueller_modus not in ['normal'] }}"
                   update_freigegeben: >
-                    {{ is_ausnahme or
+                    {{ fremder_modus or
                        (diff >= 10) or
                        (diff >= 5 and min_since >= 60) or
                        (diff <= -20) or
@@ -1456,12 +1544,21 @@ action:
                     data:
                       name: "PV Optimizer"
                       message: >
-                        {{ bp_version }} Prio 5 (Dynamisch, Zeit-basiert): Filter passiert (Diff: {{ diff | round(1) }}A | Letzte Änderung: {{ min_since }} Min).
+                        {{ bp_version }} Prio 5 (Dynamisch, Zeit-basiert): Filter passiert (Diff: {{ diff | round(1) }}A | Letzte Änderung: {{ min_since }} Min | Vorheriger Modus: {{ aktueller_modus }}).
                         Bedarf: {{ benoetigt_kwh | round(1) }} kWh (frei {{ freie_kwh | round(1) }} + Defizit {{ defizit_kwh | round(1) }}) / {{ verf_stunden | round(1) }}h Ladezeit * {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }}A.
-                        Register-Wechsel: {{ aktueller_ladestrom }}A -> {{ target_p5 }}A.{{ temp_log_addon }}
+                        Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p5 }}A.{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
-                      entity_id: "{{ var_deye_max_charge }}"
+                      entity_id: "{{ var_wr_max_charge }}"
                     data:
                       value: "{{ target_p5 }}"
+                  - if:
+                      - condition: template
+                        value_template: "{{ var_lade_modus != '' and aktueller_modus != 'normal' }}"
+                    then:
+                      - action: input_select.select_option
+                        target:
+                          entity_id: "{{ var_lade_modus }}"
+                        data:
+                          option: "normal"
