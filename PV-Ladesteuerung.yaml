@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.7.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.7.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -403,7 +403,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.7.1]"
+      bp_version: "[V2.7.2]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -721,8 +721,12 @@ action:
         {{ {'stunden': ns.stunden | round(3), 'defizit': ns.defizit | round(3)} | to_json }}
 
   - variables:
-      verf_stunden: "{{ (slot_daten | from_json).stunden | float(0) }}"
-      defizit_kwh: "{{ (slot_daten | from_json).defizit | float(0) }}"
+      # HA konvertiert das to_json-Ergebnis von slot_daten u.U. selbst zurück in ein Dict
+      # (native type rendering). Deshalb beide Fälle abdecken: Dict direkt nutzen,
+      # String erst per from_json parsen.
+      slot_daten_dict: "{{ slot_daten if slot_daten is mapping else (slot_daten | from_json) }}"
+      verf_stunden: "{{ slot_daten_dict.stunden | float(0) }}"
+      defizit_kwh: "{{ slot_daten_dict.defizit | float(0) }}"
       benoetigt_kwh: "{{ freie_kwh + defizit_kwh }}"
       # Roh-Leistung OHNE Faktor (W). Faktor kommt je Prio dazu.
       # verf_stunden <= 0 -> 999999 erzwingt später "auf Max".
@@ -995,7 +999,9 @@ action:
             id: maintenance
         sequence:
           - variables:
-              tage_liste: "{{ states(var_json_tracking) | default('[]', true) | from_json }}"
+              tage_liste: >
+                {% set s = states(var_json_tracking) %}
+                {{ s | from_json if s is string and s.startswith('[') else [] }}
               heute: "{{ now().strftime('%Y-%m-%d') }}"
               gestern: "{{ (now() - timedelta(days=1)).strftime('%Y-%m-%d') }}"
               vor_9_tagen: "{{ (now() - timedelta(days=9)).strftime('%Y-%m-%d') }}"
