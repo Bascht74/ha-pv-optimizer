@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.6.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.7.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -301,6 +301,11 @@ blueprint:
           name: "Schatten-BMS: Tare Discharge Helfer"
           default: ""
           selector: {entity: {domain: input_number}}
+        schatten_bms_sensor:
+          name: "Schatten-BMS: SOC Sensor (mit raw_drift_soc Attribut)"
+          description: "Template-Sensor aus dem Package. Der Blueprint liest dessen Attribut 'raw_drift_soc' für das Anti-Windup (Tare-Nachführung bei > 100%)."
+          default: ""
+          selector: {entity: {domain: sensor}}
         helper_lade_modus:
           name: "Lade-Modus (Select - ersetzt Magic-Numbers)"
           description: "Status-Helfer: speichert, welche Priorität den Ladestrom zuletzt gesetzt hat. Optionen: normal, fall_b_max, top_balancing, zwangsladung, peak_shaving, wp_sperre, blockade, nacht."
@@ -398,11 +403,12 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.6.0]"
+      bp_version: "[V2.7.1]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
       var_helper_tare_discharge: !input helper_tare_discharge
+      var_schatten_bms: !input schatten_bms_sensor
       var_lade_modus: !input helper_lade_modus
 
   # ====================================================================
@@ -819,6 +825,47 @@ action:
       - action: persistent_notification.dismiss
         data:
           notification_id: "bms_offline_warning"
+
+  # ====================================================================
+  # SCHATTEN-BMS ANTI-WINDUP (alle 5 Min):
+  # Liest das Attribut 'raw_drift_soc' des Schatten-BMS-Sensors (Package).
+  # Liegt der ungeclampte SOC > 100% (Nachladung nach dem Tare-Zeitpunkt),
+  # werden beide Tare-Helfer auf die aktuellen Zählerstände nachgeführt
+  # -> raw_drift_soc springt zurück auf exakt 100%.
+  # Die SOC-Formel (cap/eff) lebt NUR im Package-Sensor, nicht hier.
+  # ====================================================================
+  - variables:
+      schatten_raw_soc: >
+        {% if var_schatten_bms == '' or var_helper_tare_charge == '' or var_battery_total_charge == '' %}
+          -1
+        {% else %}
+          {{ state_attr(var_schatten_bms, 'raw_drift_soc') | float(-1) }}
+        {% endif %}
+
+  - if:
+      - condition: template
+        value_template: >
+          {{ (schatten_raw_soc | float(-1)) > 100 and
+             (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) }}
+    then:
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: >
+            {{ bp_version }} Schatten-BMS Anti-Windup: Roh-SOC bei {{ schatten_raw_soc | float(0) | round(2) }}% (> 100%).
+            Tare nachgeführt auf aktuelle Zählerstände (Charge: {{ states(var_helper_tare_charge) | float(0) | round(2) }} -> {{ states(var_battery_total_charge) | float(0) | round(2) }} kWh |
+            Discharge: {{ states(var_helper_tare_discharge) | float(0) | round(2) }} -> {{ states(var_battery_total_discharge) | float(0) | round(2) }} kWh). Schatten-SOC neu verankert auf 100%.
+          entity_id: !input helper_logbook_dummy
+      - action: input_number.set_value
+        target:
+          entity_id: "{{ var_helper_tare_charge }}"
+        data:
+          value: "{{ states(var_battery_total_charge) | float(0) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: "{{ var_helper_tare_discharge }}"
+        data:
+          value: "{{ states(var_battery_total_discharge) | float(0) }}"
 
   - choose:
       - alias: "Tägliches Aufräumen & Sanity Checks"
