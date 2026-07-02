@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.7.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -197,7 +197,8 @@ blueprint:
         faktor_ziel_puffer: {name: "Ladefaktor Normal (Normalfall)", default: 1.3, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
         faktor_fallback: {name: "Ladefaktor Max-Auslöser (strenger)", default: 1.2, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
         fallback_max_soc: {name: "Fallback Max SOC (%)", default: 95, selector: {number: {min: 50, max: 100, step: 1, unit_of_measurement: "%"}}}
-        fallback_min_kwh: {name: "Fallback Min Fehlmenge (kWh)", default: 1.0, selector: {number: {min: 0.1, max: 5.0, step: 0.1, unit_of_measurement: "kWh"}}}
+        fallback_min_kwh: {name: "Fall-B Bagatellgrenze (kWh)", description: "Fall B (Max-Verriegelung) löst nur aus, wenn der Bedarf über dieser Grenze liegt.", default: 1.0, selector: {number: {min: 0.1, max: 5.0, step: 0.1, unit_of_measurement: "kWh"}}}
+        min_reststunden: {name: "Mindest-Restladezeit für Eskalation (h)", description: "Unter dieser verbleibenden Ladezeit regeln Prio 5 und Fall B nicht mehr nach (verhindert Abend-Eskalation bei Restzeit gegen 0).", default: 1.0, selector: {number: {min: 0.0, max: 4.0, step: 0.25, unit_of_measurement: "h"}}}
         puffer_kwh: {name: "Sicherheits-Puffer (kWh)", default: 1.0, selector: {number: {min: 0.0, max: 5.0, step: 0.1}}}
         zeit_blockade_ende: {name: "Ende Morgen-Blockade", default: "13:30:00", selector: {time: {}}}
         duration_peak_hold: {name: "Dauer Peak-Shaving Hold", default: "00:30:00", selector: {time: {}}}
@@ -327,6 +328,10 @@ trigger_variables:
   bms2_soc: !input bms2_soc_sensor
   bms3_soc: !input bms3_soc_sensor
   t_cooldown: !input helper_timer_cooldown
+  tv_vmax1: !input vmax1_sensor
+  tv_vmax2: !input vmax2_sensor
+  tv_vmax3: !input vmax3_sensor
+  tv_top_balancing_voltage: !input top_balancing_voltage
 
 trigger:
   - alias: "Trigger: JSON Profil pflegen (Alle 30 Min)"
@@ -336,6 +341,15 @@ trigger:
   - alias: "Trigger: Laufende Überwachung (alle 5 Minuten)"
     platform: time_pattern
     minutes: "/5"
+  - alias: "Trigger: Zellspannungs-Schwelle erreicht (Top-Balancing sofort fangen)"
+    platform: template
+    value_template: >
+      {% set v1 = states(tv_vmax1) | float(0) %}
+      {% set v2 = states(tv_vmax2) | float(0) %}
+      {% set v3 = states(tv_vmax3) | float(0) if tv_vmax3 != '' else 0 %}
+      {% set schwelle = tv_top_balancing_voltage | float(3.4) %}
+      {{ v1 >= schwelle or v2 >= schwelle or v3 >= schwelle }}
+    id: vmax_schwelle
   - alias: "Trigger: Tägliche Maintenance (Reset & BMS Check)"
     platform: time
     at: "23:58:00"
@@ -396,14 +410,14 @@ trigger:
 mode: queued
 max: 10
 trace:
-  stored_traces: 200
+  stored_traces: 400
 
 action:
   # ====================================================================
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.7.2]"
+      bp_version: "[V2.8.1]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -424,8 +438,11 @@ action:
           # Finde die Halbstunde heraus, die exakt JETZT geendet hat.
           # Beispiel: Trigger um 14:00 -> Es geht um 13:30 bis 14:00 Uhr. (now() - 15 Min = 13:45 Uhr).
           # Daraus errechnet sich der korrekte Index (0 bis 47).
-          calc_time: "{{ now() - timedelta(minutes=15) }}"
-          h_index: "{{ calc_time.hour * 2 + (1 if calc_time.minute >= 30 else 0) }}"
+          # WICHTIG: alles in EINEM Template. HA konvertiert datetime-Variablen zwischen
+          # Blöcken zu Strings; ein separates calc_time würde beim Zugriff auf .hour crashen.
+          h_index: >
+            {% set t = now() - timedelta(minutes=15) %}
+            {{ t.hour * 2 + (1 if t.minute >= 30 else 0) }}
           json_str: "{{ states(var_hausverbrauch_json) }}"
           # Lese verbrauchte Energie der letzten 30 Min DIREKT in kWh (keine Watt-Umrechnung mehr)
           last_half_hour_kwh: "{{ states(var_hausverbrauch_kwh) | float(0) }}"
@@ -521,6 +538,7 @@ action:
       faktor_fallback: !input faktor_fallback
       fallback_max_soc: !input fallback_max_soc
       fallback_min_kwh: !input fallback_min_kwh
+      min_reststunden: !input min_reststunden
       max_ampere: !input max_ampere
       null_ampere: 0
       min_ampere: !input min_ampere
@@ -758,7 +776,13 @@ action:
       # Prio 5 Normalfall (×1,3), gedeckelt durch min/max
       ziel_p5_raw: "{{ [[amp_roh_13 | round(0), min_ampere] | max, max_ampere] | min }}"
       # Fall (b): erreicht die strengere ×1,2-Rechnung selbst schon Max?
-      fall_b_aktiv: "{{ (amp_roh_12 | round(0)) >= (max_ampere | round(0)) }}"
+      # NUR wenn noch genug nutzbare Restladezeit da ist (min_reststunden) UND
+      # der Bedarf über der Bagatellgrenze liegt (fallback_min_kwh). Verhindert
+      # sinnlose Max-Verriegelung am Tagesende (Restzeit -> 0, Strom explodiert).
+      fall_b_aktiv: >
+        {{ (amp_roh_12 | round(0)) >= (max_ampere | round(0)) and
+           verf_stunden >= (min_reststunden | float(1.0)) and
+           benoetigt_kwh > (fallback_min_kwh | float(1.0)) }}
 
       temp_log_addon: " (Deckel durch Batterietemperatur: {{ temperatur_limit_ampere | round(0) }}A bei Min: {{ temp_min_live | round(1) }}°C / Max: {{ temp_max_live | round(1) }}°C / {{ temp_limit_crate | round(2) }}C)"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
@@ -1549,6 +1573,11 @@ action:
             value_template: "{{ is_day and aktueller_soc < 97 }}"
           - condition: template
             value_template: "{{ not wp_laufzeit_aktiv }}"
+          # Abend-Sperre: unter der Mindest-Restladezeit nicht mehr nachregeln.
+          # Der letzte Tageswert bleibt stehen, bis der Sonnenuntergang-Trigger
+          # das Register ohnehin für die Nacht auf Max öffnet.
+          - condition: template
+            value_template: "{{ verf_stunden >= (min_reststunden | float(1.0)) }}"
         sequence:
           # Innere Prüfung: Fall-(b)-Modus gesetzt? Dann NICHTS tun (im Trace sichtbar).
           - choose:
