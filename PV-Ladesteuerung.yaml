@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.7]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.8]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -417,7 +417,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.8.7]"
+      bp_version: "[V2.8.8]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1279,6 +1279,24 @@ action:
           - condition: trigger
             id: float_boost_ende
         sequence:
+          # SCHATTEN-BMS-TARE: jetzt HIER (am Zellpflege-Ende) statt am Balancing-
+          # Start. Damit ist die gesamte Nachladung der Balancing-Phase im
+          # Zähler enthalten und der Schatten-SOC steht exakt jetzt auf 100%.
+          # Greift auch nach dem Zwangsladungs-Cooldown (Batterie ebenfalls voll).
+          - if:
+              - condition: template
+                value_template: "{{ var_helper_tare_charge != '' and var_battery_total_charge != '' }}"
+            then:
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ var_helper_tare_charge }}"
+                data:
+                  value: "{{ states(var_battery_total_charge) | float(0) }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ var_helper_tare_discharge }}"
+                data:
+                  value: "{{ states(var_battery_total_discharge) | float(0) }}"
           - if:
               - condition: template
                 value_template: "{{ var_wr_float_voltage != '' }}"
@@ -1286,7 +1304,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Zellpflege beendet. Wechselrichter Float-Spannung zurückgesetzt (Spannungs-Wechsel: {{ var_float_balancing | round(3) }}V -> {{ var_float_normal | round(3) }}V)."
+                  message: "{{ bp_version }} Zellpflege beendet. Float-Spannung zurückgesetzt ({{ var_float_balancing | round(3) }}V -> {{ var_float_normal | round(3) }}V), Schatten-BMS (Tare) auf 100% kalibriert."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1441,22 +1459,9 @@ action:
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
-
-              # TARE FÜR DAS SCHATTEN-BMS SETZEN
-              - if:
-                  - condition: template
-                    value_template: "{{ var_helper_tare_charge != '' and var_battery_total_charge != '' }}"
-                then:
-                  - action: input_number.set_value
-                    target:
-                      entity_id: "{{ var_helper_tare_charge }}"
-                    data:
-                      value: "{{ states(var_battery_total_charge) | float(0) }}"
-                  - action: input_number.set_value
-                    target:
-                      entity_id: "{{ var_helper_tare_discharge }}"
-                    data:
-                      value: "{{ states(var_battery_total_discharge) | float(0) }}"
+              # HINWEIS: Das Schatten-BMS-Tare wird NICHT mehr hier (Start) gesetzt,
+              # sondern am Ende der Zellpflege (float_boost_ende) - dann ist die
+              # Nachladung der Balancing-Phase vollständig im Zähler enthalten.
               # 3. Ladestrom direkt setzen + EIN kombinierter Logbuch-Eintrag
               - action: number.set_value
                 target:
@@ -1475,7 +1480,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Top-Balancing START): Zellspannung >= {{ top_balancing_voltage | round(3) }}V bei SOC {{ aktueller_soc | round(0) }}%. Timer gestartet, Batterie als voll markiert, Schatten-BMS (Tare) auf 100% kalibriert. Ladestrom auf {{ target_p1 }}A gedrosselt (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p1 }}A)."
+                  message: "{{ bp_version }} Prio 1 (Top-Balancing START): Zellspannung >= {{ top_balancing_voltage | round(3) }}V bei SOC {{ aktueller_soc | round(0) }}%. Timer gestartet, Batterie als voll markiert. Ladestrom auf {{ target_p1 }}A gedrosselt (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p1 }}A). Schatten-BMS-Kalibrierung folgt am Zellpflege-Ende."
                   entity_id: !input helper_logbook_dummy
 
           # Spätere Register-Korrektur (nur wenn NICHT gerade gestartet, sonst doppelt)
