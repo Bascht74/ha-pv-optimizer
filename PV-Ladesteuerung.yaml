@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.3]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -417,7 +417,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.8.2]"
+      bp_version: "[V2.8.3]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -460,7 +460,10 @@ action:
             {% set ns = namespace(arr=[]) %}
             {% for i in range(48) %}
               {% if i == h_index %}
-                {% set ns.arr = ns.arr + [new_val | round(3)] %}
+                {# round(2) statt round(3): input_text hat ein 255-Zeichen-Limit.
+                   48 Werte x 5 Zeichen (round 3) = 289 Zeichen -> set_value würde scheitern.
+                   Mit round(2) max. 241 Zeichen. #}
+                {% set ns.arr = ns.arr + [new_val | round(2)] %}
               {% else %}
                 {% set ns.arr = ns.arr + [current_array[i]] %}
               {% endif %}
