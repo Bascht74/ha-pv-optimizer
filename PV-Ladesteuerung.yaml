@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.3]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.4]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -417,7 +417,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.8.3]"
+      bp_version: "[V2.8.4]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -443,17 +443,43 @@ action:
           h_index: >
             {% set t = now() - timedelta(minutes=15) %}
             {{ t.hour * 2 + (1 if t.minute >= 30 else 0) }}
+          json_str_pre: "{{ states(var_hausverbrauch_json) }}"
+      # UNKNOWN-SCHUTZ: Direkt nach einem HA-Neustart kann der Helfer kurz
+      # 'unknown' sein, bevor der Zustand restauriert wird. Ohne Schutz würde
+      # der Kaltstart das gute Profil mit einem Einheitswert überschreiben.
+      # -> 1 Minute warten (mode: queued fängt parallele Trigger ab), dann neu lesen.
+      - if:
+          - condition: template
+            value_template: "{{ json_str_pre in ['unknown', 'unavailable'] }}"
+        then:
+          - delay: "00:01:00"
+      - variables:
+          # Frisch lesen (nach evtl. Wartezeit)
           json_str: "{{ states(var_hausverbrauch_json) }}"
+          json_gueltig: "{{ json_str is string and json_str | length > 20 and json_str[0] == '[' }}"
+          # Kaltstart-Default darf NUR beim Mitternachts-Lauf gesetzt werden.
+          # Zu allen anderen Zeiten wird der Slot bei ungültigem Helfer übersprungen
+          # (nächster 30-Min-Lauf versucht es erneut).
+          ist_mitternachtslauf: "{{ now().hour == 0 and now().minute < 15 }}"
+      - if:
+          - condition: template
+            value_template: "{{ not json_gueltig and not ist_mitternachtslauf }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ bp_version }} JSON-Profil: Helfer ungültig ('{{ json_str | truncate(30) }}') und kein Mitternachtslauf. Slot {{ h_index }} übersprungen, kein Kaltstart ausgelöst."
+              entity_id: !input helper_logbook_dummy
+          - stop: "JSON-Slot übersprungen: Helfer ungültig, warte auf Wiederherstellung oder Mitternacht."
+      - variables:
           # Lese verbrauchte Energie der letzten 30 Min DIREKT in kWh (keine Watt-Umrechnung mehr)
           last_half_hour_kwh: "{{ states(var_hausverbrauch_kwh) | float(0) }}"
           # KALTSTART-WERT: geclampter Messwert (0.05-0.6 kWh), schützt vor Ausreißer-Vergiftung.
-          # Wird nur als Startfüllung genutzt, wenn der Helfer noch leer ist. Der EMA korrigiert
-          # danach jeden Slot über die kommenden Tage auf sein echtes Profil.
+          # Greift nur noch beim Mitternachts-Lauf mit ungültigem Helfer (siehe Gate oben).
           kaltstart_kwh: "{{ [[last_half_hour_kwh, 0.05] | max, 0.6] | min }}"
-          # Default 48-Array: bei leerem Helfer alle Slots mit dem Kaltstart-Wert füllen.
           default_arr: "{{ [kaltstart_kwh] * 48 }}"
           current_array: >
-            {{ json_str | from_json if json_str is string and json_str | length > 20 else default_arr }}
+            {{ json_str | from_json if json_gueltig else default_arr }}
           # Der 7-Tage Exponential Moving Average (EMA) auf kWh-Basis
           new_val: "{{ (current_array[h_index] * (6/7)) + (last_half_hour_kwh * (1/7)) }}"
           new_array: >
