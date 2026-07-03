@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -417,7 +417,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.8.1]"
+      bp_version: "[V2.8.2]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -626,7 +626,8 @@ action:
             {% set current_period = now().replace(minute=0 if now().minute < 30 else 30, second=0, microsecond=0) %}
 
             {% if s_start >= current_period and s_start.date() == now().date() %}
-              {% set blend = (stunde.pv_estimate + stunde.pv_estimate10) / 2 %}
+              {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
+              {% set blend = ((stunde.pv_estimate + stunde.pv_estimate10) / 2) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
@@ -646,7 +647,8 @@ action:
 
             {% set blockade_time = today_at(var_zeit_blockade | string) %}
             {% if s_start >= blockade_time and s_start.date() == now().date() %}
-              {% set blend = (stunde.pv_estimate + stunde.pv_estimate10) / 2 %}
+              {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
+              {% set blend = ((stunde.pv_estimate + stunde.pv_estimate10) / 2) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
@@ -724,7 +726,8 @@ action:
               {% else %}
                 {% set anteil = 1.0 %}
               {% endif %}
-              {% set blend = (slot.pv_estimate + slot.pv_estimate10) / 2 %}
+              {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
+              {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = (blend - haus_kwh) * anteil %}
