@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.4]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.7]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -417,7 +417,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.8.4]"
+      bp_version: "[V2.8.7]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -517,6 +517,7 @@ action:
       var_max_soc_heute: !input helper_max_soc_heute
       var_battery_soc: !input battery_soc_sensor
       var_wp_temp: !input wp_temp_sensor
+      var_wp_water_heater: !input wp_water_heater
       var_wp_kompressor: !input wp_kompressor_sensor
       var_solcast_heute: !input solcast_heute_sensor
       var_solcast_rest_sensor: !input solcast_rest_sensor
@@ -945,6 +946,51 @@ action:
                   entity_id: "{{ var_lade_modus }}"
                 data:
                   option: "normal"
+          # WP-MITTERNACHTS-CHECK: PV-Boost-Werte dürfen nicht über Nacht stehen
+          # bleiben (z.B. wenn Timer durch Neustart verloren ging und auch der
+          # 5-Min-Watchdog nicht griff). Harte Rücksetzung auf Normalwerte.
+          - if:
+              - condition: template
+                value_template: >
+                  {{ var_wp_boost_aktiv and var_wp_ziel_temp_pv != var_wp_ziel_temp_normal and
+                     (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) == (var_wp_ziel_temp_pv | float(0) | round(0)) }}
+            then:
+              - action: number.set_value
+                target:
+                  entity_id: !input wp_hysterese_number
+                data:
+                  value: "{{ var_wp_hysterese_normal }}"
+              - action: water_heater.set_temperature
+                target:
+                  entity_id: !input wp_water_heater
+                data:
+                  temperature: "{{ var_wp_ziel_temp_normal }}"
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Mitternachts-Check: WP-Ziel stand noch auf PV-Boost-Wert ({{ var_wp_ziel_temp_pv }}°C). Zurückgesetzt auf Ziel {{ var_wp_ziel_temp_normal }}°C / Hysterese {{ var_wp_hysterese_normal }}°C."
+                  entity_id: !input helper_logbook_dummy
+          # FLOAT-MITTERNACHTS-CHECK: Wenn der Cooldown-Timer (Balancing) verloren
+          # ging, feuert float_boost_ende nie und die Float-Spannung bleibt auf
+          # dem Balancing-Wert hängen. Timer idle + Float noch angehoben -> Reset.
+          - if:
+              - condition: template
+                value_template: >
+                  {{ var_wr_float_voltage != '' and
+                     states(var_timer_cooldown) == 'idle' and
+                     (var_float_balancing | float(0) | round(1)) != (var_float_normal | float(0) | round(1)) and
+                     (states(var_wr_float_voltage) | float(0) | round(1)) == (var_float_balancing | float(0) | round(1)) }}
+            then:
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wr_float_voltage }}"
+                data:
+                  value: "{{ var_float_normal }}"
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Mitternachts-Check: Float-Spannung stand noch auf Balancing-Wert ({{ var_float_balancing | round(3) }}V), obwohl der Cooldown-Timer idle ist (vermutlich Timer verloren). Zurückgesetzt auf {{ var_float_normal | round(3) }}V."
+                  entity_id: !input helper_logbook_dummy
           - if:
               - condition: template
                 value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
@@ -1336,6 +1382,38 @@ action:
                 Ziel auf {{ var_wp_ziel_temp_normal }}°C, Hysterese auf {{ var_wp_hysterese_normal }}°C gesetzt (Timer-Status: idle).
               entity_id: !input helper_logbook_dummy
 
+      - alias: "WP PRIO 1.2: WATCHDOG (Timer nach Neustart verloren)"
+        # Sicherheitsnetz: Wenn der wp_boost-Timer z.B. durch einen HA-Neustart
+        # verloren ging, feuert der 'active->idle'-Trigger nie und die WP bleibt
+        # auf den PV-Boost-Werten hängen. Dieser Zweig erkennt das bei jedem
+        # Lauf: beide WP-Timer idle, aber Ziel-Temp steht noch auf dem PV-Wert.
+        conditions:
+          - condition: template
+            value_template: "{{ var_wp_boost_aktiv }}"
+          - condition: template
+            value_template: "{{ states(var_timer_wp_boost) == 'idle' and states(var_timer_wp_anlauf) == 'idle' }}"
+          - condition: template
+            value_template: >
+              {{ var_wp_ziel_temp_pv != var_wp_ziel_temp_normal and
+                 (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) == (var_wp_ziel_temp_pv | float(0) | round(0)) }}
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: !input wp_hysterese_number
+            data:
+              value: "{{ var_wp_hysterese_normal }}"
+          - action: water_heater.set_temperature
+            target:
+              entity_id: !input wp_water_heater
+            data:
+              temperature: "{{ var_wp_ziel_temp_normal }}"
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >
+                {{ bp_version }} WP WATCHDOG: Ziel-Temperatur stand noch auf PV-Boost-Wert ({{ var_wp_ziel_temp_pv }}°C), obwohl beide WP-Timer idle sind (vermutlich Timer durch HA-Neustart verloren). Zurückgesetzt: Ziel {{ var_wp_ziel_temp_normal }}°C, Hysterese {{ var_wp_hysterese_normal }}°C.
+              entity_id: !input helper_logbook_dummy
+
   # ====================================================================
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM
   # ====================================================================
@@ -1345,11 +1423,13 @@ action:
           - condition: template
             value_template: "{{ top_balancing_noetig }}"
         sequence:
+          - variables:
+              balancing_start_jetzt: >
+                {{ states(var_timer_cooldown) == 'idle' and not zwangsladung_aktiv and
+                (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) }}
           - if:
               - condition: template
-                value_template: >
-                  {{ states(var_timer_cooldown) == 'idle' and not zwangsladung_aktiv and
-                  (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) }}
+                value_template: "{{ balancing_start_jetzt }}"
             then:
               # 1. Timer starten
               - action: timer.start
@@ -1377,16 +1457,31 @@ action:
                       entity_id: "{{ var_helper_tare_discharge }}"
                     data:
                       value: "{{ states(var_battery_total_discharge) | float(0) }}"
-              # 3. Gemeinsames Tracking-Logbuch
+              # 3. Ladestrom direkt setzen + EIN kombinierter Logbuch-Eintrag
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wr_max_charge }}"
+                data:
+                  value: "{{ target_p1 }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "top_balancing"
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Tracking: Zellspannung Schwelle (>= {{ top_balancing_voltage | round(3) }}V) erreicht. Top-Balancing Timer gestartet, Batterie als voll markiert und Schatten-BMS (Tare) auf 100% kalibriert."
+                  message: "{{ bp_version }} Prio 1 (Top-Balancing START): Zellspannung >= {{ top_balancing_voltage | round(3) }}V bei SOC {{ aktueller_soc | round(0) }}%. Timer gestartet, Batterie als voll markiert, Schatten-BMS (Tare) auf 100% kalibriert. Ladestrom auf {{ target_p1 }}A gedrosselt (Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p1 }}A)."
                   entity_id: !input helper_logbook_dummy
 
+          # Spätere Register-Korrektur (nur wenn NICHT gerade gestartet, sonst doppelt)
           - if:
               - condition: template
-                value_template: "{{ ((aktueller_ladestrom | round(0)) - (target_p1 | round(0))) | abs >= 2 }}"
+                value_template: "{{ not balancing_start_jetzt and ((aktueller_ladestrom | round(0)) - (target_p1 | round(0))) | abs >= 2 }}"
             then:
               - action: logbook.log
                 data:
@@ -1473,7 +1568,16 @@ action:
             value_template: "{{ states(var_timer_wp_anlauf) != 'active' }}"
           - condition: template
             value_template: "{{ states(var_timer_peak) == 'active' }}"
+          # Peak-Shaving nur, wenn die Batterie noch aufnehmen kann. Bei voller
+          # Batterie (>= 99% oder heute-voll-Marker) ist Shaven physikalisch
+          # wirkungslos und würde nur die Balancing-Bremse aushebeln.
+          - condition: template
+            value_template: "{{ aktueller_soc < 99 and not heute_schon_voll }}"
         sequence:
+          # Peak-Shaving löst den WP-Laufzeit-Timer auf: Nach Peak-Ende soll
+          # Prio 5 wieder freigegeben sein. Der Ziel/Hysterese-Reset kommt über
+          # den wp_boost_ende-Trigger (Cancel erzeugt active->idle), abgesichert
+          # durch Watchdog (5 Min) und Mitternachts-Check.
           - if:
               - condition: template
                 value_template: "{{ states(var_timer_wp_boost) == 'active' }}"
@@ -1493,7 +1597,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 3 (Peak-Shaving): Überschuss liegt über Schwelle. Ladestrom auf {{ target_p3 }}A gesetzt (Berechnung: Überschuss {{ potential_export | round(0) }}W [Grid-Export: {{ grid_export | round(0) }}W - Batterie-Leistung: {{ batterie_leistung | round(0) }}W] > Schwelle {{ schwelle_peak_shaving | round(0) }}W | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 3 (Peak-Shaving): Hold-Timer aktiv (letzter Überschuss über {{ schwelle_peak_shaving | round(0) }}W). Ladestrom auf {{ target_p3 }}A gesetzt (Aktuell: Überschuss {{ potential_export | round(0) }}W [Grid-Export: {{ grid_export | round(0) }}W - Batterie-Leistung: {{ batterie_leistung | round(0) }}W] | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
