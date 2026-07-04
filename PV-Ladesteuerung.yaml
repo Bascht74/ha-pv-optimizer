@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.8.8]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.3]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -61,18 +61,6 @@ blueprint:
           name: "Aktuelle Leistung"
           default: ""
           selector: {entity: {domain: sensor, device_class: power}}
-        bms1_soc_sensor:
-          name: "BMS 1 Ladezustand"
-          default: ""
-          selector: {entity: {domain: sensor}}
-        bms2_soc_sensor:
-          name: "BMS 2 Ladezustand"
-          default: ""
-          selector: {entity: {domain: sensor}}
-        bms3_soc_sensor:
-          name: "BMS 3 Ladezustand (Optional)"
-          default: ""
-          selector: {entity: {domain: sensor}}
         vmax1_sensor:
           name: "BMS 1 Max Zellspannung"
           default: ""
@@ -278,6 +266,11 @@ blueprint:
           name: "Batterie Voll Schalter"
           default: ""
           selector: {entity: {domain: input_boolean}}
+        helper_blockade_beendet:
+          name: "Blockade heute beendet Helfer (Optional)"
+          description: "input_boolean als Tagesmarker: Nach dem ersten Blockade-Austritt tritt die Morgen-Blockade am selben Tag nicht erneut ein. Leer lassen = Wiedereintritt erlaubt (altes Verhalten). Reset um Mitternacht."
+          default: ""
+          selector: {entity: {domain: input_boolean}}
         helper_timer_cooldown:
           name: "Timer Cooldown (Auch für Balancing)"
           default: ""
@@ -324,9 +317,7 @@ blueprint:
           selector: {entity: {domain: input_text}}
 
 trigger_variables:
-  bms1_soc: !input bms1_soc_sensor
-  bms2_soc: !input bms2_soc_sensor
-  bms3_soc: !input bms3_soc_sensor
+  tv_battery_soc: !input battery_soc_sensor
   t_cooldown: !input helper_timer_cooldown
   tv_vmax1: !input vmax1_sensor
   tv_vmax2: !input vmax2_sensor
@@ -368,22 +359,13 @@ trigger:
   - alias: "Trigger Zwangsladung START: 10 Tage nicht voll"
     platform: template
     value_template: >
-      {% set s1 = states(bms1_soc) | float(100) %}
-      {% set s2 = states(bms2_soc) | float(100) %}
-      {% if bms3_soc != '' %}
-        {{ s1 < 100 and s2 < 100 and (states(bms3_soc) | float(100)) < 100 }}
-      {% else %}
-        {{ s1 < 100 and s2 < 100 }}
-      {% endif %}
+      {{ (states(tv_battery_soc) | float(100)) < 100 }}
     for: {days: 10}
     id: zwangsladung_start
   - alias: "Trigger Zwangsladung COOLDOWN: 100% erreicht"
     platform: template
     value_template: >
-      {% set s1 = states(bms1_soc) | float(0) %}
-      {% set s2 = states(bms2_soc) | float(0) %}
-      {% set s3 = states(bms3_soc) | float(0) if bms3_soc != '' else 0 %}
-      {{ s1 > 99.9 or s2 > 99.9 or s3 > 99.9 }}
+      {{ (states(tv_battery_soc) | float(0)) > 99.9 }}
     id: zwangsladung_100
   - alias: "Trigger Zwangsladung ENDE: Cooldown Timer abgelaufen"
     platform: state
@@ -417,10 +399,11 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.8.8]"
+      bp_version: "[V2.9.3]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
+      var_helper_blockade_beendet: !input helper_blockade_beendet
       var_helper_tare_discharge: !input helper_tare_discharge
       var_schatten_bms: !input schatten_bms_sensor
       var_lade_modus: !input helper_lade_modus
@@ -697,6 +680,7 @@ action:
         {% if pack3_online %}{% set vals = vals + [states(var_bms3_temp_min) | float(-99)] %}{% endif %}
         {{ vals | min if vals | length > 0 else -99 }}
 
+
       temp_max_live: >
         {% set vals = [] %}
         {% if pack1_online %}{% set vals = vals + [states(var_bms1_temp_max) | float(99)] %}{% endif %}
@@ -856,12 +840,78 @@ action:
           {% else %}false{% endif %}
         {% else %}false{% endif %}
 
+      # ================================================================
+      # DYNAMISCHES BLOCKADE-ENDE T:
+      # Spätester Ladebeginn T (Halbstunden-Raster, nur VOLLSTÄNDIG in der
+      # Zukunft liegende Slots = konservativ, der angebrochene Slot zählt
+      # nicht mehr), sodass Netto-Prognose ab T noch >= faktor_ziel_puffer
+      # (1,3) x freie_kwh. Liefert {'t': ISO oder '', 'gesamt': Netto ab
+      # naechster Slotgrenze}. 'gesamt' dient dem finalen 1,2-Halt.
+      # ================================================================
+      blockade_dyn_json: >
+        {% set ns = namespace(gesamt=0.0, kand=[]) %}
+        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
+          {% set blockade_time = today_at(var_zeit_blockade | string) %}
+          {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
+            {% set s_start = as_datetime(slot.period_start) | as_local %}
+            {% if s_start > now() and s_start.date() == now().date() %}
+              {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
+              {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
+              {% set haus_kwh = json_profil[h_index] | float(0.2) %}
+              {% set netto = blend - haus_kwh %}
+              {% set ns.gesamt = ns.gesamt + netto %}
+              {% if s_start <= blockade_time %}
+                {% set ns.kand = ns.kand + [[slot.period_start, netto]] %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {% set ziel = faktor_ziel_puffer * freie_kwh %}
+        {% set ns2 = namespace(best='', praefix=0.0) %}
+        {% for paar in ns.kand %}
+          {% if (ns.gesamt - ns2.praefix) >= ziel %}
+            {% set ns2.best = paar[0] %}
+          {% endif %}
+          {% set ns2.praefix = ns2.praefix + paar[1] %}
+        {% endfor %}
+        {{ {'t': ns2.best, 'gesamt': ns.gesamt | round(2)} | to_json }}
+      # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
+      blockade_dyn: "{{ blockade_dyn_json if blockade_dyn_json is mapping else (blockade_dyn_json | from_json) }}"
+      blockade_dyn_t: "{{ blockade_dyn.t | default('') }}"
+      blockade_dyn_gesamt: "{{ blockade_dyn.gesamt | default(0) | float(0) }}"
+      # BLOCKADE-LOGIK (dynamisches Ende):
+      # Existiert ein T (spaetester Ladebeginn, ab dem Netto >= 1,3 x frei):
+      # blockieren. T wandert bei sinkender Prognose von selbst nach vorn.
+      # Kein T mehr -> direkte Freigabe an die Kaskade (Prio 5). Der Faktor
+      # faktor_fallback (1,2) wird NUR noch von Fall B (Max-Verriegelung) genutzt.
+      # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
+      # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
+      blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
       blockade_aktiv: >
-        {{ is_day and aktueller_soc < 99 and (netto_nach_blockade >= (faktor_ziel_puffer * freie_kwh)) and vor_blockade_ende and not schnee_falle_aktiv }}
+        {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
+           and blockade_dyn_t != '' and not blockade_heute_beendet }}
 
 # ====================================================================
 # ROOT-ACTIONS STATE-MACHINE
 # ====================================================================
+
+  # BLOCKADE-AUSTRITT ERKENNEN: Modus steht noch auf 'blockade', aber die
+  # Bedingung ist gefallen (T weg / SOC / Zeit) -> Tagesmarker setzen.
+  # Feuert genau einmal, da der folgende Prio-Zweig den Modus umsetzt.
+  - if:
+      - condition: template
+        value_template: >
+          {{ var_helper_blockade_beendet != '' and
+             aktueller_modus == 'blockade' and not blockade_aktiv }}
+    then:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: "{{ var_helper_blockade_beendet }}"
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: "{{ bp_version }} Blockade-Austritt: Tagesmarker gesetzt. Die Morgen-Blockade tritt heute nicht erneut ein (Reset um Mitternacht)."
+          entity_id: !input helper_logbook_dummy
 
   - if:
       - condition: template
@@ -937,6 +987,14 @@ action:
           - action: input_boolean.turn_off
             target:
               entity_id: !input helper_batterie_heute_voll
+          # Blockade-Tagesmarker zurücksetzen (falls konfiguriert)
+          - if:
+              - condition: template
+                value_template: "{{ var_helper_blockade_beendet != '' }}"
+            then:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: "{{ var_helper_blockade_beendet }}"
           - if:
               - condition: template
                 value_template: "{{ var_lade_modus != '' }}"
@@ -1197,7 +1255,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} Zwangsladung GESTARTET (Seit 10 Tagen nicht voll). Schalter aktiv (BMS1_SOC: {{ states(bms1_soc) }}%, BMS2_SOC: {{ states(bms2_soc) }}% < 100% über 10 Tage | Aktueller Monat: {{ now().month }} in [11,12,1,2])."
+              message: "{{ bp_version }} Zwangsladung GESTARTET (Seit 10 Tagen nicht voll). Schalter aktiv (Gesamt-SOC: {{ aktueller_soc | round(1) }}% < 100% über 10 Tage | Aktueller Monat: {{ now().month }} in [11,12,1,2])."
               entity_id: !input helper_logbook_dummy
 
       - alias: "ZWANGSLADUNG: 100% ERREICHT"
@@ -1219,7 +1277,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} Zwangsladung hat 100% erreicht. Cooldown Timer (Balancing) gestartet (BMS1_SOC: {{ states(bms1_soc) }}% | BMS2_SOC: {{ states(bms2_soc) }}%)."
+              message: "{{ bp_version }} Zwangsladung hat 100% erreicht. Cooldown Timer (Balancing) gestartet (Gesamt-SOC: {{ aktueller_soc | round(1) }}%)."
               entity_id: !input helper_logbook_dummy
 
       - alias: "ZWANGSLADUNG BEENDEN"
@@ -1661,8 +1719,9 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 4.5 (Morgen-Blockade): Netto-Überschuss NACH Blockade ({{ netto_nach_blockade | round(1) }} kWh) reicht aus.
-                    Ladestrom auf {{ null_ampere }}A blockiert (Berechnung: Netto nach Blockade {{ netto_nach_blockade | round(1) }} kWh [Solcast ab Blockade: {{ solcast_nach_blockade | round(1) }} kWh - Puffer: {{ puffer_kwh }} kWh] >= Ziel-Bedarf {{ freie_kwh | round(1) }} kWh * Puffer-Faktor {{ faktor_ziel_puffer }} = {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A).
+                    {{ bp_version }} Prio 4.5 (Morgen-Blockade dynamisch): Ladestrom auf {{ null_ampere }}A blockiert.
+                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Netto ab dann >= Ziel {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh (frei {{ freie_kwh | round(1) }} x {{ faktor_ziel_puffer }}).
+                    (Netto gesamt ab nächster Halbstunde: {{ blockade_dyn_gesamt | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
