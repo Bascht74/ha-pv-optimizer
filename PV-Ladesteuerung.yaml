@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.6]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.9]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -404,7 +404,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.6]"
+      bp_version: "[V2.9.9]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -442,9 +442,13 @@ action:
         then:
           - delay: "00:01:00"
       - variables:
-          # Frisch lesen (nach evtl. Wartezeit)
+          # Frisch lesen (nach evtl. Wartezeit). HA liefert den gespeicherten
+          # JSON-Wert MANCHMAL bereits als native Liste statt als String
+          # (dasselbe Phänomen wie beim from_json). Beide Fälle sind gültig.
           json_str: "{{ states(var_hausverbrauch_json) }}"
-          json_gueltig: "{{ json_str is string and json_str | length > 20 and json_str[0] == '[' }}"
+          json_ist_liste: "{{ json_str is iterable and json_str is not string }}"
+          json_gueltig: >
+            {{ json_ist_liste or (json_str is string and json_str | length > 20 and json_str[0] == '[') }}
           # Kaltstart-Default darf NUR beim Mitternachts-Lauf gesetzt werden.
           # Zu allen anderen Zeiten wird der Slot bei ungültigem Helfer übersprungen
           # (nächster 30-Min-Lauf versucht es erneut).
@@ -456,7 +460,8 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} JSON-Profil: Helfer ungültig ('{{ json_str | truncate(30) }}') und kein Mitternachtslauf. Slot {{ h_index }} übersprungen, kein Kaltstart ausgelöst."
+              # json_str | string erzwingt String vor truncate (json_str kann Liste sein).
+              message: "{{ bp_version }} JSON-Profil: Helfer ungültig ('{{ json_str | string | truncate(30) }}') und kein Mitternachtslauf. Slot {{ h_index }} übersprungen, kein Kaltstart ausgelöst."
               entity_id: !input helper_logbook_dummy
           - stop: "JSON-Slot übersprungen: Helfer ungültig, warte auf Wiederherstellung oder Mitternacht."
       - variables:
@@ -467,7 +472,7 @@ action:
           kaltstart_kwh: "{{ [[last_half_hour_kwh, 0.05] | max, 0.6] | min }}"
           default_arr: "{{ [kaltstart_kwh] * 48 }}"
           current_array: >
-            {{ json_str | from_json if json_gueltig else default_arr }}
+            {{ json_str if json_ist_liste else (json_str | from_json if json_gueltig else default_arr) }}
           # Der 7-Tage Exponential Moving Average (EMA) auf kWh-Basis
           new_val: "{{ (current_array[h_index] * (6/7)) + (last_half_hour_kwh * (1/7)) }}"
           new_array: >
@@ -724,7 +729,13 @@ action:
 
       temperatur_limit_ampere: "{{ [temp_limit_ampere_raw, max_ampere] | min }}"
       freie_kwh: "{{ batterie_kapazitaet * (1 - (aktueller_soc / 100)) }}"
+      # potential_export bleibt als Diagnosegröße (PV - Load, da sich die
+      # Batterie herauskürzt) für Logs erhalten. Für die Schwellen-Entscheidungen
+      # (WP-Boost, Peak-Shaving) ist aber der REALE Netz-Export maßgeblich:
+      # Der Wechselrichter ist auf 60% kWp gedeckelt; entscheidend ist, was
+      # tatsächlich ins Netz geht, nicht was die Batterie gerade puffert.
       potential_export: "{{ grid_export - batterie_leistung }}"
+      real_export: "{{ grid_export }}"
 
       netto_tagesueberschuss: "{{ solcast_rest_blended - puffer_kwh }}"
       netto_nach_blockade: "{{ solcast_nach_blockade - puffer_kwh }}"
@@ -869,7 +880,10 @@ action:
               {% set netto = blend - haus_kwh %}
               {% set ns.gesamt = ns.gesamt + netto %}
               {% if s_start <= blockade_time %}
-                {% set ns.kand = ns.kand + [[slot.period_start, netto]] %}
+                {# s_start | string erzwingt einen String; slot.period_start kann
+                   je nach Solcast-Integration ein datetime-Objekt sein, das
+                   spaeter to_json crashen liesse (Type not JSON serializable). #}
+                {% set ns.kand = ns.kand + [[s_start | string, netto]] %}
               {% endif %}
             {% endif %}
           {% endfor %}
@@ -1393,7 +1407,7 @@ action:
       - alias: "Zieht den Peak-Shaving Timer auf"
         conditions:
           - condition: template
-            value_template: "{{ potential_export > schwelle_peak_shaving and not wp_sperre_aktiv }}"
+            value_template: "{{ real_export > schwelle_peak_shaving and not wp_sperre_aktiv }}"
         sequence:
           - action: timer.start
             target:
@@ -1415,7 +1429,7 @@ action:
           - condition: template
             value_template: "{{ var_wp_boost_aktiv }}"
           - condition: template
-            value_template: "{{ potential_export > schwelle_wp_boost }}"
+            value_template: "{{ real_export > schwelle_wp_boost }}"
           - condition: template
             value_template: "{{ ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv) }}"
           - condition: template
@@ -1460,14 +1474,32 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} WP PV-Boost ausgelöst (Wasser {{ ww_temp | round(1) }}°C < PV-Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C, Überschuss {{ potential_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W).
-                Ziel auf {{ var_wp_ziel_temp_pv }}°C, Hysterese auf {{ var_wp_hysterese_pv }}°C gesetzt.{{ solcast_log_addon }}
+                {{ bp_version }} WP PV-Boost ausgelöst (Wasser {{ ww_temp | round(1) }}°C < PV-Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C, Netz-Export {{ real_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W).
+                Ziel auf {{ var_wp_ziel_temp_pv }}°C, Hysterese auf {{ var_wp_hysterese_pv }}°C gesetzt. Timer gestartet (Anlauf + Laufzeit).{{ solcast_log_addon }}
               entity_id: !input helper_logbook_dummy
 
-      - alias: "WP PRIO 1.1: BOOST BEENDET"
+      # DIAGNOSE: Boost-Kernbedingungen (Überschuss + WW-Temp) sind erfüllt,
+      # aber ein WP-Timer ist noch active -> Boost wird blockiert. Macht die
+      # Ursache einer verzögerten/ausbleibenden Boost-Auslösung im Log sichtbar.
+      # (Greift nur, wenn wirklich ein Timer blockiert; sonst läuft der Zweig oben.)
+      - alias: "WP DIAGNOSE: Boost bereit, aber Timer blockiert"
         conditions:
-          - condition: trigger
-            id: wp_boost_ende
+          - condition: template
+            value_template: "{{ var_wp_boost_aktiv }}"
+          - condition: template
+            value_template: "{{ real_export > schwelle_wp_boost }}"
+          - condition: template
+            value_template: "{{ ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv) }}"
+          - condition: template
+            value_template: "{{ states(var_timer_wp_anlauf) == 'active' or states(var_timer_wp_boost) == 'active' }}"
+        sequence:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >
+                {{ bp_version }} WP-Boost bereit (Netz-Export {{ real_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W, Wasser {{ ww_temp | round(1) }}°C < {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C), aber blockiert durch aktiven Timer (Anlauf: {{ states(var_timer_wp_anlauf) }}, Laufzeit: {{ states(var_timer_wp_boost) }}). Kein neuer Boost bis Timer idle.
+              entity_id: !input helper_logbook_dummy
+
         sequence:
           - action: number.set_value
             target:
@@ -1711,7 +1743,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 3 (Peak-Shaving): Hold-Timer aktiv (letzter Überschuss über {{ schwelle_peak_shaving | round(0) }}W). Ladestrom auf {{ target_p3 }}A gesetzt (Aktuell: Überschuss {{ potential_export | round(0) }}W [Grid-Export: {{ grid_export | round(0) }}W - Batterie-Leistung: {{ batterie_leistung | round(0) }}W] | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 3 (Peak-Shaving): Hold-Timer aktiv (letzter Netz-Export über {{ schwelle_peak_shaving | round(0) }}W). Ladestrom auf {{ target_p3 }}A gesetzt (Aktueller Netz-Export: {{ real_export | round(0) }}W [Batterie puffert gerade {{ (batterie_leistung * -1) | round(0) }}W] | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ target_p3 }}A).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
