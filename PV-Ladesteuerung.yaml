@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.3]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.6]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -222,6 +222,11 @@ blueprint:
           name: "Hysterese Entität"
           default: ""
           selector: {entity: {domain: number}}
+        wp_ziel_temp_number:
+          name: "WW-Zieltemperatur Entität (Optional, ViCare-Doppelsetzung)"
+          description: "Zusätzliche number-Entity für die WW-Zieltemperatur. ViCare übernimmt water_heater.set_temperature nicht immer zuverlässig; wenn gesetzt, schreibt der Blueprint die Zieltemperatur zusätzlich über diese Entity."
+          default: ""
+          selector: {entity: {domain: number}}
         wp_boost_button:
           name: "Einmalige Ladung Button"
           default: ""
@@ -399,7 +404,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.3]"
+      bp_version: "[V2.9.6]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -565,6 +570,7 @@ action:
       var_float_normal: !input float_voltage_normal
       var_float_balancing: !input float_voltage_balancing
       var_wp_ziel_temp_pv: !input wp_ziel_temp_pv
+      var_wp_ziel_number: !input wp_ziel_temp_number
       var_wp_hysterese_pv: !input wp_hysterese_pv
       var_wp_ziel_temp_normal: !input wp_ziel_temp_normal
       var_wp_hysterese_normal: !input wp_hysterese_normal
@@ -805,8 +811,10 @@ action:
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
-      raw_peak: "{{ [peak_ampere, ziel_p5_raw] | max }}"
-      target_p3: "{{ [raw_peak, temperatur_limit_ampere] | min }}"
+      # Peak-Shaving nutzt den FESTEN Parameter peak_ampere (gedeckelt nur
+      # durch Temperatur). Die frühere Kopplung an den dynamischen P5-Wert
+      # (raw_peak = max(...)) war eine nicht abgestimmte Änderung und ist entfernt.
+      target_p3: "{{ [peak_ampere, temperatur_limit_ampere] | min }}"
       # Prio 5 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
 
@@ -957,7 +965,8 @@ action:
       - condition: template
         value_template: >
           {{ (schatten_raw_soc | float(-1)) > 100 and
-             (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) }}
+             (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
+             states(var_timer_cooldown) != 'active' }}
     then:
       - action: logbook.log
         data:
@@ -1023,6 +1032,16 @@ action:
                   entity_id: !input wp_water_heater
                 data:
                   temperature: "{{ var_wp_ziel_temp_normal }}"
+              # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
+              - if:
+                  - condition: template
+                    value_template: "{{ var_wp_ziel_number != '' }}"
+                then:
+                  - action: number.set_value
+                    target:
+                      entity_id: "{{ var_wp_ziel_number }}"
+                    data:
+                      value: "{{ var_wp_ziel_temp_normal }}"
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
@@ -1414,6 +1433,16 @@ action:
               entity_id: !input wp_water_heater
             data:
               temperature: "{{ var_wp_ziel_temp_pv }}"
+          # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
+          - if:
+              - condition: template
+                value_template: "{{ var_wp_ziel_number != '' }}"
+            then:
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wp_ziel_number }}"
+                data:
+                  value: "{{ var_wp_ziel_temp_pv }}"
           - action: button.press
             target:
               entity_id: !input wp_boost_button
@@ -1450,6 +1479,16 @@ action:
               entity_id: !input wp_water_heater
             data:
               temperature: "{{ var_wp_ziel_temp_normal }}"
+          # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
+          - if:
+              - condition: template
+                value_template: "{{ var_wp_ziel_number != '' }}"
+            then:
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wp_ziel_number }}"
+                data:
+                  value: "{{ var_wp_ziel_temp_normal }}"
           - action: logbook.log
             data:
               name: "PV Optimizer"
@@ -1483,6 +1522,16 @@ action:
               entity_id: !input wp_water_heater
             data:
               temperature: "{{ var_wp_ziel_temp_normal }}"
+          # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
+          - if:
+              - condition: template
+                value_template: "{{ var_wp_ziel_number != '' }}"
+            then:
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wp_ziel_number }}"
+                data:
+                  value: "{{ var_wp_ziel_temp_normal }}"
           - action: logbook.log
             data:
               name: "PV Optimizer"
@@ -1653,6 +1702,8 @@ action:
                   name: "PV Optimizer"
                   message: "{{ bp_version }} Peak-Shaving aktiv: WP-Laufzeit Timer wurde vorzeitig beendet (Timer '{{ var_timer_wp_boost }}' -> idle). Prio 5 ist nach dem Peak wieder freigegeben."
                   entity_id: !input helper_logbook_dummy
+          # Ziel ist wieder der KONSTANTE Parameter peak_ampere -> einfacher
+          # Vergleich reicht, kein Zappeln möglich (Treppenfilter entfernt).
           - if:
               - condition: template
                 value_template: "{{ ((aktueller_ladestrom | round(0)) - (target_p3 | round(0))) | abs >= 2 }}"
