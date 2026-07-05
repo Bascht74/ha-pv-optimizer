@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.12]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.15]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -390,6 +390,12 @@ trigger:
     to: "idle"
     from: "active"
     id: float_boost_ende
+  - alias: "Trigger Peak-Shaving ENDE: Hold-Timer abgelaufen"
+    platform: state
+    entity_id: !input helper_timer_peak
+    to: "idle"
+    from: "active"
+    id: peak_shaving_ende
 
 # ====================================================================
 # QUEUED MODE (Schützt Timer-Events vor parallelen Triggern)
@@ -404,7 +410,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.12]"
+      bp_version: "[V2.9.15]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1047,25 +1053,35 @@ action:
                   entity_id: !input wp_hysterese_number
                 data:
                   value: "{{ var_wp_hysterese_normal }}"
-              - action: water_heater.set_temperature
-                target:
-                  entity_id: !input wp_water_heater
-                data:
-                  temperature: "{{ var_wp_ziel_temp_normal }}"
-              # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
-              - if:
-                  - condition: template
-                    value_template: "{{ var_wp_ziel_number != '' }}"
-                then:
-                  - action: number.set_value
-                    target:
-                      entity_id: "{{ var_wp_ziel_number }}"
-                    data:
-                      value: "{{ var_wp_ziel_temp_normal }}"
+              # RETRY-BAUSTEIN (siehe Boost-Ende): beide Entities, 10s prüfen, max 3.
+              - repeat:
+                  sequence:
+                    - action: water_heater.set_temperature
+                      target:
+                        entity_id: !input wp_water_heater
+                      data:
+                        temperature: "{{ var_wp_ziel_temp_normal }}"
+                    - if:
+                        - condition: template
+                          value_template: "{{ var_wp_ziel_number != '' }}"
+                      then:
+                        - action: number.set_value
+                          target:
+                            entity_id: "{{ var_wp_ziel_number }}"
+                          data:
+                            value: "{{ var_wp_ziel_temp_normal }}"
+                    - delay: "00:00:10"
+                  until:
+                    - condition: template
+                      value_template: >
+                        {{ repeat.index >= 3 or (
+                           (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0))
+                           and (var_wp_ziel_number == '' or (states(var_wp_ziel_number) | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0)))
+                        ) }}
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: WP-Ziel stand noch auf PV-Boost-Wert ({{ var_wp_ziel_temp_pv }}°C). Zurückgesetzt auf Ziel {{ var_wp_ziel_temp_normal }}°C / Hysterese {{ var_wp_hysterese_normal }}°C."
+                  message: "{{ bp_version }} Mitternachts-Check: WP-Ziel stand noch auf PV-Boost-Wert ({{ var_wp_ziel_temp_pv }}°C). Zurückgesetzt nach {{ repeat.index }} Versuch(en) auf Ziel {{ var_wp_ziel_temp_normal }}°C / Hysterese {{ var_wp_hysterese_normal }}°C."
                   entity_id: !input helper_logbook_dummy
           # FLOAT-MITTERNACHTS-CHECK: Wenn der Cooldown-Timer (Balancing) verloren
           # ging, feuert float_boost_ende nie und die Float-Spannung bleibt auf
@@ -1409,6 +1425,17 @@ action:
                 data:
                   value: "{{ var_float_normal }}"
 
+      - alias: "PEAK-SHAVING ENDE (Hold-Timer abgelaufen)"
+        conditions:
+          - condition: trigger
+            id: peak_shaving_ende
+        sequence:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ bp_version }} Prio 3 (Peak-Shaving) beendet: Hold-Timer abgelaufen (kein Netz-Export über {{ schwelle_peak_shaving | round(0) }}W mehr). Die Ladesteuerung fällt zurück auf die reguläre Kaskade (Prio 5)."
+              entity_id: !input helper_logbook_dummy
+
   - choose:
       - alias: "Zieht den Peak-Shaving Timer auf"
         conditions:
@@ -1484,28 +1511,6 @@ action:
                 Ziel auf {{ var_wp_ziel_temp_pv }}°C, Hysterese auf {{ var_wp_hysterese_pv }}°C gesetzt. Timer gestartet (Anlauf + Laufzeit).{{ solcast_log_addon }}
               entity_id: !input helper_logbook_dummy
 
-      # DIAGNOSE: Boost-Kernbedingungen (Überschuss + WW-Temp) sind erfüllt,
-      # aber ein WP-Timer ist noch active -> Boost wird blockiert. Macht die
-      # Ursache einer verzögerten/ausbleibenden Boost-Auslösung im Log sichtbar.
-      # (Greift nur, wenn wirklich ein Timer blockiert; sonst läuft der Zweig oben.)
-      - alias: "WP DIAGNOSE: Boost bereit, aber Timer blockiert"
-        conditions:
-          - condition: template
-            value_template: "{{ var_wp_boost_aktiv }}"
-          - condition: template
-            value_template: "{{ real_export > schwelle_wp_boost }}"
-          - condition: template
-            value_template: "{{ ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv) }}"
-          - condition: template
-            value_template: "{{ states(var_timer_wp_anlauf) == 'active' or states(var_timer_wp_boost) == 'active' }}"
-        sequence:
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: >
-                {{ bp_version }} WP-Boost bereit (Netz-Export {{ real_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W, Wasser {{ ww_temp | round(1) }}°C < {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C), aber blockiert durch aktiven Timer (Anlauf: {{ states(var_timer_wp_anlauf) }}, Laufzeit: {{ states(var_timer_wp_boost) }}). Kein neuer Boost bis Timer idle.
-              entity_id: !input helper_logbook_dummy
-
       - alias: "WP PRIO 1.1: BOOST BEENDET"
         conditions:
           - condition: trigger
@@ -1516,34 +1521,49 @@ action:
               entity_id: !input wp_hysterese_number
             data:
               value: "{{ var_wp_hysterese_normal }}"
-          - action: water_heater.set_temperature
-            target:
-              entity_id: !input wp_water_heater
-            data:
-              temperature: "{{ var_wp_ziel_temp_normal }}"
-          # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
-          - if:
-              - condition: template
-                value_template: "{{ var_wp_ziel_number != '' }}"
-            then:
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wp_ziel_number }}"
-                data:
-                  value: "{{ var_wp_ziel_temp_normal }}"
+          # RETRY-BAUSTEIN (identisch an Boost-Ende, Watchdog, Mitternachts-Check):
+          # Setzt water_heater UND (falls konfiguriert) die number-Entity auf den
+          # Zielwert, wartet 10s, prüft ob BEIDE sauber stehen. Bis zu 3 Versuche,
+          # weil ViCare Befehle unzuverlässig übernimmt (Wert springt zurück).
+          - repeat:
+              sequence:
+                - action: water_heater.set_temperature
+                  target:
+                    entity_id: !input wp_water_heater
+                  data:
+                    temperature: "{{ var_wp_ziel_temp_normal }}"
+                - if:
+                    - condition: template
+                      value_template: "{{ var_wp_ziel_number != '' }}"
+                  then:
+                    - action: number.set_value
+                      target:
+                        entity_id: "{{ var_wp_ziel_number }}"
+                      data:
+                        value: "{{ var_wp_ziel_temp_normal }}"
+                - delay: "00:00:10"
+              until:
+                - condition: template
+                  value_template: >
+                    {{ repeat.index >= 3 or (
+                       (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0))
+                       and (var_wp_ziel_number == '' or (states(var_wp_ziel_number) | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0)))
+                    ) }}
           - action: logbook.log
             data:
               name: "PV Optimizer"
               message: >
                 {{ bp_version }} WP PV-Boost Timer abgelaufen. System kehrt zu Normalwerten zurück:
-                Ziel auf {{ var_wp_ziel_temp_normal }}°C, Hysterese auf {{ var_wp_hysterese_normal }}°C gesetzt (Timer-Status: idle).
+                Ziel auf {{ var_wp_ziel_temp_normal }}°C, Hysterese auf {{ var_wp_hysterese_normal }}°C gesetzt (Versuche: {{ repeat.index }}, Timer-Status: idle).
               entity_id: !input helper_logbook_dummy
 
-      - alias: "WP PRIO 1.2: WATCHDOG (Timer nach Neustart verloren)"
-        # Sicherheitsnetz: Wenn der wp_boost-Timer z.B. durch einen HA-Neustart
-        # verloren ging, feuert der 'active->idle'-Trigger nie und die WP bleibt
-        # auf den PV-Boost-Werten hängen. Dieser Zweig erkennt das bei jedem
-        # Lauf: beide WP-Timer idle, aber Ziel-Temp steht noch auf dem PV-Wert.
+      - alias: "WP PRIO 1.2: WATCHDOG (Zieltemp haengt auf PV-Wert)"
+        # Sicherheitsnetz gegen zwei Fälle: (1) ViCare/Wärmepumpe hat den
+        # regulären wp_boost_ende-Reset nicht übernommen (Gerät wirft den Wert
+        # zurück auf 59°C - real beobachtet), (2) ein Timer ging verloren (z.B.
+        # HA-Neustart ohne restore), sodass wp_boost_ende nie feuerte.
+        # Erkennung bei jedem Lauf: beide WP-Timer idle, aber Ziel-Temp steht
+        # noch auf dem PV-Wert. Setzt dann hart auf Normalwerte zurück.
         conditions:
           - condition: template
             value_template: "{{ var_wp_boost_aktiv }}"
@@ -1559,26 +1579,37 @@ action:
               entity_id: !input wp_hysterese_number
             data:
               value: "{{ var_wp_hysterese_normal }}"
-          - action: water_heater.set_temperature
-            target:
-              entity_id: !input wp_water_heater
-            data:
-              temperature: "{{ var_wp_ziel_temp_normal }}"
-          # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
-          - if:
-              - condition: template
-                value_template: "{{ var_wp_ziel_number != '' }}"
-            then:
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wp_ziel_number }}"
-                data:
-                  value: "{{ var_wp_ziel_temp_normal }}"
+          # RETRY-BAUSTEIN (siehe Boost-Ende): beide Entities setzen, 10s prüfen,
+          # bis zu 3 Versuche gegen ViCare-Nichtübernahme.
+          - repeat:
+              sequence:
+                - action: water_heater.set_temperature
+                  target:
+                    entity_id: !input wp_water_heater
+                  data:
+                    temperature: "{{ var_wp_ziel_temp_normal }}"
+                - if:
+                    - condition: template
+                      value_template: "{{ var_wp_ziel_number != '' }}"
+                  then:
+                    - action: number.set_value
+                      target:
+                        entity_id: "{{ var_wp_ziel_number }}"
+                      data:
+                        value: "{{ var_wp_ziel_temp_normal }}"
+                - delay: "00:00:10"
+              until:
+                - condition: template
+                  value_template: >
+                    {{ repeat.index >= 3 or (
+                       (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0))
+                       and (var_wp_ziel_number == '' or (states(var_wp_ziel_number) | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0)))
+                    ) }}
           - action: logbook.log
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} WP WATCHDOG: Ziel-Temperatur stand noch auf PV-Boost-Wert ({{ var_wp_ziel_temp_pv }}°C), obwohl beide WP-Timer idle sind (vermutlich Timer durch HA-Neustart verloren). Zurückgesetzt: Ziel {{ var_wp_ziel_temp_normal }}°C, Hysterese {{ var_wp_hysterese_normal }}°C.
+                {{ bp_version }} WP WATCHDOG: Beide WP-Timer sind idle, aber die WW-Zieltemperatur stand noch auf dem PV-Boost-Wert ({{ var_wp_ziel_temp_pv }}°C) statt auf {{ var_wp_ziel_temp_normal }}°C. Mögliche Ursachen: die Wärmepumpe/ViCare hat den regulären Reset nicht übernommen, oder ein Timer ging verloren (z.B. HA-Neustart ohne restore). Korrigiert nach {{ repeat.index }} Versuch(en): Ziel {{ var_wp_ziel_temp_normal }}°C, Hysterese {{ var_wp_hysterese_normal }}°C.
               entity_id: !input helper_logbook_dummy
 
   # ====================================================================
