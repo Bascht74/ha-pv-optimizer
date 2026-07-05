@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.15]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.16]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -396,6 +396,18 @@ trigger:
     to: "idle"
     from: "active"
     id: peak_shaving_ende
+  - alias: "Trigger WP-Anlauf START: sofortige WP-Sperre"
+    # Ohne diesen Trigger würde die WP-Sperre erst beim nächsten 5-Min-Lauf
+    # greifen: wp_sperre_aktiv wird am Lauf-Anfang aus dem Timer-Zustand
+    # berechnet, der beim Boost-Start-Lauf noch idle ist (Timer wird erst
+    # später im selben Lauf gestartet). Dieser Trigger stößt direkt nach dem
+    # Timer-Start (idle->active) einen neuen Lauf an; dort ist der Timer active,
+    # wp_sperre_aktiv wird True, Prio 4 verriegelt sofort.
+    platform: state
+    entity_id: !input helper_timer_wp_anlauf
+    to: "active"
+    from: "idle"
+    id: wp_anlauf_start
 
 # ====================================================================
 # QUEUED MODE (Schützt Timer-Events vor parallelen Triggern)
@@ -410,7 +422,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.15]"
+      bp_version: "[V2.9.16]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
