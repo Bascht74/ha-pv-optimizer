@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.9]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.12]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -404,7 +404,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.9]"
+      bp_version: "[V2.9.12]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -889,18 +889,24 @@ action:
           {% endfor %}
         {% endif %}
         {% set ziel = faktor_ziel_puffer * freie_kwh %}
-        {% set ns2 = namespace(best='', praefix=0.0) %}
+        {% set ns2 = namespace(best='', praefix=0.0, netto_ab_t=0.0) %}
         {% for paar in ns.kand %}
           {% if (ns.gesamt - ns2.praefix) >= ziel %}
             {% set ns2.best = paar[0] %}
+            {# Netto ab genau diesem Kandidaten (= spätester Ladebeginn) bis
+               Tagesende. ns.gesamt ist Tagesnetto, ns2.praefix die Summe der
+               Slots davor -> Differenz = das, was ab T noch für die Batterie
+               bleibt. Direkt vergleichbar mit freie_kwh (Bedarf). #}
+            {% set ns2.netto_ab_t = ns.gesamt - ns2.praefix %}
           {% endif %}
           {% set ns2.praefix = ns2.praefix + paar[1] %}
         {% endfor %}
-        {{ {'t': ns2.best, 'gesamt': ns.gesamt | round(2)} | to_json }}
+        {{ {'t': ns2.best, 'gesamt': ns.gesamt | round(2), 'netto_ab_t': ns2.netto_ab_t | round(2)} | to_json }}
       # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
       blockade_dyn: "{{ blockade_dyn_json if blockade_dyn_json is mapping else (blockade_dyn_json | from_json) }}"
       blockade_dyn_t: "{{ blockade_dyn.t | default('') }}"
       blockade_dyn_gesamt: "{{ blockade_dyn.gesamt | default(0) | float(0) }}"
+      blockade_dyn_netto_ab_t: "{{ blockade_dyn.netto_ab_t | default(0) | float(0) }}"
       # BLOCKADE-LOGIK (dynamisches Ende):
       # Existiert ein T (spaetester Ladebeginn, ab dem Netto >= 1,3 x frei):
       # blockieren. T wandert bei sinkender Prognose von selbst nach vorn.
@@ -1500,6 +1506,10 @@ action:
                 {{ bp_version }} WP-Boost bereit (Netz-Export {{ real_export | round(0) }}W > {{ schwelle_wp_boost | round(0) }}W, Wasser {{ ww_temp | round(1) }}°C < {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }}°C), aber blockiert durch aktiven Timer (Anlauf: {{ states(var_timer_wp_anlauf) }}, Laufzeit: {{ states(var_timer_wp_boost) }}). Kein neuer Boost bis Timer idle.
               entity_id: !input helper_logbook_dummy
 
+      - alias: "WP PRIO 1.1: BOOST BEENDET"
+        conditions:
+          - condition: trigger
+            id: wp_boost_ende
         sequence:
           - action: number.set_value
             target:
@@ -1803,8 +1813,8 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 4.5 (Morgen-Blockade dynamisch): Ladestrom auf {{ null_ampere }}A blockiert.
-                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Netto ab dann >= Ziel {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh (frei {{ freie_kwh | round(1) }} x {{ faktor_ziel_puffer }}).
-                    (Netto gesamt ab nächster Halbstunde: {{ blockade_dyn_gesamt | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A).
+                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Netto ab Ende Blockade bis Tagesende: {{ blockade_dyn_netto_ab_t | round(1) }} kWh >= Bedarf {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh (frei {{ freie_kwh | round(1) }} x {{ faktor_ziel_puffer }}).
+                    (Netto gesamt Resttag ab nächster Halbstunde: {{ blockade_dyn_gesamt | round(1) }} kWh | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
