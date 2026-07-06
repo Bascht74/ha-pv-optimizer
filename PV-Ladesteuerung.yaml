@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.16]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.17]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -422,7 +422,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.16]"
+      bp_version: "[V2.9.17]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -864,6 +864,23 @@ action:
 
       wp_sperre_aktiv: >
         {{ var_wp_boost_aktiv and states(var_timer_wp_anlauf) == 'active' }}
+
+      # NEU (V2.9.17): Zeitlich begrenzte Battery-0A-Sperre fuer PRIO 4.
+      # wp_sperre_aktiv bleibt UNVERAENDERT und steuert weiterhin (unabhaengig
+      # von der Uhrzeit) die Peak-Shaving-Timer-Logik (Zeilen ~1455/1465) -
+      # dort soll die Anlaufphase IMMER Peak-Shaving verhindern, auch nachmittags.
+      # NUR die harte Batterie-0A-Verriegelung in PRIO 4 (Zeile ~1819) soll
+      # kuenftig auf das (dynamische) Blockade-Ende begrenzt sein: startet die
+      # WP NACH Blockade-Ende (z.B. nachmittags bei viel Sonne), verriegelt
+      # PRIO 4 die Batterie nicht mehr auf 0A - Prio 5 darf normal weiterladen.
+      # Bewusst NICHT "and not blockade_heute_beendet" direkt verwendet: diese
+      # Variable wird erst WEITER UNTEN im selben variables-Block definiert
+      # (Zeile ~935) und waere hier als Vorwaertsreferenz noch nicht verfuegbar.
+      # Stattdessen wird dieselbe Pruefung inline wiederholt (var_helper_
+      # blockade_beendet ist bereits ab Zeile 429 gesetzt, also sicher nutzbar).
+      wp_sperre_batterie_0a_aktiv: >
+        {{ wp_sperre_aktiv and vor_blockade_ende
+           and not (var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on') }}
 
       wp_laufzeit_aktiv: >
         {{ states(var_timer_wp_boost) == 'active' }}
@@ -1816,7 +1833,7 @@ action:
       - alias: "PRIO 4: WP-ANLAUFSPERRE (0A)"
         conditions:
           - condition: template
-            value_template: "{{ wp_sperre_aktiv }}"
+            value_template: "{{ wp_sperre_batterie_0a_aktiv }}"
         sequence:
           - if:
               - condition: template
@@ -1825,7 +1842,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 4 (WP-Sperre): Wärmepumpe läuft an. Batterie auf 0A verriegelt (Timer '{{ var_timer_wp_anlauf }}' = active | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A)."
+                  message: "{{ bp_version }} Prio 4 (WP-Sperre, vor Blockade-Ende): Wärmepumpe läuft an. Batterie auf 0A verriegelt (Timer '{{ var_timer_wp_anlauf }}' = active | Register-Wechsel: {{ aktueller_ladestrom | round(0) }}A -> {{ null_ampere }}A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
