@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.17]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.19]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -422,7 +422,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.17]"
+      bp_version: "[V2.9.19]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -430,6 +430,46 @@ action:
       var_helper_tare_discharge: !input helper_tare_discharge
       var_schatten_bms: !input schatten_bms_sensor
       var_lade_modus: !input helper_lade_modus
+
+  # ====================================================================
+  # NEU (V2.9.18): EINMALIGER RETRY BEI KURZZEITIGEM DEYE-SENSOR-AUSFALL
+  # Beobachtet an Standort 2 (Dachterrasse) am 07.07.2026: Ein Battery-
+  # Sensor ging fuer ~6s auf 'nicht verfuegbar' (11:49:59 -> 11:50:05).
+  # Dadurch fiel aktueller_soc auf den Fallback 0 und packs_online auf 0,
+  # freie_kwh sprang faelschlich auf fast die volle Kapazitaet, und das
+  # loeste einen fehlerhaften dynamischen Blockade-Austritt aus. Der
+  # TAGESMARKER (helper_blockade_beendet) verriegelt diesen fehlerhaften
+  # Austritt dann fuer den GESAMTEN Resttag (kein Wiedereintritt bis
+  # Mitternacht) - ein einzelner kurzer Sensor-Ausfall hatte also einen
+  # ganztaegigen Effekt.
+  # FIX: Geprueft wird hier bewusst die ALLERERSTE Variable, die aus der
+  # Deye-Integration gelesen wird (var_battery_total_charge). Ist deren
+  # Entity 'unavailable' oder 'unknown', deutet das auf einen generellen
+  # Kommunikationsaussetzer der gesamten Deye-Anbindung hin - nicht nur
+  # auf EINEN einzelnen Sensor. Deshalb wird die Pruefung so frueh wie
+  # moeglich platziert (noch VOR der 30-Minuten-JSON-Datenpflege), damit
+  # ein Deye-Aussetzer erkannt wird, bevor irgendeine andere Variable im
+  # gesamten Lauf mit moeglicherweise ebenfalls veralteten/fehlerhaften
+  # Werten berechnet wird.
+  # Bei Erkennung: EINMALIG 10s warten (deckt die beobachtete ~6s-Luecke
+  # mit Marge ab), dann normal weiterlaufen. Alle nachfolgenden
+  # states()-Aufrufe lesen automatisch den (im Normalfall erholten) Wert
+  # neu ein, da Jinja-Templates erst zum jeweiligen Ausfuehrungszeitpunkt
+  # rendern - keine Duplizierung der Ausleselogik noetig. Ist der Sensor
+  # auch nach 10s noch nicht verfuegbar, greifen die bestehenden
+  # Fallbacks unveraendert (kein Blockieren der Automation).
+  # ====================================================================
+  - if:
+      - condition: template
+        value_template: >
+          {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
+    then:
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: "{{ bp_version }} Deye-Sensor (Battery Total Charge) kurzzeitig 'nicht verfügbar'. Einmalig 10s gewartet, dann neu gelesen."
+          entity_id: !input helper_logbook_dummy
+      - delay: "00:00:10"
 
   # ====================================================================
   # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN (JETZT kWh)
@@ -644,6 +684,42 @@ action:
       pack3_online: "{{ var_bms3_temp_min != '' and states(var_bms3_temp_min) | float(-999) != -999 }}"
       packs_online: "{{ (1 if pack1_online else 0) + (1 if pack2_online else 0) + (1 if pack3_online else 0) }}"
 
+      # NEU (V2.9.19): Entprellung des BMS-Offline-Notlaufs.
+      # Problem: Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf
+      # 'unavailable'. Bisher loeste das SOFORT den 10A-Notlauf + die Warnung
+      # aus (packs_online == 0). Ein normaler Reboot (< einige Minuten) soll
+      # das NICHT mehr tun.
+      # Logik: packs_offline_bestaetigt ist nur dann true, wenn packs_online
+      # == 0 UND alle vorhandenen (nicht-leeren) BMS-Temp-Sensoren bereits
+      # laenger als offline_debounce_s (300s) 'unavailable'/'unknown' sind.
+      # Messung ueber last_changed: Beim Wechsel verfuegbar -> unavailable
+      # setzt HA last_changed auf den Umschaltzeitpunkt; solange der Sensor
+      # unavailable BLEIBT, waechst (now() - last_changed) monoton. Ein Reboot
+      # (Sensor kommt vor 300s zurueck) unterschreitet die Schwelle -> kein
+      # Notlauf. Ein echter Dauerausfall (> 300s) -> Notlauf greift wie bisher.
+      # Bewusster Trade-off (vom Nutzer bestaetigt): waehrend der Entprellzeit
+      # wird ggf. ohne Temperaturschutz geladen - unkritisch, da die
+      # Ladeleistung hier nie hoch genug wird, dass Temperatur limitierend ist.
+      offline_debounce_s: 300
+      # Hilfsausdruck: ist ein einzelner Sensor laenger als die Schwelle weg?
+      # (leerer Input -> zaehlt NICHT als offline, wird uebersprungen)
+      pack1_lange_offline: >
+        {{ var_bms1_temp_min == '' or
+           (states(var_bms1_temp_min) in ['unavailable','unknown']
+            and (as_timestamp(now()) - as_timestamp(states[var_bms1_temp_min].last_changed | default(now()))) > offline_debounce_s) }}
+      pack2_lange_offline: >
+        {{ var_bms2_temp_min == '' or
+           (states(var_bms2_temp_min) in ['unavailable','unknown']
+            and (as_timestamp(now()) - as_timestamp(states[var_bms2_temp_min].last_changed | default(now()))) > offline_debounce_s) }}
+      pack3_lange_offline: >
+        {{ var_bms3_temp_min == '' or
+           (states(var_bms3_temp_min) in ['unavailable','unknown']
+            and (as_timestamp(now()) - as_timestamp(states[var_bms3_temp_min].last_changed | default(now()))) > offline_debounce_s) }}
+      # Bestaetigt offline nur, wenn KEIN Pack online ist UND alle vorhandenen
+      # Packs die Zeitschwelle ueberschritten haben.
+      packs_offline_bestaetigt: >
+        {{ packs_online == 0 and pack1_lange_offline and pack2_lange_offline and pack3_lange_offline }}
+
       batterie_kapazitaet: >
         {% set p_count = packs_online if packs_online > 0 else 1 %}
         {{ (pack_capacity_ah * nominale_spannung * p_count) / 1000 }}
@@ -739,7 +815,15 @@ action:
       temp_limit_crate: "{{ [limit_cold | float, limit_hot | float] | min }}"
 
       temp_limit_ampere_raw: >
-        {% if packs_online == 0 %}
+        {% if packs_offline_bestaetigt %}
+          10
+        {% elif packs_online == 0 %}
+          {# Kurzer Reboot (noch nicht als offline bestaetigt): NICHT auf 0A #}
+          {# rechnen (packs_online==0 wuerde die Multiplikation zu 0 machen). #}
+          {# Es wird mit dem sanften Notlauf-Strom 10A weitergeladen - Laden #}
+          {# laeuft also durch, aber gebremst, nicht mit voller Leistung. #}
+          {# Damit identisch zum bisherigen Verhalten bei packs_online==0; #}
+          {# nur die WARNUNG ist ueber packs_offline_bestaetigt entprellt. #}
           10
         {% else %}
           {{ (temp_limit_crate * pack_capacity_ah * packs_online) | round(0) }}
@@ -988,13 +1072,13 @@ action:
 
   - if:
       - condition: template
-        value_template: "{{ packs_online == 0 }}"
+        value_template: "{{ packs_offline_bestaetigt }}"
     then:
       - action: persistent_notification.create
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ bp_version }} BMS-Sensoren offline! Ladefreigabe auf 10A Notlauf gesetzt."
+          message: "{{ bp_version }} BMS-Sensoren offline (seit > 5 Min)! Ladefreigabe auf 10A Notlauf gesetzt."
     else:
       - action: persistent_notification.dismiss
         data:
