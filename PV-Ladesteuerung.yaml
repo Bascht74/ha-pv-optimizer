@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.21]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.22]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -422,7 +422,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.21]"
+      bp_version: "[V2.9.22]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1398,6 +1398,31 @@ action:
                           entity_id: !input helper_logbook_dummy
               - alias: "Seit 9 Tagen nicht voll"
                 conditions:
+                  # FIX V2.9.22: Zusaetzliche Bedingung 'tage_liste | length > 0'.
+                  #
+                  # VORFALL 13.07.2026, Standort 1: Der Tracking-Sensor
+                  # (json_tracking_sensor) fiel aus (Render-Fehler im Package,
+                  # Sensor ging auf 'unavailable'). Dadurch war tage_liste LEER,
+                  # und letztes_100_datum fiel auf den Fallback '2000-01-01'.
+                  # Die Bedingung '2000-01-01 < vor_9_tagen' war damit trivial
+                  # wahr -> der Blueprint hat die ToU-Programme 1-6 von 20% auf
+                  # 30% HOCHGESETZT, obwohl die Batterie an praktisch jedem der
+                  # Vortage voll war (Top-Balancing im Log belegt).
+                  # Das ist eine echte FEHLSTEUERUNG (mehr Netzladung nachts),
+                  # ausgeloest durch einen Sensorausfall.
+                  #
+                  # URSACHE DES DENKFEHLERS: '2000-01-01' ist ein FALLBACK fuer
+                  # "keine Daten" - der Code behandelte ihn aber wie einen echten
+                  # Messwert ("seit 26 Jahren nicht voll"). "Keine Daten" ist
+                  # aber NICHT dasselbe wie "nicht voll gewesen".
+                  #
+                  # LOESUNG: Ohne Tracking-Daten wird KEINE Entscheidung
+                  # getroffen. Faellt der Sensor aus, bleibt der ToU-SOC einfach
+                  # unveraendert, bis wieder gueltige Daten vorliegen.
+                  # (Gleiches Prinzip wie beim Deye-Retry: Fallback-Werte duerfen
+                  #  keine Steuerungsaktionen ausloesen.)
+                  - condition: template
+                    value_template: "{{ tage_liste | length > 0 }}"
                   - condition: template
                     value_template: "{{ letztes_100_datum < vor_9_tagen }}"
                 sequence:
