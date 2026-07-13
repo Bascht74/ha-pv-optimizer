@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.19]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.20]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -422,7 +422,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.19]"
+      bp_version: "[V2.9.20]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -432,44 +432,61 @@ action:
       var_lade_modus: !input helper_lade_modus
 
   # ====================================================================
-  # NEU (V2.9.18): EINMALIGER RETRY BEI KURZZEITIGEM DEYE-SENSOR-AUSFALL
-  # Beobachtet an Standort 2 (Dachterrasse) am 07.07.2026: Ein Battery-
-  # Sensor ging fuer ~6s auf 'nicht verfuegbar' (11:49:59 -> 11:50:05).
-  # Dadurch fiel aktueller_soc auf den Fallback 0 und packs_online auf 0,
+  # DEYE-RETRY (V2.9.18, ueberarbeitet in V2.9.20)
+  #
+  # HINTERGRUND (07.07.2026, Standort 2 / Dachterrasse): Ein Deye-Sensor
+  # ging fuer ~6s auf 'nicht verfuegbar' (11:49:59 -> 11:50:05). Dadurch
+  # fiel aktueller_soc auf den Fallback 0 und packs_online auf 0,
   # freie_kwh sprang faelschlich auf fast die volle Kapazitaet, und das
   # loeste einen fehlerhaften dynamischen Blockade-Austritt aus. Der
   # TAGESMARKER (helper_blockade_beendet) verriegelt diesen fehlerhaften
-  # Austritt dann fuer den GESAMTEN Resttag (kein Wiedereintritt bis
-  # Mitternacht) - ein einzelner kurzer Sensor-Ausfall hatte also einen
-  # ganztaegigen Effekt.
-  # FIX: Geprueft wird hier bewusst die ALLERERSTE Variable, die aus der
-  # Deye-Integration gelesen wird (var_battery_total_charge). Ist deren
-  # Entity 'unavailable' oder 'unknown', deutet das auf einen generellen
-  # Kommunikationsaussetzer der gesamten Deye-Anbindung hin - nicht nur
-  # auf EINEN einzelnen Sensor. Deshalb wird die Pruefung so frueh wie
-  # moeglich platziert (noch VOR der 30-Minuten-JSON-Datenpflege), damit
-  # ein Deye-Aussetzer erkannt wird, bevor irgendeine andere Variable im
-  # gesamten Lauf mit moeglicherweise ebenfalls veralteten/fehlerhaften
-  # Werten berechnet wird.
-  # Bei Erkennung: EINMALIG 10s warten (deckt die beobachtete ~6s-Luecke
-  # mit Marge ab), dann normal weiterlaufen. Alle nachfolgenden
-  # states()-Aufrufe lesen automatisch den (im Normalfall erholten) Wert
-  # neu ein, da Jinja-Templates erst zum jeweiligen Ausfuehrungszeitpunkt
-  # rendern - keine Duplizierung der Ausleselogik noetig. Ist der Sensor
-  # auch nach 10s noch nicht verfuegbar, greifen die bestehenden
-  # Fallbacks unveraendert (kein Blockieren der Automation).
+  # Austritt fuer den GESAMTEN Resttag - ein einzelner kurzer Aussetzer
+  # hatte also einen ganztaegigen Effekt.
+  #
+  # WARUM DIE PRUEFUNG HIER GANZ AM ANFANG STEHT (wichtig!):
+  # Geprueft wird var_battery_total_charge - aber NICHT, weil nur dieser
+  # eine Wert gebraucht wuerde, sondern weil er die ERSTE Variable aus der
+  # Deye-Integration ist und damit als INDIKATOR fuer einen generellen
+  # Kommunikations-Aussetzer der GESAMTEN Deye-Anbindung dient.
+  # Der anschliessende Delay wirkt naemlich auf ALLE Deye-Werte des Laufs:
+  # SOC (aktueller_soc), Batterieleistung, Netz-Export (Peak-Shaving),
+  # PV-Leistung, Schatten-BMS-Zaehler usw. werden nach dem Delay alle neu
+  # gerendert (Jinja-Templates werten states() erst zur Laufzeit aus).
+  # -> Der Retry darf deshalb NICHT an einen einzelnen Codepfad oder an
+  #    bestimmte Trigger gebunden werden. Jeder Lauf nutzt Deye-Werte,
+  #    also braucht jeder Lauf diesen Schutz.
+  #
+  # LOGGING-PHILOSOPHIE (V2.9.20):
+  # Kurze Aussetzer sind bei der Deye-Modbus-Anbindung NORMAL und treten
+  # regelmaessig auf. Der Retry ist der eingeplante Normalfall und laeuft
+  # deshalb STILL - kein Logbuch-Eintrag (das erzeugte bisher nur
+  # Rauschen, u.a. weil die Automation auch durch schnelle Zustands-
+  # Trigger wie die Zellspannungs-Schwelle ausgeloest wird).
+  # Geloggt wird NUR der PROBLEMFALL: wenn der Wert auch nach den 10s
+  # immer noch fehlt. Dann greifen zwar die bestehenden Fallbacks (die
+  # Automation blockiert nicht), aber der Lauf rechnet moeglicherweise
+  # mit unvollstaendigen Deye-Daten - und genau das will man sehen.
   # ====================================================================
   - if:
       - condition: template
         value_template: >
           {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
     then:
-      - action: logbook.log
-        data:
-          name: "PV Optimizer"
-          message: "{{ bp_version }} Deye-Sensor (Battery Total Charge) kurzzeitig 'nicht verfügbar'. Einmalig 10s gewartet, dann neu gelesen."
-          entity_id: !input helper_logbook_dummy
+      # Stiller Retry: keine Meldung, nur warten und danach neu lesen.
       - delay: "00:00:10"
+      # Zweite Pruefung NACH dem Delay: ist der Wert immer noch weg?
+      # Nur dann handelt es sich um ein echtes Problem (nicht mehr um den
+      # normalen, kurzen Modbus-Aussetzer) -> jetzt warnen.
+      - if:
+          - condition: template
+            value_template: >
+              {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ bp_version }} WARNUNG: Deye-Sensor (Battery Total Charge) auch nach 10s Retry noch 'nicht verfügbar'. Dieser Lauf rechnet mit Fallback-Werten - Deye-Anbindung prüfen!"
+              entity_id: !input helper_logbook_dummy
 
   # ====================================================================
   # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN (JETZT kWh)
