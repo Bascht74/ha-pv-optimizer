@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.20]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.21]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -422,7 +422,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.20]"
+      bp_version: "[V2.9.21]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1061,12 +1061,30 @@ action:
 
   # BLOCKADE-AUSTRITT ERKENNEN: Modus steht noch auf 'blockade', aber die
   # Bedingung ist gefallen (T weg / SOC / Zeit) -> Tagesmarker setzen.
-  # Feuert genau einmal, da der folgende Prio-Zweig den Modus umsetzt.
+  #
+  # FIX V2.9.21 (Log-Flut): Bisher fehlte hier der Guard gegen Wiederholung.
+  # Beobachtet am 10.-12.07.2026: Die Meldung feuerte 6-8x im 5-Min-Takt
+  # (z.B. 12.07.: 14:30, 14:35, 14:40, ... bis 15:00).
+  # URSACHE: Die Bedingung prueft 'aktueller_modus == blockade' - das ist der
+  # GESPEICHERTE Modus aus dem helper_lade_modus (also der Stand des LETZTEN
+  # Laufs). Dieser wird erst weiter unten in der Prio-Kaskade neu gesetzt.
+  # Solange kein Prio-Zweig den Modus umsetzt (z.B. weil der Ladestrom sich
+  # nicht genug aendert), bleibt er auf 'blockade' stehen -> die Bedingung
+  # war bei JEDEM Lauf erneut wahr -> Meldung + input_boolean.turn_on erneut.
+  # Der alte Kommentar ("Feuert genau einmal, da der folgende Prio-Zweig den
+  # Modus umsetzt") war also eine falsche Annahme.
+  # LOESUNG: Zusaetzlich pruefen, dass der Tagesmarker noch NICHT gesetzt ist.
+  # Damit feuert der Block genau einmal pro Tag - beim ersten Lauf nach dem
+  # Austritt. Danach ist blockade_heute_beendet == true und der Block ruht,
+  # unabhaengig davon, was der gespeicherte Modus gerade sagt.
+  # (blockade_heute_beendet ist oben in Zeile ~1053 definiert, steht also
+  #  hier sicher zur Verfuegung - keine Vorwaertsreferenz.)
   - if:
       - condition: template
         value_template: >
           {{ var_helper_blockade_beendet != '' and
-             aktueller_modus == 'blockade' and not blockade_aktiv }}
+             aktueller_modus == 'blockade' and not blockade_aktiv
+             and not blockade_heute_beendet }}
     then:
       - action: input_boolean.turn_on
         target:
