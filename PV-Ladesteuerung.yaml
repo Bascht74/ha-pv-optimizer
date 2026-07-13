@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.22]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.23]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -249,8 +249,26 @@ blueprint:
           selector: {entity: {domain: sensor}}
         json_tracking_sensor:
           name: "BMS-JSON Tracking (Voll-Tage)"
+          description: >-
+            AB V2.9.23: Bitte einen input_text eintragen (nicht mehr den Sensor)!
+            Hier wird die Liste der 100%-Tage als JSON-String gespeichert. Der
+            Blueprint LIEST und SCHREIBT diese Entity (Schreiben beim taeglichen
+            Maintenance-Lauf um 23:58).
+
+            WARUM input_text statt Sensor: Home Assistant konvertiert
+            Template-Ergebnisse automatisch in native Typen - ein String, der wie
+            eine Liste aussieht, wird intern zur echten Liste. Beim Zurueck-Lesen
+            erhaelt man dann Python-Repr mit EINFACHEN Anfuehrungszeichen
+            (['2026-07-05', ...]), was kein gueltiges JSON ist und from_json
+            zerstoert (Vorfall 12.07.2026: Sensor ging 'unavailable', der
+            Blueprint las eine leere Liste und hat die ToU-Programme faelschlich
+            von 20% auf 30% hochgesetzt). Ein input_text speichert IMMER als
+            String - dieses Problem kann dort strukturell nicht auftreten.
+
+            Leer lassen = Tracking deaktiviert (die BMS-Balancing-Logik laeuft
+            dann nicht, siehe Guard in V2.9.22).
           default: ""
-          selector: {entity: {domain: sensor}}
+          selector: {entity: {domain: input_text}}
         helper_logbook_dummy:
           name: "Logbuch Dummy (Text)"
           default: ""
@@ -422,7 +440,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.22]"
+      bp_version: "[V2.9.23]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -612,6 +630,11 @@ action:
       var_batterie_heute_voll: !input helper_batterie_heute_voll
       var_json_tracking: !input json_tracking_sensor
       var_wr_tou_1: !input wr_tou_1
+      var_wr_tou_2: !input wr_tou_2
+      var_wr_tou_3: !input wr_tou_3
+      var_wr_tou_4: !input wr_tou_4
+      var_wr_tou_5: !input wr_tou_5
+      var_wr_tou_6: !input wr_tou_6
       var_eingriff_dauer: !input eingriff_dauer_sensor
       var_timer_wp_anlauf: !input helper_timer_wp_anlauf
       var_timer_wp_boost: !input helper_timer_wp_boost
@@ -1361,6 +1384,70 @@ action:
           - condition: trigger
             id: maintenance
         sequence:
+          # ============================================================
+          # SCHRITT 1: 100%-TAGE-TRACKING AKTUALISIEREN (NEU V2.9.23)
+          #
+          # Laeuft als ERSTE Aktion im Maintenance-Lauf - also VOR dem
+          # Auslesen der Liste weiter unten. Damit ist die Reihenfolge
+          # (erst schreiben, dann auswerten) innerhalb EINES Laufs
+          # garantiert; ein separater 23:57-Trigger ist nicht noetig.
+          #
+          # HINTERGRUND (Vorfall 12.07.2026, Standort 1):
+          # Bisher erledigte das ein Trigger-Template-Sensor im Package,
+          # der seinen EIGENEN State zurueck las (Selbstreferenz). Home
+          # Assistant konvertiert Template-Ergebnisse aber automatisch in
+          # native Typen: Ein String, der wie eine Liste aussieht, wird
+          # intern zur echten Liste. Beim Zurueck-Lesen via states() erhielt
+          # man dann deren Python-Repr mit EINFACHEN Anfuehrungszeichen:
+          #     ['2026-07-05', '2026-07-06', ...]    <- KEIN gueltiges JSON
+          # from_json scheiterte -> Render-Fehler -> Sensor 'unavailable'
+          # -> die Liste war leer -> letztes_100_datum fiel auf den Fallback
+          # '2000-01-01' -> der Blueprint hat die ToU-Programme von 20% auf
+          # 30% hochgesetzt (Fehlsteuerung).
+          #
+          # LOESUNG: Die Liste liegt jetzt in einem input_text (Input
+          # 'json_tracking_sensor' zeigt ab V2.9.23 auf einen input_text).
+          # Der speichert IMMER als String - HA fuehrt dort keine
+          # Typkonvertierung durch. Das Problem ist strukturell beseitigt.
+          # Zusaetzlich ueberlebt ein input_text HA-Neustarts.
+          # ============================================================
+          - if:
+              - condition: template
+                value_template: "{{ var_json_tracking != '' }}"
+            then:
+              - variables:
+                  # Robustes Einlesen: auch ein leerer oder kaputter Wert
+                  # fuehrt hier nicht zum Absturz - dann wird mit [] begonnen.
+                  tracking_roh: "{{ states(var_json_tracking) }}"
+                  tracking_liste: >
+                    {% if tracking_roh is string and tracking_roh.startswith('[') %}
+                      {{ tracking_roh | from_json }}
+                    {% else %}
+                      {{ [] }}
+                    {% endif %}
+                  tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
+                  tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
+                  # Heutigen Tag anhaengen, wenn die Batterie voll war und er
+                  # noch nicht drin steht. Immer auf die letzten 14 Tage
+                  # begrenzen (input_text-Limit: 255 Zeichen, 14 Eintraege
+                  # im JSON-Format = ~196 Zeichen).
+                  tracking_neu: >
+                    {% if tracking_war_voll and tracking_heute not in tracking_liste %}
+                      {{ ((tracking_liste + [tracking_heute]) | sort)[-14:] }}
+                    {% else %}
+                      {{ tracking_liste[-14:] }}
+                    {% endif %}
+              - action: input_text.set_value
+                target:
+                  entity_id: "{{ var_json_tracking }}"
+                data:
+                  # to_json erzeugt korrektes JSON mit DOPPELTEN Quotes.
+                  # Da input_text immer als String speichert, bleibt es dabei.
+                  value: "{{ tracking_neu | to_json }}"
+
+          # ============================================================
+          # SCHRITT 2: BMS-BALANCING-LOGIK (liest die eben geschriebene Liste)
+          # ============================================================
           - variables:
               tage_liste: >
                 {% set s = states(var_json_tracking) %}
@@ -1369,7 +1456,38 @@ action:
               gestern: "{{ (now() - timedelta(days=1)).strftime('%Y-%m-%d') }}"
               vor_9_tagen: "{{ (now() - timedelta(days=9)).strftime('%Y-%m-%d') }}"
               letztes_100_datum: "{{ tage_liste | max if tage_liste | length > 0 else '2000-01-01' }}"
+              # AB V2.9.23: Es werden ALLE SECHS ToU-Register geprueft, nicht
+              # mehr nur Programm 1.
+              # VORHER: aktueller_min_soc = states(var_wr_tou_1) - der Blueprint
+              # sah also nur Programm 1. Wurde z.B. nur Programm 3 (manuell in
+              # der Deye-App oder durch einen fehlgeschlagenen Schreibvorgang)
+              # auf einen anderen Wert gesetzt, blieb das unbemerkt: Programm 1
+              # stimmte ja mit dem Soll ueberein -> die innere if-Bedingung
+              # ('aktueller_min_soc != ziel') war false -> kein Nachsetzen.
+              # Die sechs Register konnten so dauerhaft auseinanderlaufen.
+              # JETZT: min und max ueber alle sechs. Weicht IRGENDEINES vom Soll
+              # ab, unterscheidet sich mindestens einer der beiden Werte vom
+              # Zielwert -> es wird nachgesetzt (alle sechs werden ohnehin
+              # gemeinsam geschrieben).
+              tou_werte: >
+                {{ [
+                     states(var_wr_tou_1) | float(20),
+                     states(var_wr_tou_2) | float(20),
+                     states(var_wr_tou_3) | float(20),
+                     states(var_wr_tou_4) | float(20),
+                     states(var_wr_tou_5) | float(20),
+                     states(var_wr_tou_6) | float(20)
+                   ] }}
+              tou_min: "{{ tou_werte | min }}"
+              tou_max: "{{ tou_werte | max }}"
+              # Rueckwaertskompatibel beibehalten (wird noch in den Log-Meldungen
+              # und im Safety-Reset-Zweig verwendet): der Wert von Programm 1.
               aktueller_min_soc: "{{ states(var_wr_tou_1) | float(20) }}"
+              # NEU: 'alle sechs stimmen mit dem Sollwert ueberein' laesst sich
+              # so pruefen: min == max == soll. Weicht auch nur eines ab, ist
+              # entweder min oder max != soll.
+              tou_alle_auf_default: "{{ tou_min == default_tou_soc | float(20) and tou_max == default_tou_soc | float(20) }}"
+              tou_alle_auf_escalation: "{{ tou_min == escalation_tou_soc | float(30) and tou_max == escalation_tou_soc | float(30) }}"
           - choose:
               - alias: "Zwei Tage in Folge voll"
                 conditions:
@@ -1378,7 +1496,9 @@ action:
                 sequence:
                   - if:
                       - condition: template
-                        value_template: "{{ aktueller_min_soc != default_tou_soc }}"
+                        # AB V2.9.23: Prueft ALLE SECHS Register (via min/max).
+                        # Weicht auch nur eines vom Sollwert ab, wird nachgesetzt.
+                        value_template: "{{ not tou_alle_auf_default }}"
                     then:
                       - action: number.set_value
                         target:
@@ -1394,7 +1514,7 @@ action:
                       - action: logbook.log
                         data:
                           name: "PV Optimizer"
-                          message: "{{ bp_version }} BMS-Balancing: 2 Tage in Folge Voll-Schwelle erreicht. ToU-Programme 1-6 abgesenkt (Aktueller ToU-SOC: {{ aktueller_min_soc }}% -> Ziel: {{ default_tou_soc }}%)."
+                          message: "{{ bp_version }} BMS-Balancing: 2 Tage in Folge Voll-Schwelle erreicht. ToU-Programme 1-6 abgesenkt (ToU-SOC vorher min/max: {{ tou_min }}%/{{ tou_max }}% -> Ziel: {{ default_tou_soc }}%)."
                           entity_id: !input helper_logbook_dummy
               - alias: "Seit 9 Tagen nicht voll"
                 conditions:
@@ -1428,7 +1548,8 @@ action:
                 sequence:
                   - if:
                       - condition: template
-                        value_template: "{{ aktueller_min_soc != escalation_tou_soc }}"
+                        # AB V2.9.23: Prueft ALLE SECHS Register (via min/max).
+                        value_template: "{{ not tou_alle_auf_escalation }}"
                     then:
                       - action: number.set_value
                         target:
@@ -1444,7 +1565,7 @@ action:
                       - action: logbook.log
                         data:
                           name: "PV Optimizer"
-                          message: "{{ bp_version }} BMS-Balancing: Seit 9 Tagen Ziel-Schwelle nicht erreicht. ToU-Programme 1-6 erhöht (Letztes 100% SOC Datum: {{ letztes_100_datum }} < Grenze: {{ vor_9_tagen }} | Aktueller ToU-SOC: {{ aktueller_min_soc }}% -> Ziel: {{ escalation_tou_soc }}%)."
+                          message: "{{ bp_version }} BMS-Balancing: Seit 9 Tagen Ziel-Schwelle nicht erreicht. ToU-Programme 1-6 erhöht (Letztes 100% SOC Datum: {{ letztes_100_datum }} < Grenze: {{ vor_9_tagen }} | ToU-SOC vorher min/max: {{ tou_min }}%/{{ tou_max }}% -> Ziel: {{ escalation_tou_soc }}%)."
                           entity_id: !input helper_logbook_dummy
 
   - choose:
