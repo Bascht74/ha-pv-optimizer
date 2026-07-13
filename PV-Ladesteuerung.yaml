@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.23]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.24]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -440,7 +440,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.23]"
+      bp_version: "[V2.9.24]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -988,6 +988,53 @@ action:
 
       wp_sperre_aktiv: >
         {{ var_wp_boost_aktiv and states(var_timer_wp_anlauf) == 'active' }}
+
+      # ==================================================================
+      # NEU (V2.9.24): wp_boost_startet_gleich
+      #
+      # PROBLEM (Vorfall 13.07.2026, Standort 2, 13:55:02):
+      # Im Logbuch standen zwei Eintraege zur SELBEN Sekunde:
+      #   - "WP PV-Boost ausgeloest (Netz-Export 6599W > 6400W)"
+      #   - "Prio 3 (Peak-Shaving) beendet: Hold-Timer abgelaufen"
+      # Die zweite Meldung war FALSCH: Der Peak-Timer war 2 Sekunden zuvor
+      # erst gestartet worden und lief 30 Minuten - er konnte unmoeglich
+      # "abgelaufen" sein.
+      #
+      # ABLAUF, der dazu fuehrte:
+      #  1. Lauf um 13:55:00, Export 6599W (> Peak 6500 UND > WP-Boost 6400).
+      #  2. wp_sperre_aktiv wird am LAUF-ANFANG berechnet: der WP-Anlauf-Timer
+      #     ist zu diesem Zeitpunkt noch 'idle' -> wp_sperre_aktiv = FALSE.
+      #  3. Der Peak-Timer-Block prueft "export > 6500 and not wp_sperre_aktiv"
+      #     -> erfuellt -> timer.start (Peak-Hold-Timer laeuft jetzt).
+      #  4. WEITER UNTEN im selben Lauf wird der WP-Boost ausgeloest
+      #     -> timer.vitocal_anlaufphase geht auf 'active'.
+      #  5. Der Trigger "WP-Anlauf START" feuert -> die Automation laeuft ERNEUT
+      #     (mode: queued). Jetzt ist wp_sperre_aktiv = TRUE.
+      #  6. Der Zweig "Loescht den Peak-Shaving Timer" greift -> timer.cancel.
+      #  7. Der Peak-Timer wechselt active -> idle. Genau darauf lauscht der
+      #     Trigger 'peak_shaving_ende' (from: active, to: idle) -> er feuert
+      #     -> Meldung "Hold-Timer abgelaufen" (obwohl er ABGEBROCHEN wurde).
+      #
+      # LOESUNG: Der Peak-Timer wird gar nicht erst gestartet, wenn im selben
+      # Lauf ohnehin gleich ein WP-Boost ausgeloest wird. Dafuer wird hier
+      # exakt DIESELBE Bedingung nachgebildet wie im WP-Boost-Zweig weiter
+      # unten. Der unnoetige start->cancel-Zyklus (und damit der Fehl-Trigger)
+      # entfaellt.
+      #
+      # GEWOLLTES VERHALTEN (vom Nutzer bestaetigt):
+      #  * Der Peak-Timer soll weiterhin bei JEDEM Lauf neu gestartet werden,
+      #    solange der Export > 6500W liegt (Verlaengerung ist erwuenscht).
+      #  * Aber NUR, solange die WP nicht laeuft. Waehrend der WP-Anlaufphase
+      #    ist Peak-Shaving komplett aus (die Batterie geht auf 0A, die WP
+      #    bekommt den Ueberschuss). Sobald der Export danach wieder > 6500W
+      #    steigt, startet Peak-Shaving normal neu.
+      # ==================================================================
+      wp_boost_startet_gleich: >
+        {{ var_wp_boost_aktiv
+           and real_export > schwelle_wp_boost
+           and ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv)
+           and states(var_timer_wp_anlauf) != 'active'
+           and states(var_timer_wp_boost) != 'active' }}
 
       # NEU (V2.9.17): Zeitlich begrenzte Battery-0A-Sperre fuer PRIO 4.
       # wp_sperre_aktiv bleibt UNVERAENDERT und steuert weiterhin (unabhaengig
@@ -1719,22 +1766,65 @@ action:
                 data:
                   value: "{{ var_float_normal }}"
 
-      - alias: "PEAK-SHAVING ENDE (Hold-Timer abgelaufen)"
+      - alias: "PEAK-SHAVING ENDE (Hold-Timer abgelaufen ODER durch WP-Sperre abgebrochen)"
         conditions:
           - condition: trigger
             id: peak_shaving_ende
         sequence:
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ bp_version }} Prio 3 (Peak-Shaving) beendet: Hold-Timer abgelaufen (kein Netz-Export über {{ schwelle_peak_shaving | round(0) }}W mehr). Die Ladesteuerung fällt zurück auf die reguläre Kaskade (Prio 5)."
-              entity_id: !input helper_logbook_dummy
+          # FIX B (V2.9.24): Der Trigger 'peak_shaving_ende' lauscht auf den
+          # Zustandswechsel des Hold-Timers (from: active -> to: idle). Dieser
+          # Wechsel tritt aber bei ZWEI voellig verschiedenen Ereignissen auf:
+          #   1. Der Timer ist wirklich ABGELAUFEN (kein Export mehr).
+          #   2. Der Timer wurde per timer.cancel ABGEBROCHEN - naemlich vom
+          #      Zweig "Loescht den Peak-Shaving Timer", sobald die WP-Sperre
+          #      greift (WP-Anlaufphase laeuft).
+          # Bisher wurde IMMER "Hold-Timer abgelaufen" geloggt - auch im Fall 2.
+          # Das war irrefuehrend (Vorfall 13.07.2026: Meldung "abgelaufen",
+          # obwohl der Timer 2 Sekunden alt war und der Export bei 6599W lag).
+          #
+          # UNTERSCHEIDUNG ueber wp_sperre_aktiv (NICHT ueber den Export - der
+          # kann in beiden Faellen hoch oder niedrig sein):
+          #   wp_sperre_aktiv == true  -> die WP-Anlaufphase laeuft -> es war
+          #                               ein ABBRUCH durch die WP-Sperre.
+          #   wp_sperre_aktiv == false -> keine WP-Sperre aktiv -> der Timer
+          #                               ist reguleaer ABGELAUFEN.
+          - choose:
+              - alias: "Abbruch durch WP-Sperre"
+                conditions:
+                  - condition: template
+                    value_template: "{{ wp_sperre_aktiv }}"
+                sequence:
+                  - action: logbook.log
+                    data:
+                      name: "PV Optimizer"
+                      message: "{{ bp_version }} Prio 3 (Peak-Shaving) abgebrochen: Die Wärmepumpe läuft an (WP-Sperre aktiv). Der Hold-Timer wurde gelöscht, die Batterie geht auf 0A - der Überschuss geht an die WP. Peak-Shaving startet neu, sobald der Netz-Export nach der WP-Phase wieder über {{ schwelle_peak_shaving | round(0) }}W steigt."
+                      entity_id: !input helper_logbook_dummy
+            default:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Prio 3 (Peak-Shaving) beendet: Hold-Timer abgelaufen (kein Netz-Export über {{ schwelle_peak_shaving | round(0) }}W mehr). Die Ladesteuerung fällt zurück auf die reguläre Kaskade (Prio 5)."
+                  entity_id: !input helper_logbook_dummy
 
   - choose:
       - alias: "Zieht den Peak-Shaving Timer auf"
         conditions:
           - condition: template
-            value_template: "{{ real_export > schwelle_peak_shaving and not wp_sperre_aktiv }}"
+            # FIX A (V2.9.24): Zusaetzlich 'not wp_boost_startet_gleich'.
+            # Ohne diese Pruefung wurde der Timer gestartet und - weil der
+            # WP-Boost weiter unten im SELBEN Lauf die WP-Anlaufphase startet
+            # und der Folge-Trigger die Automation erneut ausfuehrt - sofort
+            # wieder gecancelt. Das erzeugte die falsche Meldung
+            # "Hold-Timer abgelaufen" (siehe Kommentar bei wp_boost_startet_gleich).
+            #
+            # WICHTIG: Das Neustarten des Timers bei jedem Lauf bleibt gewollt!
+            # Solange der Export > Schwelle liegt (und keine WP laeuft), wird
+            # der Hold-Timer immer wieder auf volle Dauer gesetzt - Peak-Shaving
+            # laeuft also durch, solange exportiert wird.
+            value_template: >
+              {{ real_export > schwelle_peak_shaving
+                 and not wp_sperre_aktiv
+                 and not wp_boost_startet_gleich }}
         sequence:
           - action: timer.start
             target:
