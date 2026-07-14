@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.24]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.25]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -7,338 +7,624 @@ blueprint:
   domain: automation
 
   input:
-    sec_net_pv:
-      name: "Netz & Hausverbrauch (Entitäten)"
-      icon: mdi:home-lightning-bolt
-      collapsed: true
-      input:
-        grid_export_sensor:
-          name: "Netz-Zähler (Grid Export - WATT)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: power}}
-        grid_export_kwh_heute:
-          name: "Netz-Einspeisung Heute (Grid Export - kWh)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: energy}}
-        pv_power_sensor:
-          name: "PV Leistung (Geglättet)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: power}}
-
-    sec_solcast:
-      name: "Solcast Prognose (Entitäten)"
-      icon: mdi:weather-partly-cloudy
-      collapsed: true
-      input:
-        solcast_heute_sensor:
-          name: "Solcast Prognose HEUTE (Entität mit Array)"
-          description: "Muss die Entität mit dem 'detailedForecast' Attribut sein."
-          default: ""
-          selector: {entity: {domain: sensor}}
-        solcast_rest_sensor:
-          name: "Verbleibende Leistung Heute (Fallback)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: energy}}
-        solcast_current_sensor:
-          name: "Aktuelle Leistung"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: power}}
-        solcast_next_hour_sensor:
-          name: "Prognose nächste Stunde"
-          default: ""
-          selector: {entity: {domain: sensor}}
-
     sec_battery_sensors:
-      name: "Batterie BMS"
-      icon: mdi:battery-bluetooth
+      name: "1. Batterie & BMS (Pflicht)"
+      description: >-
+        Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
       collapsed: true
       input:
         battery_soc_sensor:
-          name: "Ladezustand (SOC Gesamt)"
+          name: "Ladezustand SOC (%)"
+          description: >-
+            Sensor mit dem aktuellen Ladezustand der Gesamt-Batterie in Prozent. Steuert die gesamte Prioritäts-Kaskade. Tipp: Wenn du das mitgelieferte Schatten-BMS nutzt, trage hier dessen Sensor ein — er ist meist genauer als der SOC des Wechselrichters.
           default: ""
-          selector: {entity: {domain: sensor, device_class: battery}}
+          selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         battery_power_sensor:
-          name: "Aktuelle Leistung"
+          name: "Batterie-Leistung (W)"
+          description: >-
+            Sensor mit der aktuellen Lade-/Entladeleistung. Wird unter anderem beim Peak-Shaving genutzt, um zu erkennen, wie viel die Batterie gerade puffert.
           default: ""
-          selector: {entity: {domain: sensor, device_class: power}}
+          selector: {"entity": {"domain": "sensor", "device_class": "power"}}
         vmax1_sensor:
-          name: "BMS 1 Max Zellspannung"
+          name: "BMS 1: höchste Zellspannung (V)"
+          description: >-
+            Sensor mit der höchsten Einzelzellspannung von Batterie-Pack 1. Löst das Top-Balancing aus, sobald der eingestellte Schwellwert erreicht wird (Abschnitt 8).
           default: ""
-          selector: {entity: {domain: sensor, device_class: voltage}}
+          selector: {"entity": {"domain": "sensor", "device_class": "voltage"}}
         vmax2_sensor:
-          name: "BMS 2 Max Zellspannung"
+          name: "BMS 2: höchste Zellspannung (V)"
+          description: >-
+            Sensor mit der höchsten Einzelzellspannung von Pack 2 (wie bei BMS 1). Bei nur einem Pack leer lassen — der Blueprint rechnet dann nur mit Pack 1.
           default: ""
-          selector: {entity: {domain: sensor, device_class: voltage}}
+          selector: {"entity": {"domain": "sensor", "device_class": "voltage"}}
         vmax3_sensor:
-          name: "BMS 3 Max Zellspannung (Optional)"
+          name: "BMS 3: höchste Zellspannung (V) — optional"
+          description: >-
+            Sensor mit der höchsten Einzelzellspannung von Pack 3. Nur ausfüllen, wenn du drei Packs hast; sonst leer lassen.
           default: ""
-          selector: {entity: {domain: sensor, device_class: voltage}}
+          selector: {"entity": {"domain": "sensor", "device_class": "voltage"}}
         battery_total_charge:
-          name: "Total Battery Charge (kWh - Für Schatten BMS)"
+          name: "Zähler: insgesamt geladen (kWh)"
+          description: >-
+            Sensor mit dem aufsummierten Gesamt-Ladezähler des Wechselrichters in kWh (nur steigend, wird nie zurückgesetzt). Das Schatten-BMS berechnet daraus zusammen mit dem Entladezähler einen driftfreien Ladezustand.
           default: ""
-          selector: {entity: {domain: sensor, device_class: energy}}
+          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         battery_total_discharge:
-          name: "Total Battery Discharge (kWh - Für Schatten BMS)"
+          name: "Zähler: insgesamt entladen (kWh)"
+          description: >-
+            Sensor mit dem aufsummierten Gesamt-Entladezähler in kWh (nur steigend). Gegenstück zum Ladezähler — beide zusammen ergeben die Bilanz für das Schatten-BMS.
           default: ""
-          selector: {entity: {domain: sensor, device_class: energy}}
-        nominale_spannung: {name: "Nominale Spannung (V)", default: 51.2, selector: {number: {min: 48.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}}
-        max_ampere: {name: "Max Ampere (Offenes Tor)", default: 350, selector: {number: {min: 50, max: 350, step: 1, unit_of_measurement: "A"}}}
-
-    sec_temperature:
-      name: "Thermische Limits & C-Raten (Entitäten & Werte)"
-      icon: mdi:thermometer-alert
-      collapsed: true
-      input:
-        bms1_temp_min_sensor:
-          name: "BMS 1 Zelltemperatur (Minimum)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
-        bms2_temp_min_sensor:
-          name: "BMS 2 Zelltemperatur (Minimum)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
-        bms3_temp_min_sensor:
-          name: "BMS 3 Zelltemperatur (Minimum - Optional)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
-        bms1_temp_max_sensor:
-          name: "BMS 1 Zelltemperatur (Maximum)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
-        bms2_temp_max_sensor:
-          name: "BMS 2 Zelltemperatur (Maximum)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
-        bms3_temp_max_sensor:
-          name: "BMS 3 Zelltemperatur (Maximum - Optional)"
-          default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
+          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         pack_capacity_ah:
           name: "Kapazität EINES Packs (Ah)"
+          description: >-
+            Nennkapazität eines einzelnen Batterie-Packs in Amperestunden (z. B. 314 Ah). Daraus berechnet der Blueprint zusammen mit der C-Rate den maximal erlaubten Ladestrom. Wichtig: nicht die Summe aller Packs eintragen!
           default: 314
-          selector: {number: {min: 50, max: 500, step: 1, unit_of_measurement: "Ah"}}
-        crate_2_deg: {name: "C-Rate bei <= 2°C", default: 0.00, selector: {number: {min: 0.00, max: 0.10, step: 0.01, mode: slider}}}
-        crate_5_deg: {name: "C-Rate bei 5°C", default: 0.05, selector: {number: {min: 0.00, max: 0.20, step: 0.01, mode: slider}}}
-        crate_10_deg: {name: "C-Rate bei 10°C", default: 0.20, selector: {number: {min: 0.00, max: 0.50, step: 0.01, mode: slider}}}
-        crate_12_deg: {name: "C-Rate bei 12°C", default: 0.30, selector: {number: {min: 0.00, max: 0.80, step: 0.01, mode: slider}}}
-        crate_15_deg: {name: "C-Rate bei 15°C", default: 0.50, selector: {number: {min: 0.00, max: 1.00, step: 0.01, mode: slider}}}
-        crate_20_deg: {name: "C-Rate bei 20°C", default: 0.70, selector: {number: {min: 0.00, max: 1.00, step: 0.01, mode: slider}}}
-        crate_40_deg: {name: "C-Rate bei 40°C", default: 0.70, selector: {number: {min: 0.00, max: 1.00, step: 0.01, mode: slider}}}
-        crate_45_deg: {name: "C-Rate bei >= 45°C", default: 0.00, selector: {number: {min: 0.00, max: 0.50, step: 0.01, mode: slider}}}
-
+          selector: {"number": {"min": 50, "max": 500, "step": 1, "unit_of_measurement": "Ah"}}
+        nominale_spannung:
+          name: "Nominale Batteriespannung (V)"
+          description: >-
+            Nennspannung des Batteriesystems (typisch 51,2 V bei 16 Zellen LiFePO4). Wird zur Umrechnung zwischen kWh und Ah verwendet.
+          default: 51.2
+          selector: {"number": {"min": 48.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
+        max_ampere:
+          name: "Maximaler Ladestrom (A)"
+          description: >-
+            Obergrenze für den Ladestrom — der Wert, den der Blueprint setzt, wenn er die Ladung voll freigibt (z. B. nachts). Sollte dem entsprechen, was Wechselrichter und BMS dauerhaft vertragen.
+          default: 350
+          selector: {"number": {"min": 50, "max": 350, "step": 1, "unit_of_measurement": "A"}}
     sec_battery_control:
-      name: "Wechselrichter-Steuerung (Entitäten)"
-      icon: mdi:flash
+      name: "2. Wechselrichter-Steuerung (Pflicht)"
+      description: >-
+        Die Stellglieder, über die der Blueprint tatsächlich eingreift. Das sind schreibbare Entitäten (number/switch), keine Sensoren.
       collapsed: true
       input:
         wr_max_charge_current:
-          name: "Max Charging Current"
+          name: "Stellgröße: max. Ladestrom (A)"
+          description: >-
+            Die number-Entität des Wechselrichters für den maximalen Batterie-Ladestrom. Das ist der zentrale Hebel: Darüber drosselt oder öffnet der Blueprint die Ladung.
           default: ""
-          selector: {entity: {domain: number}}
-        wr_grid_charge_switch:
-          name: "Grid Charging Switch"
-          default: ""
-          selector: {entity: {domain: switch}}
-        wr_grid_charge_current:
-          name: "Grid Charging Current"
-          default: ""
-          selector: {entity: {domain: number}}
-        wr_tou_1: {name: "Time of Use SOC 1", default: "", selector: {entity: {domain: number}}}
-        wr_tou_2: {name: "Time of Use SOC 2", default: "", selector: {entity: {domain: number}}}
-        wr_tou_3: {name: "Time of Use SOC 3", default: "", selector: {entity: {domain: number}}}
-        wr_tou_4: {name: "Time of Use SOC 4", default: "", selector: {entity: {domain: number}}}
-        wr_tou_5: {name: "Time of Use SOC 5", default: "", selector: {entity: {domain: number}}}
-        wr_tou_6: {name: "Time of Use SOC 6", default: "", selector: {entity: {domain: number}}}
-        peak_ampere: {name: "Basis-Strom Peak Shaving", default: 48, selector: {number: {min: 20, max: 100, step: 1, unit_of_measurement: "A"}}}
-        schwelle_peak_shaving: {name: "Start-Schwelle Peak-Shaving (W)", default: 6500, selector: {number: {min: 1000, max: 30000, step: 100, unit_of_measurement: "W"}}}
-
-    sec_float_voltage:
-      name: "Zellpflege & Balancing (Werte)"
-      icon: mdi:car-battery
-      collapsed: true
-      input:
+          selector: {"entity": {"domain": "number"}}
         wr_float_voltage_sensor:
-          name: "Wechselrichter Float Spannung (Entität - Optional)"
-          description: "Wird angehoben, solange der Cooldown-Timer (Balancing) läuft."
+          name: "Stellgröße: Float-Spannung (V) — optional"
+          description: >-
+            Die number-Entität für die Erhaltungsladespannung. Der Blueprint hebt sie während der Zellpflege kurzzeitig an (Abschnitt 8) und setzt sie danach zurück. Leer lassen, wenn dein Wechselrichter das nicht unterstützt — dann entfällt nur die Spannungsanhebung, das Balancing läuft trotzdem.
           default: ""
-          selector: {entity: {domain: number}}
-        float_voltage_normal:
-          name: "Float Spannung Normal (V)"
-          default: 53.6
-          selector: {number: {min: 50.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}
-        float_voltage_balancing:
-          name: "Float Spannung Balancing (V)"
-          default: 55.2
-          selector: {number: {min: 50.0, max: 60.0, step: 0.1, unit_of_measurement: "V"}}
-        top_balancing_soc: {name: "SOC-Schwelle für Top-Balancing", default: 97, selector: {number: {min: 70, max: 100, step: 1, unit_of_measurement: "%"}}}
-        top_balancing_voltage: {name: "Zellspannungs-Schwelle für Top-Balancing", default: 3.40, selector: {number: {min: 3.30, max: 3.60, step: 0.01, unit_of_measurement: "V"}}}
-        default_tou_soc: {name: "Standard Min-SOC (ToU-Balancing)", default: 20, selector: {number: {min: 10, max: 50, step: 1, unit_of_measurement: "%"}}}
-        escalation_tou_soc: {name: "Eskalations Min-SOC (Nach 9 Tagen)", default: 30, selector: {number: {min: 10, max: 60, step: 1, unit_of_measurement: "%"}}}
-        min_ampere: {name: "Min Ampere (Balancing Bremse)", default: 7, selector: {number: {min: 2, max: 20, step: 1, unit_of_measurement: "A"}}}
-        grid_ampere_zwangsladung: {name: "Netzstrom bei Zwangsladung", default: 50, selector: {number: {min: 10, max: 140, step: 1, unit_of_measurement: "A"}}}
-
-    sec_tuning:
-      name: "Tuning & Verhalten (Werte)"
-      icon: mdi:tune
+          selector: {"entity": {"domain": "number"}}
+        wr_grid_charge_switch:
+          name: "Stellgröße: Netzladung Ein/Aus"
+          description: >-
+            Die switch-Entität, mit der die Netzladung des Wechselrichters ein- und ausgeschaltet wird. Der Blueprint schaltet sie nur für die Winter-Zwangsladung ein und danach wieder aus.
+          default: ""
+          selector: {"entity": {"domain": "switch"}}
+        wr_grid_charge_current:
+          name: "Stellgröße: Netzlade-Strom (A)"
+          description: >-
+            Die number-Entität für den Ladestrom bei Netzladung. Wird zusammen mit dem Schalter darüber für die Winter-Zwangsladung genutzt.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_tou_1:
+          name: "ToU-Programm 1: Min-SOC (%)"
+          description: >-
+            Die number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use). Der Blueprint hebt diesen Wert an, wenn die Batterie längere Zeit nicht voll wurde — so wird sie nachts aus dem Netz nachgeladen und kann wieder balancieren.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_tou_2:
+          name: "ToU-Programm 2: Min-SOC (%)"
+          description: >-
+            Die number-Entität für Zeitprogramm 2. Siehe Programm 1 — der Blueprint setzt immer alle sechs Programme gemeinsam auf denselben Wert.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_tou_3:
+          name: "ToU-Programm 3: Min-SOC (%)"
+          description: >-
+            Die number-Entität für Zeitprogramm 3. Siehe Programm 1 — der Blueprint setzt immer alle sechs Programme gemeinsam auf denselben Wert.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_tou_4:
+          name: "ToU-Programm 4: Min-SOC (%)"
+          description: >-
+            Die number-Entität für Zeitprogramm 4. Siehe Programm 1 — der Blueprint setzt immer alle sechs Programme gemeinsam auf denselben Wert.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_tou_5:
+          name: "ToU-Programm 5: Min-SOC (%)"
+          description: >-
+            Die number-Entität für Zeitprogramm 5. Siehe Programm 1 — der Blueprint setzt immer alle sechs Programme gemeinsam auf denselben Wert.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_tou_6:
+          name: "ToU-Programm 6: Min-SOC (%)"
+          description: >-
+            Die number-Entität für Zeitprogramm 6. Siehe Programm 1 — der Blueprint setzt immer alle sechs Programme gemeinsam auf denselben Wert.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        min_ampere:
+          name: "Minimaler Ladestrom (A)"
+          description: >-
+            Der kleinste Strom, den der Blueprint setzt, wenn er die Ladung stark bremst (z. B. während des Top-Balancings). Nicht 0 wählen: Ein kleiner Reststrom hält die Zellspannung oben, damit der Balancer arbeiten kann.
+          default: 7
+          selector: {"number": {"min": 2, "max": 20, "step": 1, "unit_of_measurement": "A"}}
+        grid_ampere_zwangsladung:
+          name: "Netzlade-Strom bei Zwangsladung (A)"
+          description: >-
+            Ladestrom in Ampere für die Winter-Zwangsladung aus dem Netz. Eher niedrig wählen — es geht nur darum, die Zellen wieder auf ein balancierfähiges Niveau zu bringen, nicht um schnelles Volladen. Netzstrom ist teuer.
+          default: 50
+          selector: {"number": {"min": 10, "max": 140, "step": 1, "unit_of_measurement": "A"}}
+    sec_net_pv:
+      name: "3. Netz & PV-Leistung (Pflicht)"
+      description: >-
+        Messwerte für Netzbezug/-einspeisung und die aktuelle PV-Erzeugung.
       collapsed: true
       input:
-        faktor_ziel_puffer: {name: "Ladefaktor Normal (Normalfall)", default: 1.3, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
-        faktor_fallback: {name: "Ladefaktor Max-Auslöser (strenger)", default: 1.2, selector: {number: {min: 1.0, max: 2.0, step: 0.1}}}
-        fallback_max_soc: {name: "Fallback Max SOC (%)", default: 95, selector: {number: {min: 50, max: 100, step: 1, unit_of_measurement: "%"}}}
-        fallback_min_kwh: {name: "Fall-B Bagatellgrenze (kWh)", description: "Fall B (Max-Verriegelung) löst nur aus, wenn der Bedarf über dieser Grenze liegt.", default: 1.0, selector: {number: {min: 0.1, max: 5.0, step: 0.1, unit_of_measurement: "kWh"}}}
-        min_reststunden: {name: "Mindest-Restladezeit für Eskalation (h)", description: "Unter dieser verbleibenden Ladezeit regeln Prio 5 und Fall B nicht mehr nach (verhindert Abend-Eskalation bei Restzeit gegen 0).", default: 1.0, selector: {number: {min: 0.0, max: 4.0, step: 0.25, unit_of_measurement: "h"}}}
-        puffer_kwh: {name: "Sicherheits-Puffer (kWh)", default: 1.0, selector: {number: {min: 0.0, max: 5.0, step: 0.1}}}
-        zeit_blockade_ende: {name: "Ende Morgen-Blockade", default: "13:30:00", selector: {time: {}}}
-        duration_peak_hold: {name: "Dauer Peak-Shaving Hold", default: "00:30:00", selector: {time: {}}}
-        duration_cooldown: {name: "Dauer Zwangsladung Cooldown", default: "04:00:00", selector: {time: {}}}
-        duration_top_balancing: {name: "Dauer Top-Balancing (Hysterese)", default: "01:00:00", selector: {time: {}}}
-
+        grid_export_sensor:
+          name: "Netz-Leistung (W)"
+          description: >-
+            Sensor mit der aktuellen Netzleistung in Watt. Negative Werte bedeuten Einspeisung (Überschuss). Der Blueprint erkennt daran, ob Peak-Shaving oder ein WP-Boost sinnvoll ist.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "power"}}
+        grid_export_kwh_heute:
+          name: "Netz-Einspeisung heute (kWh)"
+          description: >-
+            Sensor mit der heute eingespeisten Energie in kWh (Tageszähler). Wird nur für die Statistik „verschenkte Speicherkapazität“ ausgewertet: Wie viel Energie ging ins Netz, obwohl die Batterie noch Platz hatte? Beeinflusst die Steuerung nicht.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
+        pv_power_sensor:
+          name: "PV-Leistung geglättet (W)"
+          description: >-
+            Sensor mit der aktuellen PV-Erzeugung. Am besten einen geglätteten Wert nehmen (z. B. gleitender Mittelwert über 5 Minuten) — sonst reagiert die Steuerung zu nervös auf einzelne Wolken.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "power"}}
+        hausverbrauch_utility_sensor:
+          name: "Hausverbrauch halbstündlich (kWh)"
+          description: >-
+            Ein Utility-Meter-Sensor, der den Hausverbrauch je Halbstunde zählt. Daraus lernt der Blueprint dein typisches Verbrauchsprofil und kann abschätzen, wie viel Energie du bis Tagesende noch brauchst.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+    sec_solcast:
+      name: "4. Solcast-Prognose (Pflicht)"
+      description: >-
+        Die PV-Vorhersage. Sie ist die Grundlage für die vorausschauende Ladeplanung — ohne sie kann der Blueprint nicht entscheiden, ob er mit dem Laden warten kann.
+      collapsed: true
+      input:
+        solcast_heute_sensor:
+          name: "Solcast: Prognose heute (mit Array)"
+          description: >-
+            Der Solcast-Sensor für die Tagesprognose. Wichtig: Er muss das Attribut „detailedForecast“ (Halbstunden-Array) mitliefern — daraus baut der Blueprint seinen Vorabscan. Der reine kWh-Zahlenwert reicht nicht.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+        solcast_rest_sensor:
+          name: "Solcast: verbleibende Leistung heute (kWh)"
+          description: >-
+            Sensor mit der noch erwarteten PV-Energie für den Rest des Tages in kWh. Dient als Rückfallebene: Wenn das Halbstunden-Array des Hauptsensors einmal fehlt, rechnet der Blueprint mit diesem Wert weiter.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
+        solcast_current_sensor:
+          name: "Solcast: aktuelle Leistung (W)"
+          description: >-
+            Sensor mit der aktuell prognostizierten PV-Leistung in Watt. Der Blueprint vergleicht ihn mit der tatsächlichen Erzeugung, um zu erkennen, ob die Prognose gerade zuverlässig ist — bei großer Abweichung wird vorsichtiger geplant.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "power"}}
+        solcast_next_hour_sensor:
+          name: "Solcast: Prognose nächste Stunde (kWh)"
+          description: >-
+            Sensor mit der erwarteten PV-Energie der kommenden Stunde in kWh. Fließt in kurzfristige Entscheidungen ein, etwa ob sich das Warten auf mehr Sonne noch lohnt.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+    sec_helpers:
+      name: "5. Helfer-Entitäten (Pflicht — einmalig anlegen)"
+      description: >-
+        Diese Helfer speichern den Zustand zwischen zwei Läufen. Sie müssen einmalig angelegt werden (siehe mitgeliefertes Package). Der Blueprint schreibt hier hinein — es sind keine Sensoren.
+      collapsed: true
+      input:
+        helper_lade_modus:
+          name: "Helfer: aktueller Lade-Modus"
+          description: >-
+            input_select, in dem der Blueprint seinen aktuellen Modus ablegt (normal, blockade, peak_shaving, top_balancing …). Dient der Nachvollziehbarkeit und verhindert, dass Meldungen mehrfach gefeuert werden.
+          default: ""
+          selector: {"entity": {"domain": "input_select"}}
+        helper_logbook_dummy:
+          name: "Helfer: Logbuch-Anker"
+          description: >-
+            input_text, an den die Logbuch-Einträge gehängt werden. Der Inhalt spielt keine Rolle — Home Assistant braucht nur eine Entität, unter der die Meldungen erscheinen. Danach kannst du im Logbuch nach dieser Entität filtern.
+          default: ""
+          selector: {"entity": {"domain": "input_text"}}
+        helper_batterie_heute_voll:
+          name: "Helfer: Batterie war heute voll"
+          description: >-
+            input_boolean, der auf „ein“ geht, sobald das Top-Balancing gestartet ist. Wird um Mitternacht zurückgesetzt und steuert das 100-%-Tage-Tracking.
+          default: ""
+          selector: {"entity": {"domain": "input_boolean"}}
+        json_tracking_sensor:
+          name: "Helfer: 100-%-Tage-Liste"
+          description: >-
+            input_text, in dem die Tage gespeichert werden, an denen die Batterie voll wurde (als JSON-Liste, maximal 14 Tage). Daraus erkennt der Blueprint, ob längere Zeit kein Balancing stattgefunden hat, und hebt dann den ToU-Min-SOC an. Wichtig: ein input_text, kein Sensor — Home Assistant würde den Listenwert in einem Sensor-State sonst in ein ungültiges Format umwandeln.
+          default: ""
+          selector: {"entity": {"domain": "input_text"}}
+        helper_blockade_beendet:
+          name: "Helfer: Morgen-Blockade heute beendet"
+          description: >-
+            input_boolean, der die Morgen-Blockade für den Rest des Tages abschaltet, sobald sie einmal aufgelöst wurde. Verhindert, dass sie am Nachmittag erneut zuschlägt. Reset um Mitternacht.
+          default: ""
+          selector: {"entity": {"domain": "input_boolean"}}
+        helper_max_soc_heute:
+          name: "Helfer: höchster SOC heute (%)"
+          description: >-
+            input_number, in dem der Tages-Höchststand des Ladezustands festgehalten wird. Grundlage für die Diagnose, ob die Batterie ihr Ziel erreicht hat.
+          default: ""
+          selector: {"entity": {"domain": "input_number"}}
+        speicherverlust_gesamt:
+          name: "Helfer: verschenkte Speicherkapazität (kWh)"
+          description: >-
+            input_number als Gesamtzähler: Wie viel Energie ging ins Netz, obwohl die Batterie noch Platz hatte? Reine Statistik — beeinflusst die Steuerung nicht.
+          default: ""
+          selector: {"entity": {"domain": "input_number"}}
+        helper_zwangsladung_aktiv:
+          name: "Helfer: Winter-Zwangsladung aktiv"
+          description: >-
+            input_boolean, der die Netzladung im Winter scharf schaltet. Solange er aus ist, lädt der Blueprint niemals aus dem Netz.
+          default: ""
+          selector: {"entity": {"domain": "input_boolean"}}
+        helper_timer_peak:
+          name: "Timer: Peak-Shaving Hold"
+          description: >-
+            timer-Entität. Läuft, solange Peak-Shaving aktiv gehalten wird. Verhindert, dass die Batterie bei schwankender Einspeisung ständig an- und abschaltet.
+          default: ""
+          selector: {"entity": {"domain": "timer"}}
+        helper_timer_cooldown:
+          name: "Timer: Zwangsladung Cooldown"
+          description: >-
+            timer-Entität. Sperrt nach einer Zwangsladung eine Weile die nächste, damit sich das System nicht hochschaukelt.
+          default: ""
+          selector: {"entity": {"domain": "timer"}}
+        helper_timer_wp_anlauf:
+          name: "Timer: WP-Anlaufphase"
+          description: >-
+            timer-Entität. Läuft während der Anlaufphase der Wärmepumpe. In dieser Zeit geht die Batterie auf 0 A, damit der PV-Überschuss der Wärmepumpe zugutekommt.
+          default: ""
+          selector: {"entity": {"domain": "timer"}}
+        helper_timer_wp_boost:
+          name: "Timer: WP-Laufzeit"
+          description: >-
+            timer-Entität für die Gesamtlaufzeit des WP-Boosts. Solange er läuft, wird die reguläre Ladekaskade zurückgestellt.
+          default: ""
+          selector: {"entity": {"domain": "timer"}}
+        schatten_bms_sensor:
+          name: "Schatten-BMS: SOC-Sensor"
+          description: >-
+            Der Template-Sensor des mitgelieferten Schatten-BMS. Er muss das Attribut „raw_drift_soc“ haben (ungeclampter Rohwert). Der Blueprint korrigiert damit die Drift, sobald der Rohwert über 100 % läuft.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+        helper_tare_charge:
+          name: "Schatten-BMS: Tare Ladezähler (kWh)"
+          description: >-
+            input_number. Merkt sich den Stand des Ladezählers zum Zeitpunkt der letzten 100-%-Kalibrierung. Der Blueprint führt ihn automatisch nach — nichts von Hand eintragen.
+          default: ""
+          selector: {"entity": {"domain": "input_number"}}
+        helper_tare_discharge:
+          name: "Schatten-BMS: Tare Entladezähler (kWh)"
+          description: >-
+            input_number, das den Stand des Entladezählers zum Zeitpunkt der letzten 100-%-Kalibrierung speichert. Gegenstück zum Tare-Ladezähler. Der Blueprint pflegt den Wert automatisch — nichts von Hand eintragen.
+          default: ""
+          selector: {"entity": {"domain": "input_number"}}
+        hausverbrauch_json_text:
+          name: "Helfer: Verbrauchsprofil (JSON)"
+          description: >-
+            input_text, in dem der Blueprint dein halbstündliches Verbrauchsprofil als JSON ablegt. Es lernt sich über die Zeit selbst an — anfangs ist es leer, das ist normal.
+          default: ""
+          selector: {"entity": {"domain": "input_text"}}
+        eingriff_dauer_sensor:
+          name: "Diagnose: Eingriffsdauer heute"
+          description: >-
+            History-Stats-Sensor, der misst, wie lange die Ladesteuerung heute aktiv eingegriffen hat. Nur für die Diagnose-Meldung am Tagesende — beeinflusst die Steuerung nicht.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+    sec_peak_shaving:
+      name: "6. Peak-Shaving (Netz-Überschuss puffern)"
+      description: >-
+        Wenn viel ins Netz eingespeist wird, kann die Batterie den Überschuss zwischenpuffern, statt ihn zu verschenken. Praktisch bei Einspeise-Begrenzung oder geringer Einspeisevergütung.
+      collapsed: true
+      input:
+        schwelle_peak_shaving:
+          name: "Start-Schwelle (W)"
+          description: >-
+            Netz-Einspeisung in Watt, ab der Peak-Shaving anspringt. Sinnvoll ist ein Wert knapp unter deiner Einspeisegrenze — so fängt die Batterie genau die Spitzen ab, die sonst abgeregelt würden.
+          default: 6500
+          selector: {"number": {"min": 1000, "max": 30000, "step": 100, "unit_of_measurement": "W"}}
+        peak_ampere:
+          name: "Ladestrom beim Peak-Shaving (A)"
+          description: >-
+            Ladestrom in Ampere, mit dem die Batterie beim Peak-Shaving lädt. Faustregel: ungefähr so hoch, dass die typische Überschussleistung gerade aufgenommen wird (Watt ÷ Batteriespannung ≈ Ampere).
+          default: 48
+          selector: {"number": {"min": 20, "max": 100, "step": 1, "unit_of_measurement": "A"}}
+        duration_peak_hold:
+          name: "Nachlaufzeit (Hold-Timer)"
+          description: >-
+            Zeitdauer (hh:mm:ss), die Peak-Shaving nach dem letzten Überschuss noch aktiv bleibt. Ohne diese Nachlaufzeit würde die Batterie bei jeder Wolke sofort abschalten. Solange weiter Überschuss anliegt, wird der Timer immer wieder auf diesen Wert zurückgesetzt — Peak-Shaving läuft also durch, solange eingespeist wird.
+          default: "00:30:00"
+          selector: {"time": {}}
     sec_waermepumpe:
-      name: "Wärmepumpe (Entitäten & Werte)"
-      icon: mdi:water-boiler
+      name: "7. Wärmepumpe / PV-Boost (Optional)"
+      description: >-
+        Optional: Bei PV-Überschuss kann die Wärmepumpe den Warmwasserspeicher vorrangig aufheizen. Die Batterie tritt dafür zurück. Wer keine Wärmepumpe hat, lässt den Schalter unten einfach aus.
       collapsed: true
       input:
         wp_boost_aktiv:
-          name: "Peak-Shaving für Wärmepumpe aktivieren (PV-Boost)"
+          name: "WP-Boost aktivieren"
+          description: >-
+            Ein/Aus-Schalter für das gesamte Wärmepumpen-Feature. Auf „aus“ stellen, wenn du keine Wärmepumpe hast oder sie nicht vom Blueprint gesteuert werden soll — dann werden alle folgenden WP-Felder ignoriert und können leer bleiben.
           default: true
-          selector: {boolean: {}}
+          selector: {"boolean": {}}
         schwelle_wp_boost:
           name: "Start-Schwelle PV-Boost (W)"
+          description: >-
+            Netz-Einspeisung in Watt, ab der der WP-Boost ausgelöst wird. Sinnvollerweise etwas NIEDRIGER als die Peak-Shaving-Schwelle — dann bekommt die Wärmepumpe den Überschuss zuerst, weil Warmwasser der wertvollere Speicher ist.
           default: 6400
-          selector: {number: {min: 1000, max: 30000, step: 100, unit_of_measurement: "W"}}
-        wp_kompressor_sensor:
-          name: "WP Kompressor (Optional - binary_sensor)"
-          default: ""
-          selector: {entity: {domain: binary_sensor}}
+          selector: {"number": {"min": 1000, "max": 30000, "step": 100, "unit_of_measurement": "W"}}
         wp_water_heater:
-          name: "WW Speicher Entität"
+          name: "Warmwasserspeicher (Entität)"
+          description: >-
+            Die water_heater-Entität deiner Wärmepumpe (der Warmwasserspeicher). Über sie setzt der Blueprint die Zieltemperatur beim PV-Boost und stellt sie danach wieder zurück.
           default: ""
-          selector: {entity: {domain: water_heater}}
+          selector: {"entity": {"domain": "water_heater"}}
         wp_temp_sensor:
-          name: "WW Temperatur Sensor"
+          name: "Warmwasser-Temperatur (Sensor)"
+          description: >-
+            Sensor mit der aktuellen Speichertemperatur. Der Blueprint startet den Boost nur, wenn noch Luft nach oben ist.
           default: ""
-          selector: {entity: {domain: sensor, device_class: temperature}}
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
         wp_hysterese_number:
-          name: "Hysterese Entität"
+          name: "Stellgröße: Hysterese (K)"
+          description: >-
+            Die number-Entität für die Einschalt-Hysterese der Wärmepumpe. Der Blueprint setzt sie beim Boost anders als im Normalbetrieb (siehe die beiden Wertepaare weiter unten).
           default: ""
-          selector: {entity: {domain: number}}
+          selector: {"entity": {"domain": "number"}}
         wp_ziel_temp_number:
-          name: "WW-Zieltemperatur Entität (Optional, ViCare-Doppelsetzung)"
-          description: "Zusätzliche number-Entity für die WW-Zieltemperatur. ViCare übernimmt water_heater.set_temperature nicht immer zuverlässig; wenn gesetzt, schreibt der Blueprint die Zieltemperatur zusätzlich über diese Entity."
+          name: "Stellgröße: Zieltemperatur — optional"
+          description: >-
+            Zusätzliche number-Entität für die Solltemperatur. Nur nötig, wenn deine Integration die Temperatur nicht allein über die water_heater-Entität übernimmt (etwa bei ViCare/Viessmann). Im Zweifel leer lassen und testen.
           default: ""
-          selector: {entity: {domain: number}}
+          selector: {"entity": {"domain": "number"}}
         wp_boost_button:
-          name: "Einmalige Ladung Button"
+          name: "Stellgröße: Einmal-Ladung (Button)"
+          description: >-
+            Die button-Entität, mit der sich eine einmalige Warmwasser-Ladung auslösen lässt. Der Blueprint drückt diesen Knopf beim PV-Boost, damit die Wärmepumpe sofort anläuft, statt auf ihr nächstes reguläres Zeitfenster zu warten.
           default: ""
-          selector: {entity: {domain: button}}
-        duration_wp_anlauf: {name: "Dauer WP Anlaufphase", default: "00:30:00", selector: {time: {}}}
-        duration_wp_laufzeit: {name: "Dauer WP Laufzeit (Sperrt Prio 5)", default: "01:00:00", selector: {time: {}}}
-        wp_ziel_temp_pv: {name: "Ziel-Temp PV", default: 59, selector: {number: {min: 40, max: 70, step: 1}}}
-        wp_hysterese_pv: {name: "Hysterese PV", default: 5, selector: {number: {min: 1, max: 20, step: 1}}}
-        wp_ziel_temp_normal: {name: "Ziel-Temp Normal", default: 50, selector: {number: {min: 40, max: 70, step: 1}}}
-        wp_hysterese_normal: {name: "Hysterese Normal", default: 10, selector: {number: {min: 1, max: 20, step: 1}}}
-
-    sec_helpers:
-      name: "Helfer & Diagnose (Entitäten)"
-      icon: mdi:tools
+          selector: {"entity": {"domain": "button"}}
+        wp_kompressor_sensor:
+          name: "Diagnose: Kompressor läuft — optional"
+          description: >-
+            Sensor (binary_sensor), der anzeigt, ob der Verdichter gerade läuft. Damit erkennt der Blueprint, ob die Wärmepumpe tatsächlich Strom zieht. Optional — ohne ihn wird die Anlaufphase nur per Timer geschätzt.
+          default: ""
+          selector: {"entity": {"domain": "binary_sensor"}}
+        wp_ziel_temp_pv:
+          name: "Zieltemperatur bei PV-Überschuss (°C)"
+          description: >-
+            Warmwasser-Zieltemperatur in °C für den PV-Boost. Höher wählen als im Normalbetrieb — der Speicher wird bewusst „überladen“, solange die Sonne es hergibt. So wird PV-Überschuss als Wärme gespeichert statt ins Netz zu gehen.
+          default: 59
+          selector: {"number": {"min": 40, "max": 70, "step": 1}}
+        wp_hysterese_pv:
+          name: "Hysterese bei PV-Überschuss (K)"
+          description: >-
+            Einschalt-Hysterese in Kelvin für den Boost-Betrieb. Klein wählen (z. B. 5 K), damit die Wärmepumpe früh anspringt und den Überschuss auch wirklich nutzt.
+          default: 5
+          selector: {"number": {"min": 1, "max": 20, "step": 1}}
+        wp_ziel_temp_normal:
+          name: "Zieltemperatur normal (°C)"
+          description: >-
+            Warmwasser-Zieltemperatur in °C für den Normalbetrieb (ohne PV-Überschuss). Auf diesen Wert stellt der Blueprint zurück, sobald der Boost endet.
+          default: 50
+          selector: {"number": {"min": 40, "max": 70, "step": 1}}
+        wp_hysterese_normal:
+          name: "Hysterese normal (K)"
+          description: >-
+            Einschalt-Hysterese in Kelvin für den Normalbetrieb. Größer wählen als beim Boost (z. B. 10 K) — so taktet die Wärmepumpe seltener und läuft dafür länger am Stück, was sie schont.
+          default: 10
+          selector: {"number": {"min": 1, "max": 20, "step": 1}}
+        duration_wp_anlauf:
+          name: "Dauer der Anlaufphase"
+          description: >-
+            Zeitdauer (hh:mm:ss), die als Anlaufphase der Wärmepumpe gilt. In dieser Zeit geht die Batterie auf 0 A, damit der gesamte PV-Überschuss zur Wärmepumpe fließt und nicht in den Speicher. Sollte etwa der Zeit entsprechen, die deine Wärmepumpe braucht, um auf Leistung zu kommen.
+          default: "00:30:00"
+          selector: {"time": {}}
+        duration_wp_laufzeit:
+          name: "Dauer der WP-Laufzeit"
+          description: >-
+            Zeitdauer (hh:mm:ss), für die die reguläre Ladekaskade nach einem WP-Boost zurückgestellt bleibt. Erst danach übernimmt wieder die normale Ladelogik. Länger = die Wärmepumpe bekommt mehr Zeit, den Speicher durchzuheizen.
+          default: "01:00:00"
+          selector: {"time": {}}
+    sec_float_voltage:
+      name: "8. Zellpflege & Top-Balancing (Feintuning)"
+      description: >-
+        Damit die Zellen im Gleichgewicht bleiben, muss die Batterie regelmäßig voll werden. Diese Werte steuern, wann und wie lange der Blueprint dafür sorgt.
       collapsed: true
       input:
-        eingriff_dauer_sensor:
-          name: "Eingriff Dauer"
-          default: ""
-          selector: {entity: {domain: sensor}}
-        json_tracking_sensor:
-          name: "BMS-JSON Tracking (Voll-Tage)"
+        top_balancing_voltage:
+          name: "Start: Zellspannung (V)"
           description: >-
-            AB V2.9.23: Bitte einen input_text eintragen (nicht mehr den Sensor)!
-            Hier wird die Liste der 100%-Tage als JSON-String gespeichert. Der
-            Blueprint LIEST und SCHREIBT diese Entity (Schreiben beim taeglichen
-            Maintenance-Lauf um 23:58).
-
-            WARUM input_text statt Sensor: Home Assistant konvertiert
-            Template-Ergebnisse automatisch in native Typen - ein String, der wie
-            eine Liste aussieht, wird intern zur echten Liste. Beim Zurueck-Lesen
-            erhaelt man dann Python-Repr mit EINFACHEN Anfuehrungszeichen
-            (['2026-07-05', ...]), was kein gueltiges JSON ist und from_json
-            zerstoert (Vorfall 12.07.2026: Sensor ging 'unavailable', der
-            Blueprint las eine leere Liste und hat die ToU-Programme faelschlich
-            von 20% auf 30% hochgesetzt). Ein input_text speichert IMMER als
-            String - dieses Problem kann dort strukturell nicht auftreten.
-
-            Leer lassen = Tracking deaktiviert (die BMS-Balancing-Logik laeuft
-            dann nicht, siehe Guard in V2.9.22).
+            Zellspannung in Volt, ab der das Top-Balancing startet. Sobald die höchste Einzelzelle (Sensoren aus Abschnitt 1) diesen Wert erreicht, drosselt der Blueprint den Ladestrom und lässt den Balancer arbeiten. Bei LiFePO4 sind 3,45–3,50 V sinnvoll — dort wird die Kennlinie steil, und Zellunterschiede werden sichtbar.
+          default: 3.4
+          selector: {"number": {"min": 3.3, "max": 3.6, "step": 0.01, "unit_of_measurement": "V"}}
+        top_balancing_soc:
+          name: "Start: Mindest-SOC (%)"
+          description: >-
+            Mindest-Ladezustand in Prozent, der zusätzlich erreicht sein muss, damit das Balancing startet. Wirkt als Plausibilitätsprüfung: Verhindert Fehlauslösungen, wenn eine einzelne schwache Zelle schon bei halbvoller Batterie hochläuft.
+          default: 97
+          selector: {"number": {"min": 70, "max": 100, "step": 1, "unit_of_measurement": "%"}}
+        duration_top_balancing:
+          name: "Dauer der Zellpflege"
+          description: >-
+            Zeitdauer (hh:mm:ss), die das Top-Balancing nach dem Start läuft. Währenddessen wird der Ladestrom auf den Minimalwert (Abschnitt 2) gedrosselt, damit die Zellspannung oben bleibt und der Balancer arbeiten kann. Länger = gründlicheres Balancing, aber die Batterie nimmt in dieser Zeit kaum PV-Überschuss auf.
+          default: "01:00:00"
+          selector: {"time": {}}
+        float_voltage_balancing:
+          name: "Float-Spannung während Zellpflege (V)"
+          description: >-
+            Auf diesen Wert hebt der Blueprint die Erhaltungsladespannung während des Balancings an. Nur wirksam, wenn du in Abschnitt 2 eine Float-Entität hinterlegt hast.
+          default: 55.2
+          selector: {"number": {"min": 50.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
+        float_voltage_normal:
+          name: "Float-Spannung normal (V)"
+          description: >-
+            Erhaltungsladespannung in Volt für den Normalbetrieb. Auf diesen Wert stellt der Blueprint zurück, sobald die Zellpflege beendet ist. Sollte dem Standardwert deines Wechselrichters entsprechen (bei 16S-LiFePO4 typisch 54,4 V).
+          default: 53.6
+          selector: {"number": {"min": 50.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
+        default_tou_soc:
+          name: "ToU Min-SOC normal (%)"
+          description: >-
+            Mindest-Ladezustand in Prozent für die ToU-Programme im Normalfall. Auf diesen Wert setzt der Blueprint alle sechs Programme zurück, sobald die Batterie an zwei Tagen in Folge voll geworden ist — dann ist das Zell-Gleichgewicht in Ordnung und es muss nachts nicht aus dem Netz nachgeladen werden.
+          default: 20
+          selector: {"number": {"min": 10, "max": 50, "step": 1, "unit_of_measurement": "%"}}
+        escalation_tou_soc:
+          name: "ToU Min-SOC bei Eskalation (%)"
+          description: >-
+            Erhöhter Mindest-Ladezustand in Prozent, auf den alle sechs ToU-Programme gesetzt werden, wenn die Batterie 9 Tage lang nicht mehr voll wurde. Die Folge: Sie wird nachts aus dem Netz auf ein höheres Niveau gehalten und erreicht am nächsten Sonnentag leichter die Balancing-Schwelle.
+          default: 30
+          selector: {"number": {"min": 10, "max": 60, "step": 1, "unit_of_measurement": "%"}}
+    sec_temperature:
+      name: "9. Temperatur-Limits & C-Raten (Feintuning)"
+      description: >-
+        Lithium-Zellen dürfen bei Kälte nur langsam (oder gar nicht) geladen werden. Der Blueprint begrenzt den Ladestrom deshalb temperaturabhängig. Die Voreinstellungen sind konservativ und passen für die meisten LiFePO4-Systeme.
+      collapsed: true
+      input:
+        bms1_temp_min_sensor:
+          name: "BMS 1: niedrigste Zelltemperatur"
+          description: >-
+            Sensor mit der kältesten Zelle von Pack 1. Der Blueprint rechnet immer mit dem kältesten Wert aller Packs — die schwächste Zelle bestimmt das Limit.
           default: ""
-          selector: {entity: {domain: input_text}}
-        helper_logbook_dummy:
-          name: "Logbuch Dummy (Text)"
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        bms2_temp_min_sensor:
+          name: "BMS 2: niedrigste Zelltemperatur"
+          description: >-
+            Sensor mit der kältesten Zelle von Pack 2. Bei nur einem Pack leer lassen — der Blueprint rechnet dann nur mit Pack 1.
           default: ""
-          selector: {entity: {domain: input_text}}
-        helper_max_soc_heute:
-          name: "Max SOC Heute"
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        bms3_temp_min_sensor:
+          name: "BMS 3: niedrigste Zelltemperatur — optional"
+          description: >-
+            Sensor mit der kältesten Zelle von Pack 3. Nur ausfüllen, wenn du drei Packs hast.
           default: ""
-          selector: {entity: {domain: input_number}}
-        speicherverlust_gesamt:
-          name: "Speicherverlust Gesamt"
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        bms1_temp_max_sensor:
+          name: "BMS 1: höchste Zelltemperatur"
+          description: >-
+            Sensor mit der wärmsten Zelle von Pack 1. Begrenzt die Ladung bei Hitze.
           default: ""
-          selector: {entity: {domain: input_number}}
-        helper_zwangsladung_aktiv:
-          name: "Zwangsladung Schalter"
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        bms2_temp_max_sensor:
+          name: "BMS 2: höchste Zelltemperatur"
+          description: >-
+            Sensor mit der wärmsten Zelle von Pack 2. Bei nur einem Pack leer lassen.
           default: ""
-          selector: {entity: {domain: input_boolean}}
-        helper_batterie_heute_voll:
-          name: "Batterie Voll Schalter"
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        bms3_temp_max_sensor:
+          name: "BMS 3: höchste Zelltemperatur — optional"
+          description: >-
+            Sensor mit der wärmsten Zelle von Pack 3. Nur ausfüllen, wenn du drei Packs hast.
           default: ""
-          selector: {entity: {domain: input_boolean}}
-        helper_blockade_beendet:
-          name: "Blockade heute beendet Helfer (Optional)"
-          description: "input_boolean als Tagesmarker: Nach dem ersten Blockade-Austritt tritt die Morgen-Blockade am selben Tag nicht erneut ein. Leer lassen = Wiedereintritt erlaubt (altes Verhalten). Reset um Mitternacht."
-          default: ""
-          selector: {entity: {domain: input_boolean}}
-        helper_timer_cooldown:
-          name: "Timer Cooldown (Auch für Balancing)"
-          default: ""
-          selector: {entity: {domain: timer}}
-        helper_timer_peak:
-          name: "Timer Peak"
-          default: ""
-          selector: {entity: {domain: timer}}
-        helper_timer_wp_anlauf:
-          name: "Timer WP Anlauf"
-          default: ""
-          selector: {entity: {domain: timer}}
-        helper_timer_wp_boost:
-          name: "Timer WP Laufzeit"
-          default: ""
-          selector: {entity: {domain: timer}}
-        helper_tare_charge:
-          name: "Schatten-BMS: Tare Charge Helfer"
-          default: ""
-          selector: {entity: {domain: input_number}}
-        helper_tare_discharge:
-          name: "Schatten-BMS: Tare Discharge Helfer"
-          default: ""
-          selector: {entity: {domain: input_number}}
-        schatten_bms_sensor:
-          name: "Schatten-BMS: SOC Sensor (mit raw_drift_soc Attribut)"
-          description: "Template-Sensor aus dem Package. Der Blueprint liest dessen Attribut 'raw_drift_soc' für das Anti-Windup (Tare-Nachführung bei > 100%)."
-          default: ""
-          selector: {entity: {domain: sensor}}
-        helper_lade_modus:
-          name: "Lade-Modus (Select - ersetzt Magic-Numbers)"
-          description: "Status-Helfer: speichert, welche Priorität den Ladestrom zuletzt gesetzt hat. Optionen: normal, fall_b_max, top_balancing, zwangsladung, peak_shaving, wp_sperre, blockade, nacht."
-          default: ""
-          selector: {entity: {domain: input_select}}
-        hausverbrauch_utility_sensor:
-          name: "Utility Meter (Hausverbrauch Halbstündlich in kWh)"
-          description: "Wird durch den Blueprint automatisch alle 30 Min genullt."
-          default: ""
-          selector: {entity: {domain: sensor}}
-        hausverbrauch_json_text:
-          name: "JSON Profil Speicher (Text-Helfer)"
-          description: "Speichert das 48-Werte Array (jetzt in kWh pro Halbstunde)."
-          default: ""
-          selector: {entity: {domain: input_text}}
-
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        crate_2_deg:
+          name: "C-Rate bei 2 °C und darunter"
+          description: >-
+            Ladefaktor bei Frost. Standard 0,00 = gar nicht laden. Laden unter dem Gefrierpunkt schädigt LiFePO4-Zellen dauerhaft (Lithium-Plating) — diesen Wert nur ändern, wenn deine Zellen ausdrücklich dafür freigegeben sind.
+          default: 0.0
+          selector: {"number": {"min": 0.0, "max": 0.1, "step": 0.01, "mode": "slider"}}
+        crate_5_deg:
+          name: "C-Rate bei 5 °C"
+          description: >-
+            Ladefaktor bei knapp über null. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Strom. Beispiel: 0,05 × 314 Ah × 2 = 31 A.
+          default: 0.05
+          selector: {"number": {"min": 0.0, "max": 0.2, "step": 0.01, "mode": "slider"}}
+        crate_10_deg:
+          name: "C-Rate bei 10 °C"
+          description: >-
+            Ladefaktor bei 10 °C. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Ladestrom. Bei kühlen Temperaturen sollte er deutlich unter dem Wert für 20 °C liegen.
+          default: 0.2
+          selector: {"number": {"min": 0.0, "max": 0.5, "step": 0.01, "mode": "slider"}}
+        crate_12_deg:
+          name: "C-Rate bei 12 °C"
+          description: >-
+            Ladefaktor bei 12 °C. Zwischenwert für die Kennlinie zwischen 10 °C und 15 °C — der Blueprint interpoliert zwischen den Stützstellen. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Ladestrom.
+          default: 0.3
+          selector: {"number": {"min": 0.0, "max": 0.8, "step": 0.01, "mode": "slider"}}
+        crate_15_deg:
+          name: "C-Rate bei 15 °C"
+          description: >-
+            Ladefaktor bei 15 °C. Zwischenwert für die Kennlinie zwischen 12 °C und 20 °C. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Ladestrom.
+          default: 0.5
+          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.01, "mode": "slider"}}
+        crate_20_deg:
+          name: "C-Rate bei 20 °C"
+          description: >-
+            Ladefaktor bei 20 °C — dem Wohlfühlbereich der Zellen. Hier ist die volle Rate möglich (Standard 0,70 = 70 % der Kapazität als Ladestrom). Rechenbeispiel: 0,70 × 314 Ah × 2 Packs = 440 A, wird aber durch „Maximaler Ladestrom“ (Abschnitt 1) gedeckelt.
+          default: 0.7
+          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.01, "mode": "slider"}}
+        crate_40_deg:
+          name: "C-Rate bei 40 °C"
+          description: >-
+            Ladefaktor bei 40 °C. Wärme ist für LiFePO4 weniger kritisch als Kälte — meist kann hier noch die volle Rate gefahren werden.
+          default: 0.7
+          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.01, "mode": "slider"}}
+        crate_45_deg:
+          name: "C-Rate bei 45 °C und darüber"
+          description: >-
+            Ladefaktor bei 45 °C und darüber. Standard 0,00 = Ladung komplett stoppen. Die meisten BMS riegeln bei dieser Temperatur ohnehin selbst ab; dieser Wert sorgt dafür, dass der Blueprint gar nicht erst dagegen anregelt.
+          default: 0.0
+          selector: {"number": {"min": 0.0, "max": 0.5, "step": 0.01, "mode": "slider"}}
+    sec_tuning:
+      name: "10. Lade-Strategie & Zeitsteuerung (Feintuning)"
+      description: >-
+        Hier stellst du ein, wie vorausschauend der Blueprint plant. Die Voreinstellungen sind ein guter Startpunkt — meist muss hier nichts angepasst werden.
+      collapsed: true
+      input:
+        zeit_blockade_ende:
+          name: "Spätester Ladebeginn (Morgen-Blockade)"
+          description: >-
+            Uhrzeit, zu der die Morgen-Blockade spätestens endet und die Ladung freigegeben wird. Hintergrund: Morgens hält der Blueprint die Batterie bewusst zurück, damit sie die Mittagsspitze noch aufnehmen kann — sonst wäre sie um 9 Uhr voll und der Überschuss ginge ins Netz. Bei guter Prognose löst er die Blockade auch früher auf; diese Uhrzeit ist nur die harte Obergrenze. Früher = sicherer (Batterie wird zuverlässiger voll), später = mehr Platz für die Mittagsspitze.
+          default: "13:30:00"
+          selector: {"time": {}}
+        faktor_ziel_puffer:
+          name: "Ladefaktor normal"
+          description: >-
+            Multiplikator für den berechneten Ladestrom (typisch 1,5). Der Blueprint ermittelt, wie viel Strom rechnerisch nötig wäre, um die Batterie bis Sonnenuntergang zu füllen — und multipliziert ihn mit diesem Faktor. Höher = die Batterie wird zügiger voll (sicherer bei Prognosefehlern, aber weniger Überschuss bleibt für Peak-Shaving). Niedriger = knapper kalkuliert, mehr Überschuss verfügbar.
+          default: 1.3
+          selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
+        faktor_fallback:
+          name: "Ladefaktor Eskalation"
+          description: >-
+            Multiplikator für die Eskalations-Prüfung (typisch 1,3, also strenger als der Normalfaktor). Damit entscheidet der Blueprint, ob die verbleibende Sonnenzeit überhaupt noch reicht. Reicht sie auch mit diesem Faktor nicht, gibt er die Feinsteuerung auf und schaltet auf vollen Ladestrom („Fall B“).
+          default: 1.2
+          selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
+        puffer_kwh:
+          name: "Sicherheits-Puffer (kWh)"
+          description: >-
+            Fester Energie-Zuschlag in kWh auf den berechneten Bedarf. Fängt Prognosefehler ab: Der Blueprint plant so, als bräuchte die Batterie etwas mehr, als sie eigentlich braucht. Bei sehr wechselhaftem Wetter erhöhen.
+          default: 1.0
+          selector: {"number": {"min": 0.0, "max": 5.0, "step": 0.1}}
+        fallback_max_soc:
+          name: "Eskalation: SOC-Obergrenze (%)"
+          description: >-
+            Ladezustand in Prozent, oberhalb dessen nicht mehr eskaliert wird. Ist die Batterie schon so voll, bringt Vollgas-Laden nichts mehr — der Blueprint bleibt dann bei der feinen Regelung.
+          default: 95
+          selector: {"number": {"min": 50, "max": 100, "step": 1, "unit_of_measurement": "%"}}
+        fallback_min_kwh:
+          name: "Eskalation: Bagatellgrenze (kWh)"
+          description: >-
+            Energiemenge in kWh, unterhalb derer nicht mehr auf vollen Ladestrom eskaliert wird. Fehlen der Batterie also weniger als dieser Wert bis „voll“, bleibt es bei der feinen Regelung. Verhindert, dass wegen 200 Wh Restbedarf noch auf Maximalstrom umgeschaltet wird.
+          default: 1.0
+          selector: {"number": {"min": 0.1, "max": 5.0, "step": 0.1, "unit_of_measurement": "kWh"}}
+        min_reststunden:
+          name: "Eskalation: Mindest-Restladezeit (h)"
+          description: >-
+            Mindest-Restladezeit in Stunden. Ist weniger Sonnenzeit übrig als hier eingestellt, verzichtet der Blueprint auf die Eskalation — der volle Ladestrom würde in der kurzen Zeit ohnehin nichts mehr bringen.
+          default: 1.0
+          selector: {"number": {"min": 0.0, "max": 4.0, "step": 0.25, "unit_of_measurement": "h"}}
+        duration_cooldown:
+          name: "Sperrzeit nach Zwangsladung"
+          description: >-
+            Zeitdauer (hh:mm:ss), die nach einer Winter-Zwangsladung vergehen muss, bevor die nächste starten darf. Verhindert, dass sich das System bei dauerhaft schlechtem Wetter hochschaukelt und ständig aus dem Netz nachlädt.
+          default: "04:00:00"
+          selector: {"time": {}}
 trigger_variables:
   tv_battery_soc: !input battery_soc_sensor
   t_cooldown: !input helper_timer_cooldown
@@ -440,7 +726,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.24]"
+      bp_version: "[V2.9.25]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
