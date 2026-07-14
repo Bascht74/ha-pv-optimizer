@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.25]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.26]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -726,7 +726,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.25]"
+      bp_version: "[V2.9.26]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -735,42 +735,24 @@ action:
       var_schatten_bms: !input schatten_bms_sensor
       var_lade_modus: !input helper_lade_modus
 
-  # ====================================================================
-  # DEYE-RETRY (V2.9.18, ueberarbeitet in V2.9.20)
+  # DEYE-RETRY
   #
-  # HINTERGRUND (07.07.2026, Standort 2 / Dachterrasse): Ein Deye-Sensor
-  # ging fuer ~6s auf 'nicht verfuegbar' (11:49:59 -> 11:50:05). Dadurch
-  # fiel aktueller_soc auf den Fallback 0 und packs_online auf 0,
-  # freie_kwh sprang faelschlich auf fast die volle Kapazitaet, und das
-  # loeste einen fehlerhaften dynamischen Blockade-Austritt aus. Der
-  # TAGESMARKER (helper_blockade_beendet) verriegelt diesen fehlerhaften
-  # Austritt fuer den GESAMTEN Resttag - ein einzelner kurzer Aussetzer
-  # hatte also einen ganztaegigen Effekt.
+  # Die Deye-Modbus-Anbindung hat regelmaessig kurze Aussetzer (wenige
+  # Sekunden). Faellt ein Sensor waehrend eines Laufs aus, rechnet der
+  # Blueprint mit Fallback-Werten weiter - das kann Fehlentscheidungen
+  # ausloesen (z.B. SOC=0 -> falscher Blockade-Austritt).
   #
-  # WARUM DIE PRUEFUNG HIER GANZ AM ANFANG STEHT (wichtig!):
-  # Geprueft wird var_battery_total_charge - aber NICHT, weil nur dieser
-  # eine Wert gebraucht wuerde, sondern weil er die ERSTE Variable aus der
-  # Deye-Integration ist und damit als INDIKATOR fuer einen generellen
-  # Kommunikations-Aussetzer der GESAMTEN Deye-Anbindung dient.
-  # Der anschliessende Delay wirkt naemlich auf ALLE Deye-Werte des Laufs:
-  # SOC (aktueller_soc), Batterieleistung, Netz-Export (Peak-Shaving),
-  # PV-Leistung, Schatten-BMS-Zaehler usw. werden nach dem Delay alle neu
-  # gerendert (Jinja-Templates werten states() erst zur Laufzeit aus).
-  # -> Der Retry darf deshalb NICHT an einen einzelnen Codepfad oder an
-  #    bestimmte Trigger gebunden werden. Jeder Lauf nutzt Deye-Werte,
-  #    also braucht jeder Lauf diesen Schutz.
+  # Geprueft wird var_battery_total_charge stellvertretend fuer die GESAMTE
+  # Deye-Anbindung: Faellt dieser Sensor aus, sind meist alle betroffen.
+  # Der Delay wirkt auf ALLE Deye-Werte des Laufs (SOC, Netz-Export,
+  # PV-Leistung, Schatten-BMS-Zaehler) - Jinja rendert states() erst zur
+  # Laufzeit, liest also nach dem Warten frisch ein.
+  # -> Der Retry darf deshalb NICHT an einzelne Trigger oder Codepfade
+  #    gebunden werden. Jeder Lauf nutzt Deye-Werte.
   #
-  # LOGGING-PHILOSOPHIE (V2.9.20):
-  # Kurze Aussetzer sind bei der Deye-Modbus-Anbindung NORMAL und treten
-  # regelmaessig auf. Der Retry ist der eingeplante Normalfall und laeuft
-  # deshalb STILL - kein Logbuch-Eintrag (das erzeugte bisher nur
-  # Rauschen, u.a. weil die Automation auch durch schnelle Zustands-
-  # Trigger wie die Zellspannungs-Schwelle ausgeloest wird).
-  # Geloggt wird NUR der PROBLEMFALL: wenn der Wert auch nach den 10s
-  # immer noch fehlt. Dann greifen zwar die bestehenden Fallbacks (die
-  # Automation blockiert nicht), aber der Lauf rechnet moeglicherweise
-  # mit unvollstaendigen Deye-Daten - und genau das will man sehen.
-  # ====================================================================
+  # Kurze Aussetzer sind normal und werden STILL abgefangen (kein Logbuch-
+  # Eintrag - das erzeugte nur Rauschen). Geloggt wird nur der Problemfall:
+  # wenn der Wert auch nach dem Warten noch fehlt.
   - if:
       - condition: template
         value_template: >
@@ -1010,22 +992,22 @@ action:
       pack3_online: "{{ var_bms3_temp_min != '' and states(var_bms3_temp_min) | float(-999) != -999 }}"
       packs_online: "{{ (1 if pack1_online else 0) + (1 if pack2_online else 0) + (1 if pack3_online else 0) }}"
 
-      # NEU (V2.9.19): Entprellung des BMS-Offline-Notlaufs.
-      # Problem: Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf
-      # 'unavailable'. Bisher loeste das SOFORT den 10A-Notlauf + die Warnung
-      # aus (packs_online == 0). Ein normaler Reboot (< einige Minuten) soll
-      # das NICHT mehr tun.
-      # Logik: packs_offline_bestaetigt ist nur dann true, wenn packs_online
-      # == 0 UND alle vorhandenen (nicht-leeren) BMS-Temp-Sensoren bereits
-      # laenger als offline_debounce_s (300s) 'unavailable'/'unknown' sind.
-      # Messung ueber last_changed: Beim Wechsel verfuegbar -> unavailable
-      # setzt HA last_changed auf den Umschaltzeitpunkt; solange der Sensor
-      # unavailable BLEIBT, waechst (now() - last_changed) monoton. Ein Reboot
-      # (Sensor kommt vor 300s zurueck) unterschreitet die Schwelle -> kein
-      # Notlauf. Ein echter Dauerausfall (> 300s) -> Notlauf greift wie bisher.
-      # Bewusster Trade-off (vom Nutzer bestaetigt): waehrend der Entprellzeit
-      # wird ggf. ohne Temperaturschutz geladen - unkritisch, da die
-      # Ladeleistung hier nie hoch genug wird, dass Temperatur limitierend ist.
+      # ENTPRELLUNG DES BMS-OFFLINE-NOTLAUFS
+      #
+      # Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf
+      # 'unavailable'. Ohne Entprellung loeste das sofort den 10A-Notlauf und
+      # eine Warnung aus - unnoetig, denn der ESP ist nach wenigen Sekunden
+      # wieder da.
+      #
+      # packs_offline_bestaetigt ist nur true, wenn packs_online == 0 UND alle
+      # vorhandenen BMS-Temp-Sensoren laenger als offline_debounce_s (300s)
+      # 'unavailable' sind. Gemessen ueber last_changed: Beim Wechsel
+      # verfuegbar -> unavailable setzt HA last_changed neu; solange der Sensor
+      # weg BLEIBT, waechst (now() - last_changed) monoton.
+      #
+      # Trade-off: Waehrend der Entprellzeit wird ohne Temperaturschutz
+      # geladen - unkritisch, da die Ladeleistung hier nie hoch genug wird,
+      # dass Temperatur limitierend waere.
       offline_debounce_s: 300
       # Hilfsausdruck: ist ein einzelner Sensor laenger als die Schwelle weg?
       # (leerer Input -> zaehlt NICHT als offline, wird uebersprungen)
@@ -1060,7 +1042,14 @@ action:
       json_profil: >
         {% set j_str = states(var_hausverbrauch_json) %}
         {% set default_arr = [0.2] * 48 %}
-        {{ j_str | from_json if j_str is string and j_str | length > 20 else default_arr }}
+        {# V2.9.26: Auch hier kann HA bereits eine native Liste liefern. #}
+        {% if j_str is not string and j_str is iterable and j_str | length > 20 %}
+          {{ j_str | list }}
+        {% elif j_str is string and j_str | length > 20 %}
+          {{ j_str | from_json }}
+        {% else %}
+          {{ default_arr }}
+        {% endif %}
 
       solcast_rest_blended: >
         {% set ns = namespace(val=0) %}
@@ -1275,46 +1264,24 @@ action:
       wp_sperre_aktiv: >
         {{ var_wp_boost_aktiv and states(var_timer_wp_anlauf) == 'active' }}
 
-      # ==================================================================
-      # NEU (V2.9.24): wp_boost_startet_gleich
+      # wp_boost_startet_gleich
       #
-      # PROBLEM (Vorfall 13.07.2026, Standort 2, 13:55:02):
-      # Im Logbuch standen zwei Eintraege zur SELBEN Sekunde:
-      #   - "WP PV-Boost ausgeloest (Netz-Export 6599W > 6400W)"
-      #   - "Prio 3 (Peak-Shaving) beendet: Hold-Timer abgelaufen"
-      # Die zweite Meldung war FALSCH: Der Peak-Timer war 2 Sekunden zuvor
-      # erst gestartet worden und lief 30 Minuten - er konnte unmoeglich
-      # "abgelaufen" sein.
+      # PROBLEM: wp_sperre_aktiv wird am LAUF-ANFANG berechnet, wenn der
+      # WP-Anlauf-Timer noch idle ist. Liegt der Export ueber BEIDEN Schwellen
+      # (Peak und WP-Boost), startete der Peak-Timer-Block den Timer - und der
+      # WP-Boost weiter unten im selben Lauf loeste dann einen Folge-Trigger
+      # aus, dessen zweiter Lauf den Timer sofort wieder cancelte. Das erzeugte
+      # einen Fehl-Trigger auf 'peak_shaving_ende' (active -> idle) und damit
+      # die falsche Meldung 'Hold-Timer abgelaufen'.
       #
-      # ABLAUF, der dazu fuehrte:
-      #  1. Lauf um 13:55:00, Export 6599W (> Peak 6500 UND > WP-Boost 6400).
-      #  2. wp_sperre_aktiv wird am LAUF-ANFANG berechnet: der WP-Anlauf-Timer
-      #     ist zu diesem Zeitpunkt noch 'idle' -> wp_sperre_aktiv = FALSE.
-      #  3. Der Peak-Timer-Block prueft "export > 6500 and not wp_sperre_aktiv"
-      #     -> erfuellt -> timer.start (Peak-Hold-Timer laeuft jetzt).
-      #  4. WEITER UNTEN im selben Lauf wird der WP-Boost ausgeloest
-      #     -> timer.vitocal_anlaufphase geht auf 'active'.
-      #  5. Der Trigger "WP-Anlauf START" feuert -> die Automation laeuft ERNEUT
-      #     (mode: queued). Jetzt ist wp_sperre_aktiv = TRUE.
-      #  6. Der Zweig "Loescht den Peak-Shaving Timer" greift -> timer.cancel.
-      #  7. Der Peak-Timer wechselt active -> idle. Genau darauf lauscht der
-      #     Trigger 'peak_shaving_ende' (from: active, to: idle) -> er feuert
-      #     -> Meldung "Hold-Timer abgelaufen" (obwohl er ABGEBROCHEN wurde).
+      # LOESUNG: Hier wird exakt die WP-Boost-Bedingung nachgebildet. Der
+      # Peak-Timer wird gar nicht erst gestartet, wenn im selben Lauf ohnehin
+      # gleich ein WP-Boost feuert.
       #
-      # LOESUNG: Der Peak-Timer wird gar nicht erst gestartet, wenn im selben
-      # Lauf ohnehin gleich ein WP-Boost ausgeloest wird. Dafuer wird hier
-      # exakt DIESELBE Bedingung nachgebildet wie im WP-Boost-Zweig weiter
-      # unten. Der unnoetige start->cancel-Zyklus (und damit der Fehl-Trigger)
-      # entfaellt.
-      #
-      # GEWOLLTES VERHALTEN (vom Nutzer bestaetigt):
-      #  * Der Peak-Timer soll weiterhin bei JEDEM Lauf neu gestartet werden,
-      #    solange der Export > 6500W liegt (Verlaengerung ist erwuenscht).
-      #  * Aber NUR, solange die WP nicht laeuft. Waehrend der WP-Anlaufphase
-      #    ist Peak-Shaving komplett aus (die Batterie geht auf 0A, die WP
-      #    bekommt den Ueberschuss). Sobald der Export danach wieder > 6500W
-      #    steigt, startet Peak-Shaving normal neu.
-      # ==================================================================
+      # GEWOLLT: Der Peak-Timer wird weiterhin bei JEDEM Lauf neu gestartet,
+      # solange Export > Schwelle - aber nur, wenn keine WP laeuft. Waehrend
+      # der WP-Anlaufphase ist Peak-Shaving komplett aus (Batterie auf 0A, der
+      # Ueberschuss geht an die WP).
       wp_boost_startet_gleich: >
         {{ var_wp_boost_aktiv
            and real_export > schwelle_wp_boost
@@ -1322,19 +1289,20 @@ action:
            and states(var_timer_wp_anlauf) != 'active'
            and states(var_timer_wp_boost) != 'active' }}
 
-      # NEU (V2.9.17): Zeitlich begrenzte Battery-0A-Sperre fuer PRIO 4.
-      # wp_sperre_aktiv bleibt UNVERAENDERT und steuert weiterhin (unabhaengig
-      # von der Uhrzeit) die Peak-Shaving-Timer-Logik (Zeilen ~1455/1465) -
-      # dort soll die Anlaufphase IMMER Peak-Shaving verhindern, auch nachmittags.
-      # NUR die harte Batterie-0A-Verriegelung in PRIO 4 (Zeile ~1819) soll
-      # kuenftig auf das (dynamische) Blockade-Ende begrenzt sein: startet die
-      # WP NACH Blockade-Ende (z.B. nachmittags bei viel Sonne), verriegelt
-      # PRIO 4 die Batterie nicht mehr auf 0A - Prio 5 darf normal weiterladen.
-      # Bewusst NICHT "and not blockade_heute_beendet" direkt verwendet: diese
-      # Variable wird erst WEITER UNTEN im selben variables-Block definiert
-      # (Zeile ~935) und waere hier als Vorwaertsreferenz noch nicht verfuegbar.
-      # Stattdessen wird dieselbe Pruefung inline wiederholt (var_helper_
-      # blockade_beendet ist bereits ab Zeile 429 gesetzt, also sicher nutzbar).
+      # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 4)
+      #
+      # wp_sperre_aktiv bleibt UNVERAENDERT und steuert weiterhin - unabhaengig
+      # von der Uhrzeit - die Peak-Shaving-Timer-Logik: Waehrend der
+      # WP-Anlaufphase soll Peak-Shaving IMMER unterbleiben, auch nachmittags.
+      #
+      # Nur die harte 0A-Verriegelung in PRIO 4 ist auf das (dynamische)
+      # Blockade-Ende begrenzt: Startet die WP NACH Blockade-Ende (z.B.
+      # nachmittags bei viel Sonne), soll die Batterie normal weiterladen
+      # duerfen - sonst verliert man eine wertvolle Sonnenstunde.
+      #
+      # blockade_heute_beendet wird weiter unten im selben variables-Block
+      # definiert und waere hier eine Vorwaertsreferenz. Deshalb die Pruefung
+      # inline wiederholt (var_helper_blockade_beendet ist frueher gesetzt).
       wp_sperre_batterie_0a_aktiv: >
         {{ wp_sperre_aktiv and vor_blockade_ende
            and not (var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on') }}
@@ -1415,26 +1383,17 @@ action:
 # ROOT-ACTIONS STATE-MACHINE
 # ====================================================================
 
-  # BLOCKADE-AUSTRITT ERKENNEN: Modus steht noch auf 'blockade', aber die
-  # Bedingung ist gefallen (T weg / SOC / Zeit) -> Tagesmarker setzen.
+  # BLOCKADE-AUSTRITT ERKENNEN
   #
-  # FIX V2.9.21 (Log-Flut): Bisher fehlte hier der Guard gegen Wiederholung.
-  # Beobachtet am 10.-12.07.2026: Die Meldung feuerte 6-8x im 5-Min-Takt
-  # (z.B. 12.07.: 14:30, 14:35, 14:40, ... bis 15:00).
-  # URSACHE: Die Bedingung prueft 'aktueller_modus == blockade' - das ist der
-  # GESPEICHERTE Modus aus dem helper_lade_modus (also der Stand des LETZTEN
-  # Laufs). Dieser wird erst weiter unten in der Prio-Kaskade neu gesetzt.
-  # Solange kein Prio-Zweig den Modus umsetzt (z.B. weil der Ladestrom sich
-  # nicht genug aendert), bleibt er auf 'blockade' stehen -> die Bedingung
-  # war bei JEDEM Lauf erneut wahr -> Meldung + input_boolean.turn_on erneut.
-  # Der alte Kommentar ("Feuert genau einmal, da der folgende Prio-Zweig den
-  # Modus umsetzt") war also eine falsche Annahme.
-  # LOESUNG: Zusaetzlich pruefen, dass der Tagesmarker noch NICHT gesetzt ist.
-  # Damit feuert der Block genau einmal pro Tag - beim ersten Lauf nach dem
-  # Austritt. Danach ist blockade_heute_beendet == true und der Block ruht,
-  # unabhaengig davon, was der gespeicherte Modus gerade sagt.
-  # (blockade_heute_beendet ist oben in Zeile ~1053 definiert, steht also
-  #  hier sicher zur Verfuegung - keine Vorwaertsreferenz.)
+  # Der gespeicherte Modus steht noch auf 'blockade', aber die Bedingung
+  # ist gefallen (kein T mehr / SOC / Zeit) -> Tagesmarker setzen.
+  #
+  # WICHTIG - Guard 'not blockade_heute_beendet': aktueller_modus ist der
+  # Stand des LETZTEN Laufs und wird erst weiter unten in der Prio-Kaskade
+  # neu gesetzt. Setzt kein Prio-Zweig den Modus um (z.B. weil sich der
+  # Ladestrom nicht genug aendert), bleibt er auf 'blockade' - ohne den
+  # Guard wuerde der Block dann bei JEDEM Lauf erneut feuern (beobachtet:
+  # 6-8x im 5-Min-Takt). Mit Guard feuert er genau einmal pro Tag.
   - if:
       - condition: template
         value_template: >
@@ -1516,6 +1475,76 @@ action:
           entity_id: "{{ var_helper_tare_discharge }}"
         data:
           value: "{{ states(var_battery_total_discharge) | float(0) }}"
+
+  # 100%-TAGE-TRACKING
+  #
+  # REIHENFOLGE IST KRITISCH: Dieser Block MUSS vor 'Taegliches Aufraeumen'
+  # laufen - jener setzt helper_batterie_heute_voll auf 'off' zurueck.
+  # Stuende das Tracking dahinter, laese es den Helfer immer als 'off' und
+  # der heutige Tag kaeme nie in die Liste.
+  - choose:
+      - alias: "100%-Tage-Tracking (vor dem Reset des Voll-Helfers)"
+        conditions:
+          - condition: trigger
+            id: maintenance
+        sequence:
+        # Haengt den heutigen Tag an die Liste an, wenn die Batterie voll wurde.
+        #
+        # Ablauf im Maintenance-Lauf (23:58):
+        #   1. HIER: Liste aktualisieren (liest batterie_heute_voll)
+        #   2. danach: 'Taegliches Aufraeumen' setzt batterie_heute_voll = off
+        #   3. danach: 'BMS Balancing Logic' wertet die Liste aus
+        #
+        # Die Liste liegt in einem input_text (Input 'json_tracking_sensor').
+        # Ein input_text speichert IMMER als String - ein Sensor-State wuerde von
+        # HA in eine native Liste umgewandelt und beim Zuruecklesen als
+        # Python-Repr mit EINFACHEN Quotes geliefert, was kein gueltiges JSON ist
+        # und from_json zerstoert.
+        - if:
+            - condition: template
+              value_template: "{{ var_json_tracking != '' }}"
+          then:
+            - variables:
+                  # ROBUSTES EINLESEN: String ODER native Liste
+                  #
+                  # HA rendert Template-Ergebnisse mit 'native type conversion'. Ein
+                  # gespeicherter String, der wie eine Liste aussieht, wird via states()
+                  # u.U. bereits als ECHTE Liste zurueckgegeben - nicht als String. Ob das
+                  # passiert, ist nicht zuverlaessig vorhersagbar. BEIDE Faelle sind
+                  # gueltig und muessen abgedeckt werden: erst auf native Liste pruefen,
+                  # dann auf String.
+                  #
+                  # (Dieselbe Logik nutzt der Blueprint bei slot_daten_dict und
+                  #  blockade_dyn - dort war das Phaenomen schon bekannt.)
+                tracking_roh: "{{ states(var_json_tracking) }}"
+                tracking_liste: >
+                  {% if tracking_roh is not string and tracking_roh is iterable %}
+                    {{ tracking_roh | list }}
+                  {% elif tracking_roh is string and tracking_roh.startswith('[') %}
+                    {{ tracking_roh | from_json }}
+                  {% else %}
+                    {{ [] }}
+                  {% endif %}
+                tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
+                tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
+                # Heutigen Tag anhaengen, wenn die Batterie voll war und er
+                # noch nicht drin steht. Immer auf die letzten 14 Tage
+                # begrenzen (input_text-Limit: 255 Zeichen, 14 Eintraege
+                # im JSON-Format = ~196 Zeichen).
+                tracking_neu: >
+                  {% if tracking_war_voll and tracking_heute not in tracking_liste %}
+                    {{ ((tracking_liste + [tracking_heute]) | sort)[-14:] }}
+                  {% else %}
+                    {{ tracking_liste[-14:] }}
+                  {% endif %}
+            - action: input_text.set_value
+              target:
+                entity_id: "{{ var_json_tracking }}"
+              data:
+                # to_json erzeugt korrektes JSON mit DOPPELTEN Quotes.
+                # Da input_text immer als String speichert, bleibt es dabei.
+                value: "{{ tracking_neu | to_json }}"
+
 
   - choose:
       - alias: "Tägliches Aufräumen & Sanity Checks"
@@ -1718,90 +1747,38 @@ action:
             id: maintenance
         sequence:
           # ============================================================
-          # SCHRITT 1: 100%-TAGE-TRACKING AKTUALISIEREN (NEU V2.9.23)
-          #
-          # Laeuft als ERSTE Aktion im Maintenance-Lauf - also VOR dem
-          # Auslesen der Liste weiter unten. Damit ist die Reihenfolge
-          # (erst schreiben, dann auswerten) innerhalb EINES Laufs
-          # garantiert; ein separater 23:57-Trigger ist nicht noetig.
-          #
-          # HINTERGRUND (Vorfall 12.07.2026, Standort 1):
-          # Bisher erledigte das ein Trigger-Template-Sensor im Package,
-          # der seinen EIGENEN State zurueck las (Selbstreferenz). Home
-          # Assistant konvertiert Template-Ergebnisse aber automatisch in
-          # native Typen: Ein String, der wie eine Liste aussieht, wird
-          # intern zur echten Liste. Beim Zurueck-Lesen via states() erhielt
-          # man dann deren Python-Repr mit EINFACHEN Anfuehrungszeichen:
-          #     ['2026-07-05', '2026-07-06', ...]    <- KEIN gueltiges JSON
-          # from_json scheiterte -> Render-Fehler -> Sensor 'unavailable'
-          # -> die Liste war leer -> letztes_100_datum fiel auf den Fallback
-          # '2000-01-01' -> der Blueprint hat die ToU-Programme von 20% auf
-          # 30% hochgesetzt (Fehlsteuerung).
-          #
-          # LOESUNG: Die Liste liegt jetzt in einem input_text (Input
-          # 'json_tracking_sensor' zeigt ab V2.9.23 auf einen input_text).
-          # Der speichert IMMER als String - HA fuehrt dort keine
-          # Typkonvertierung durch. Das Problem ist strukturell beseitigt.
-          # Zusaetzlich ueberlebt ein input_text HA-Neustarts.
-          # ============================================================
-          - if:
-              - condition: template
-                value_template: "{{ var_json_tracking != '' }}"
-            then:
-              - variables:
-                  # Robustes Einlesen: auch ein leerer oder kaputter Wert
-                  # fuehrt hier nicht zum Absturz - dann wird mit [] begonnen.
-                  tracking_roh: "{{ states(var_json_tracking) }}"
-                  tracking_liste: >
-                    {% if tracking_roh is string and tracking_roh.startswith('[') %}
-                      {{ tracking_roh | from_json }}
-                    {% else %}
-                      {{ [] }}
-                    {% endif %}
-                  tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
-                  tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
-                  # Heutigen Tag anhaengen, wenn die Batterie voll war und er
-                  # noch nicht drin steht. Immer auf die letzten 14 Tage
-                  # begrenzen (input_text-Limit: 255 Zeichen, 14 Eintraege
-                  # im JSON-Format = ~196 Zeichen).
-                  tracking_neu: >
-                    {% if tracking_war_voll and tracking_heute not in tracking_liste %}
-                      {{ ((tracking_liste + [tracking_heute]) | sort)[-14:] }}
-                    {% else %}
-                      {{ tracking_liste[-14:] }}
-                    {% endif %}
-              - action: input_text.set_value
-                target:
-                  entity_id: "{{ var_json_tracking }}"
-                data:
-                  # to_json erzeugt korrektes JSON mit DOPPELTEN Quotes.
-                  # Da input_text immer als String speichert, bleibt es dabei.
-                  value: "{{ tracking_neu | to_json }}"
-
-          # ============================================================
-          # SCHRITT 2: BMS-BALANCING-LOGIK (liest die eben geschriebene Liste)
+          # BMS-BALANCING-LOGIK
+          # Liest die Tracking-Liste, die weiter oben im selben Lauf
+          # aktualisiert wurde (Block "100%-Tage-Tracking").
           # ============================================================
           - variables:
+              # Robustes Einlesen: HA kann den input_text-State
+              # bereits als native Liste liefern (siehe ausfuehrlicher Kommentar
+              # bei tracking_liste oben). Beide Faelle abdecken.
               tage_liste: >
                 {% set s = states(var_json_tracking) %}
-                {{ s | from_json if s is string and s.startswith('[') else [] }}
+                {% if s is not string and s is iterable %}
+                  {{ s | list }}
+                {% elif s is string and s.startswith('[') %}
+                  {{ s | from_json }}
+                {% else %}
+                  {{ [] }}
+                {% endif %}
               heute: "{{ now().strftime('%Y-%m-%d') }}"
               gestern: "{{ (now() - timedelta(days=1)).strftime('%Y-%m-%d') }}"
               vor_9_tagen: "{{ (now() - timedelta(days=9)).strftime('%Y-%m-%d') }}"
               letztes_100_datum: "{{ tage_liste | max if tage_liste | length > 0 else '2000-01-01' }}"
-              # AB V2.9.23: Es werden ALLE SECHS ToU-Register geprueft, nicht
-              # mehr nur Programm 1.
-              # VORHER: aktueller_min_soc = states(var_wr_tou_1) - der Blueprint
-              # sah also nur Programm 1. Wurde z.B. nur Programm 3 (manuell in
-              # der Deye-App oder durch einen fehlgeschlagenen Schreibvorgang)
-              # auf einen anderen Wert gesetzt, blieb das unbemerkt: Programm 1
-              # stimmte ja mit dem Soll ueberein -> die innere if-Bedingung
-              # ('aktueller_min_soc != ziel') war false -> kein Nachsetzen.
-              # Die sechs Register konnten so dauerhaft auseinanderlaufen.
-              # JETZT: min und max ueber alle sechs. Weicht IRGENDEINES vom Soll
-              # ab, unterscheidet sich mindestens einer der beiden Werte vom
-              # Zielwert -> es wird nachgesetzt (alle sechs werden ohnehin
-              # gemeinsam geschrieben).
+              # ALLE SECHS ToU-REGISTER PRUEFEN
+              #
+              # Frueher wurde nur Programm 1 gelesen. Wurde z.B. nur Programm 3 extern
+              # geaendert (Deye-App, fehlgeschlagener Schreibvorgang), blieb das
+              # unbemerkt - Programm 1 stimmte ja mit dem Soll ueberein, also wurde
+              # nicht nachgesetzt. Die sechs Register konnten so dauerhaft
+              # auseinanderlaufen.
+              #
+              # Jetzt: min und max ueber alle sechs. Weicht irgendeines vom Soll ab,
+              # unterscheidet sich min oder max vom Zielwert -> es wird nachgesetzt
+              # (alle sechs werden ohnehin gemeinsam geschrieben).
               tou_werte: >
                 {{ [
                      states(var_wr_tou_1) | float(20),
@@ -1829,7 +1806,7 @@ action:
                 sequence:
                   - if:
                       - condition: template
-                        # AB V2.9.23: Prueft ALLE SECHS Register (via min/max).
+                        # Prueft ALLE SECHS Register (via min/max).
                         # Weicht auch nur eines vom Sollwert ab, wird nachgesetzt.
                         value_template: "{{ not tou_alle_auf_default }}"
                     then:
@@ -1851,29 +1828,17 @@ action:
                           entity_id: !input helper_logbook_dummy
               - alias: "Seit 9 Tagen nicht voll"
                 conditions:
-                  # FIX V2.9.22: Zusaetzliche Bedingung 'tage_liste | length > 0'.
+                  # GUARD: 'tage_liste | length > 0'
                   #
-                  # VORFALL 13.07.2026, Standort 1: Der Tracking-Sensor
-                  # (json_tracking_sensor) fiel aus (Render-Fehler im Package,
-                  # Sensor ging auf 'unavailable'). Dadurch war tage_liste LEER,
-                  # und letztes_100_datum fiel auf den Fallback '2000-01-01'.
-                  # Die Bedingung '2000-01-01 < vor_9_tagen' war damit trivial
-                  # wahr -> der Blueprint hat die ToU-Programme 1-6 von 20% auf
-                  # 30% HOCHGESETZT, obwohl die Batterie an praktisch jedem der
-                  # Vortage voll war (Top-Balancing im Log belegt).
-                  # Das ist eine echte FEHLSTEUERUNG (mehr Netzladung nachts),
-                  # ausgeloest durch einen Sensorausfall.
+                  # Ohne Tracking-Daten wird KEINE Entscheidung getroffen.
                   #
-                  # URSACHE DES DENKFEHLERS: '2000-01-01' ist ein FALLBACK fuer
-                  # "keine Daten" - der Code behandelte ihn aber wie einen echten
-                  # Messwert ("seit 26 Jahren nicht voll"). "Keine Daten" ist
-                  # aber NICHT dasselbe wie "nicht voll gewesen".
-                  #
-                  # LOESUNG: Ohne Tracking-Daten wird KEINE Entscheidung
-                  # getroffen. Faellt der Sensor aus, bleibt der ToU-SOC einfach
-                  # unveraendert, bis wieder gueltige Daten vorliegen.
-                  # (Gleiches Prinzip wie beim Deye-Retry: Fallback-Werte duerfen
-                  #  keine Steuerungsaktionen ausloesen.)
+                  # Grund: Faellt der Tracking-Speicher aus (leer/unavailable), ist
+                  # tage_liste leer und letztes_100_datum faellt auf den Fallback
+                  # '2000-01-01'. Die Bedingung '2000-01-01 < vor_9_tagen' waere dann
+                  # trivial wahr - der Blueprint wuerde die ToU-Programme hochsetzen,
+                  # obwohl die Batterie an praktisch jedem Vortag voll war. Ein
+                  # Fallback-Wert ist eben KEIN Messwert: 'keine Daten' ist etwas anderes
+                  # als 'nicht voll gewesen'.
                   - condition: template
                     value_template: "{{ tage_liste | length > 0 }}"
                   - condition: template
@@ -1881,7 +1846,7 @@ action:
                 sequence:
                   - if:
                       - condition: template
-                        # AB V2.9.23: Prueft ALLE SECHS Register (via min/max).
+                        # Prueft ALLE SECHS Register (via min/max).
                         value_template: "{{ not tou_alle_auf_escalation }}"
                     then:
                       - action: number.set_value
@@ -2057,23 +2022,17 @@ action:
           - condition: trigger
             id: peak_shaving_ende
         sequence:
-          # FIX B (V2.9.24): Der Trigger 'peak_shaving_ende' lauscht auf den
-          # Zustandswechsel des Hold-Timers (from: active -> to: idle). Dieser
-          # Wechsel tritt aber bei ZWEI voellig verschiedenen Ereignissen auf:
-          #   1. Der Timer ist wirklich ABGELAUFEN (kein Export mehr).
-          #   2. Der Timer wurde per timer.cancel ABGEBROCHEN - naemlich vom
-          #      Zweig "Loescht den Peak-Shaving Timer", sobald die WP-Sperre
-          #      greift (WP-Anlaufphase laeuft).
-          # Bisher wurde IMMER "Hold-Timer abgelaufen" geloggt - auch im Fall 2.
-          # Das war irrefuehrend (Vorfall 13.07.2026: Meldung "abgelaufen",
-          # obwohl der Timer 2 Sekunden alt war und der Export bei 6599W lag).
+          # ABLAUF ODER ABBRUCH UNTERSCHEIDEN
           #
-          # UNTERSCHEIDUNG ueber wp_sperre_aktiv (NICHT ueber den Export - der
-          # kann in beiden Faellen hoch oder niedrig sein):
-          #   wp_sperre_aktiv == true  -> die WP-Anlaufphase laeuft -> es war
-          #                               ein ABBRUCH durch die WP-Sperre.
-          #   wp_sperre_aktiv == false -> keine WP-Sperre aktiv -> der Timer
-          #                               ist reguleaer ABGELAUFEN.
+          # Der Trigger 'peak_shaving_ende' lauscht auf den Zustandswechsel des
+          # Hold-Timers (active -> idle). Dieser Wechsel tritt bei ZWEI
+          # verschiedenen Ereignissen auf:
+          #   1. Der Timer ist wirklich ABGELAUFEN (kein Export mehr).
+          #   2. Der Timer wurde per timer.cancel ABGEBROCHEN - vom Zweig
+          #      'Loescht den Peak-Shaving Timer', sobald die WP-Sperre greift.
+          #
+          # Unterschieden wird ueber wp_sperre_aktiv (NICHT ueber den Export - der
+          # kann in beiden Faellen hoch oder niedrig sein).
           - choose:
               - alias: "Abbruch durch WP-Sperre"
                 conditions:
@@ -2096,17 +2055,15 @@ action:
       - alias: "Zieht den Peak-Shaving Timer auf"
         conditions:
           - condition: template
-            # FIX A (V2.9.24): Zusaetzlich 'not wp_boost_startet_gleich'.
-            # Ohne diese Pruefung wurde der Timer gestartet und - weil der
-            # WP-Boost weiter unten im SELBEN Lauf die WP-Anlaufphase startet
-            # und der Folge-Trigger die Automation erneut ausfuehrt - sofort
-            # wieder gecancelt. Das erzeugte die falsche Meldung
-            # "Hold-Timer abgelaufen" (siehe Kommentar bei wp_boost_startet_gleich).
+            # Zusatzbedingung 'not wp_boost_startet_gleich':
+            # Ohne sie wurde der Timer gestartet und - weil der WP-Boost weiter unten
+            # im SELBEN Lauf die Anlaufphase startet und der Folge-Trigger die
+            # Automation erneut ausfuehrt - sofort wieder gecancelt. Das erzeugte die
+            # falsche Meldung 'Hold-Timer abgelaufen'.
             #
-            # WICHTIG: Das Neustarten des Timers bei jedem Lauf bleibt gewollt!
-            # Solange der Export > Schwelle liegt (und keine WP laeuft), wird
-            # der Hold-Timer immer wieder auf volle Dauer gesetzt - Peak-Shaving
-            # laeuft also durch, solange exportiert wird.
+            # Das Neustarten bei jedem Lauf bleibt gewollt: Solange Export >
+            # Schwelle (und keine WP laeuft), wird der Hold-Timer immer wieder auf
+            # volle Dauer gesetzt - Peak-Shaving laeuft also durch.
             value_template: >
               {{ real_export > schwelle_peak_shaving
                  and not wp_sperre_aktiv
