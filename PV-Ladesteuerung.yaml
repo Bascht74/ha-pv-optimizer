@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V2.9.26]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.0.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -726,7 +726,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V2.9.26]"
+      bp_version: "[V3.0.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1042,7 +1042,7 @@ action:
       json_profil: >
         {% set j_str = states(var_hausverbrauch_json) %}
         {% set default_arr = [0.2] * 48 %}
-        {# V2.9.26: Auch hier kann HA bereits eine native Liste liefern. #}
+        {# Auch hier kann HA bereits eine native Liste liefern. #}
         {% if j_str is not string and j_str is iterable and j_str | length > 20 %}
           {{ j_str | list }}
         {% elif j_str is string and j_str | length > 20 %}
