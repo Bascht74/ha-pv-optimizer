@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.0.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.1.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -726,7 +726,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.0.1]"
+      bp_version: "[V3.1.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1235,7 +1235,7 @@ action:
            verf_stunden >= (min_reststunden | float(1.0)) and
            benoetigt_kwh > (fallback_min_kwh | float(1.0)) }}
 
-      temp_log_addon: " (Deckel durch Batterietemperatur: {{ temperatur_limit_ampere | round(0) }}A bei Min: {{ temp_min_live | round(1) }}°C / Max: {{ temp_max_live | round(1) }}°C / {{ temp_limit_crate | round(2) }}C)"
+      temp_log_addon: "{{ ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)' if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
@@ -1251,8 +1251,7 @@ action:
       heute_schon_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
       aktueller_modus: "{{ states(var_lade_modus) if var_lade_modus != '' else 'normal' }}"
       top_balancing_noetig: >
-        {{ aktueller_soc >= top_balancing_soc and
-        ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)))
+        {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)))
         or (states(var_timer_cooldown) == 'active' and not zwangsladung_aktiv)) }}
 
       schnee_falle_aktiv: >
@@ -1454,6 +1453,7 @@ action:
       - condition: template
         value_template: >
           {{ (schatten_raw_soc | float(-1)) > 100 and
+             (states(var_schatten_bms) | float(0)) >= 100 and
              (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
              states(var_timer_cooldown) != 'active' }}
     then:
@@ -1723,7 +1723,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximum freigegeben (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p0 }} A | Temperatur-Begrenzung: {{ temperatur_limit_ampere | round(0) }} A).{{ temp_log_addon }}"
+                  message: "{{ bp_version }} Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximum freigegeben (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p0 }} A).{{ temp_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2298,7 +2298,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing): Batterie über {{ top_balancing_soc }} % und höchste Zellspannung über {{ top_balancing_voltage | round(3) }} V. Ladestrom auf {{ target_p1 }} A gesetzt (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p1 }} A)."
+                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing): Höchste Zellspannung über {{ top_balancing_voltage | round(3) }} V (Ladestand aktuell {{ aktueller_soc | round(0) }} %). Ladestrom auf {{ target_p1 }} A gesetzt (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p1 }} A)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
