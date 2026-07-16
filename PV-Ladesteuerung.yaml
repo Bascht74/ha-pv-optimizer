@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.1.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.2.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -632,6 +632,9 @@ trigger_variables:
   tv_vmax2: !input vmax2_sensor
   tv_vmax3: !input vmax3_sensor
   tv_top_balancing_voltage: !input top_balancing_voltage
+  tv_grid_export: !input grid_export_sensor
+  tv_schwelle_peak_shaving: !input schwelle_peak_shaving
+  tv_schwelle_wp_boost: !input schwelle_wp_boost
 
 trigger:
   - alias: "Trigger: JSON Profil pflegen (Alle 30 Min)"
@@ -650,6 +653,23 @@ trigger:
       {% set schwelle = tv_top_balancing_voltage | float(3.4) %}
       {{ v1 >= schwelle or v2 >= schwelle or v3 >= schwelle }}
     id: vmax_schwelle
+  - alias: "Trigger: Netz-Export über Peak-Shaving-Schwelle (sofort fangen)"
+    # Ohne diesen Trigger wurde der Netz-Export nur beim 5-Min-Raster geprüft;
+    # kurze Export-Spitzen zwischen den Rastern lösten kein Peak-Shaving aus.
+    # Polung: Roh-Sensor ist negativ bei Einspeisung -> * -1 ergibt positiven
+    # Export, Vergleich mit der positiven Schwelle. 30 s Entprellung gegen
+    # Sekunden-Zappler; der 30-Min-Hold-Timer hält danach ohnehin durch.
+    platform: template
+    value_template: >
+      {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_peak_shaving | float(6500)) }}
+    for: "00:00:30"
+    id: export_peak_schwelle
+  - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (sofort fangen)"
+    platform: template
+    value_template: >
+      {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
+    for: "00:00:30"
+    id: export_wp_boost_schwelle
   - alias: "Trigger: Tägliche Maintenance (Reset & BMS Check)"
     platform: time
     at: "23:58:00"
@@ -726,7 +746,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.1.1]"
+      bp_version: "[V3.2.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
