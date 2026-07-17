@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.2.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.3.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -746,7 +746,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.2.0]"
+      bp_version: "[V3.3.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1000,6 +1000,15 @@ action:
       max_ampere: "{{ max_ampere | float(140) }}"
       min_ampere: "{{ min_ampere | float(7) }}"
       peak_ampere: "{{ peak_ampere | float(48) }}"
+
+      # Schatten-BMS Roh-SOC (ungeklemmt, aus Package-Sensor-Attribut).
+      # Wird für die Tare-Nachkalibrierung am Zellausgleich-Ende gebraucht.
+      schatten_raw_soc: >
+        {% if var_schatten_bms == '' or var_helper_tare_charge == '' or var_battery_total_charge == '' %}
+          -1
+        {% else %}
+          {{ state_attr(var_schatten_bms, 'raw_drift_soc') | float(-1) }}
+        {% endif %}
       nominale_spannung: "{{ nominale_spannung | float(51.2) }}"
       top_balancing_soc: "{{ top_balancing_soc | float(97) }}"
       top_balancing_voltage: "{{ top_balancing_voltage | float(3.4) }}"
@@ -1452,49 +1461,6 @@ action:
       - action: persistent_notification.dismiss
         data:
           notification_id: "bms_offline_warning"
-
-  # ====================================================================
-  # SCHATTEN-BMS ANTI-WINDUP (alle 5 Min):
-  # Liest das Attribut 'raw_drift_soc' des Schatten-BMS-Sensors (Package).
-  # Liegt der ungeclampte SOC > 100% (Nachladung nach dem Tare-Zeitpunkt),
-  # werden beide Tare-Helfer auf die aktuellen Zählerstände nachgeführt
-  # -> raw_drift_soc springt zurück auf exakt 100%.
-  # Die SOC-Formel (cap/eff) lebt NUR im Package-Sensor, nicht hier.
-  # ====================================================================
-  - variables:
-      schatten_raw_soc: >
-        {% if var_schatten_bms == '' or var_helper_tare_charge == '' or var_battery_total_charge == '' %}
-          -1
-        {% else %}
-          {{ state_attr(var_schatten_bms, 'raw_drift_soc') | float(-1) }}
-        {% endif %}
-
-  - if:
-      - condition: template
-        value_template: >
-          {{ (schatten_raw_soc | float(-1)) > 100 and
-             (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) and
-             (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
-             states(var_timer_cooldown) != 'active' }}
-    then:
-      - action: logbook.log
-        data:
-          name: "PV Optimizer"
-          message: >
-            {{ bp_version }} Interne SOC-Berechnung – Überlauf-Schutz (Anti-Windup): Der rechnerische Ladestand lag bei {{ schatten_raw_soc | float(0) | round(2) }} % (über 100 %).
-            Der Nullpunkt (Tare) wurde auf die aktuellen Zählerstände nachgeführt (geladen: {{ states(var_helper_tare_charge) | float(0) | round(2) }} → {{ states(var_battery_total_charge) | float(0) | round(2) }} kWh |
-            entladen: {{ states(var_helper_tare_discharge) | float(0) | round(2) }} → {{ states(var_battery_total_discharge) | float(0) | round(2) }} kWh). Interner SOC neu auf 100 % verankert.
-          entity_id: !input helper_logbook_dummy
-      - action: input_number.set_value
-        target:
-          entity_id: "{{ var_helper_tare_charge }}"
-        data:
-          value: "{{ states(var_battery_total_charge) | float(0) }}"
-      - action: input_number.set_value
-        target:
-          entity_id: "{{ var_helper_tare_discharge }}"
-        data:
-          value: "{{ states(var_battery_total_discharge) | float(0) }}"
 
   # 100%-TAGE-TRACKING
   #
@@ -2004,13 +1970,22 @@ action:
           - condition: trigger
             id: float_boost_ende
         sequence:
-          # SCHATTEN-BMS-TARE: jetzt HIER (am Zellpflege-Ende) statt am Balancing-
-          # Start. Damit ist die gesamte Nachladung der Balancing-Phase im
-          # Zähler enthalten und der Schatten-SOC steht exakt jetzt auf 100%.
-          # Greift auch nach dem Zwangsladungs-Cooldown (Batterie ebenfalls voll).
+          # SCHATTEN-BMS-TARE am Zellausgleich-ENDE: nur noch als NACHKALIBRIERUNG,
+          # falls die Batterie am Ende noch voll ist. Der harte 100%-Anker sitzt
+          # jetzt am START (Spannungs-Schwelle). Hier gelten die gleichen
+          # Bedingungen wie beim früheren Anti-Windup:
+          #   raw_drift > 100  UND  Zellspannung >= Schwelle  UND  geladen seit Tare.
+          # Ist die Spannung zwischenzeitlich gefallen (Verbrauch), wird NICHT
+          # kalibriert -> der START-Anker bleibt korrekt stehen.
+          - variables:
+              ende_kalibrieren: >
+                {{ (schatten_raw_soc | float(-1)) > 100 and
+                   (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) and
+                   (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
+                   var_helper_tare_charge != '' and var_battery_total_charge != '' }}
           - if:
               - condition: template
-                value_template: "{{ var_helper_tare_charge != '' and var_battery_total_charge != '' }}"
+                value_template: "{{ ende_kalibrieren }}"
             then:
               - action: input_number.set_value
                 target:
@@ -2022,6 +1997,8 @@ action:
                   entity_id: "{{ var_helper_tare_discharge }}"
                 data:
                   value: "{{ states(var_battery_total_discharge) | float(0) }}"
+          # Float-Reset läuft IMMER (unabhängig von der Kalibrierung), plus Log,
+          # dessen Wortlaut sich danach richtet, ob nachkalibriert wurde.
           - if:
               - condition: template
                 value_template: "{{ var_wr_float_voltage != '' }}"
@@ -2029,7 +2006,8 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) zurückgesetzt ({{ var_float_balancing | round(3) }} V → {{ var_float_normal | round(3) }} V), interne SOC-Berechnung (Nullpunkt/Tare) auf 100 % kalibriert."
+                  message: >
+                    {{ bp_version }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) zurückgesetzt ({{ var_float_balancing | round(3) }} V → {{ var_float_normal | round(3) }} V).{% if ende_kalibrieren %} Interne SOC-Berechnung (Nullpunkt/Tare) noch einmal auf 100 % nachkalibriert (Batterie am Ende noch voll).{% else %} Keine Nachkalibrierung – die Batterie ist am Ende nicht mehr voll (Zellspannung unter Schwelle), der SOC-Anker vom Balancing-Start bleibt gültig.{% endif %}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2286,9 +2264,26 @@ action:
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
-              # HINWEIS: Das Schatten-BMS-Tare wird NICHT mehr hier (Start) gesetzt,
-              # sondern am Ende der Zellpflege (float_boost_ende) - dann ist die
-              # Nachladung der Balancing-Phase vollständig im Zähler enthalten.
+              # SCHATTEN-BMS-TARE: HIER am START. Sobald die Zellspannung die
+              # Balancing-Schwelle erreicht, ist die Batterie physikalisch voll
+              # -> Tare hart auf die aktuellen Zählerstände, interner SOC = 100%.
+              # Vorteil ggü. Ende-Verankerung: Kommt während der Phase Verbrauch,
+              # sinkt der SOC bereits korrekt; am Ende wird nur noch nachkalibriert,
+              # falls die Batterie dann noch voll ist (siehe float_boost_ende).
+              - if:
+                  - condition: template
+                    value_template: "{{ var_helper_tare_charge != '' and var_battery_total_charge != '' }}"
+                then:
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ var_helper_tare_charge }}"
+                    data:
+                      value: "{{ states(var_battery_total_charge) | float(0) }}"
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ var_helper_tare_discharge }}"
+                    data:
+                      value: "{{ states(var_battery_total_discharge) | float(0) }}"
               # 3. Ladestrom direkt setzen + EIN kombinierter Logbuch-Eintrag
               - action: number.set_value
                 target:
@@ -2307,7 +2302,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing START): Höchste Zellspannung ≥ {{ top_balancing_voltage | round(3) }} V bei Ladestand {{ aktueller_soc | round(0) }} %. Timer gestartet, Batterie als voll markiert. Ladestrom auf {{ target_p1 }} A gedrosselt (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p1 }} A). Kalibrierung der internen SOC-Berechnung folgt am Ende des Zellausgleichs."
+                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing START): Höchste Zellspannung ≥ {{ top_balancing_voltage | round(3) }} V bei Ladestand {{ aktueller_soc | round(0) }} %. Timer gestartet, Batterie als voll markiert, interner SOC auf 100 % kalibriert. Ladestrom auf {{ target_p1 }} A gedrosselt (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p1 }} A)."
                   entity_id: !input helper_logbook_dummy
 
           # Spätere Register-Korrektur (nur wenn NICHT gerade gestartet, sonst doppelt)
