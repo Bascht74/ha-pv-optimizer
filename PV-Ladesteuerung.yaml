@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.4.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.5.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -8,7 +8,7 @@ blueprint:
 
   input:
     sec_battery_sensors:
-      name: "1. Batterie & BMS (Pflicht)"
+      name: "1) Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
       collapsed: true
@@ -74,7 +74,7 @@ blueprint:
           default: 350
           selector: {"number": {"min": 50, "max": 350, "step": 1, "unit_of_measurement": "A"}}
     sec_battery_control:
-      name: "2. Wechselrichter-Steuerung (Pflicht)"
+      name: "2) Wechselrichter-Steuerung (Pflicht)"
       description: >-
         Die Stellglieder, über die der Blueprint tatsächlich eingreift. Das sind schreibbare Entitäten (number/switch), keine Sensoren.
       collapsed: true
@@ -88,7 +88,7 @@ blueprint:
         wr_float_voltage_sensor:
           name: "Stellgröße: Float-Spannung (V) — optional"
           description: >-
-            Die number-Entität für die Erhaltungsladespannung. Der Blueprint hebt sie während der Zellpflege kurzzeitig an (Abschnitt 8) und setzt sie danach zurück. Leer lassen, wenn dein Wechselrichter das nicht unterstützt — dann entfällt nur die Spannungsanhebung, das Balancing läuft trotzdem.
+            Die number-Entität für die Erhaltungsladespannung. Der Blueprint hebt sie während des Zellausgleichs kurzzeitig an (Abschnitt 8) und setzt sie danach zurück. Leer lassen, wenn dein Wechselrichter das nicht unterstützt — dann entfällt nur die Spannungsanhebung, das Balancing läuft trotzdem.
           default: ""
           selector: {"entity": {"domain": "number"}}
         wr_grid_charge_switch:
@@ -152,7 +152,7 @@ blueprint:
           default: 50
           selector: {"number": {"min": 10, "max": 140, "step": 1, "unit_of_measurement": "A"}}
     sec_net_pv:
-      name: "3. Netz & PV-Leistung (Pflicht)"
+      name: "3) Netz & PV-Leistung (Pflicht)"
       description: >-
         Messwerte für Netzbezug/-einspeisung und die aktuelle PV-Erzeugung.
       collapsed: true
@@ -166,7 +166,7 @@ blueprint:
         grid_export_kwh_heute:
           name: "Netz-Einspeisung heute (kWh)"
           description: >-
-            Sensor mit der heute eingespeisten Energie in kWh (Tageszähler). Wird nur für die Statistik „verschenkte Speicherkapazität“ ausgewertet: Wie viel Energie ging ins Netz, obwohl die Batterie noch Platz hatte? Beeinflusst die Steuerung nicht.
+            Sensor mit der heute eingespeisten Energie in kWh (Tageszähler). Wird nur für die Statistik „verschenkte Speicherkapazität" ausgewertet — der Blueprint prüft damit, ob tagsüber ungenutzte Ladekapazität blieb und diese Energie in der Folgenacht tatsächlich gefehlt hat. Beeinflusst die Steuerung nicht.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         pv_power_sensor:
@@ -182,7 +182,7 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_solcast:
-      name: "4. Solcast-Prognose (Pflicht)"
+      name: "4) Solcast-Prognose (Pflicht)"
       description: >-
         Die PV-Vorhersage. Sie ist die Grundlage für die vorausschauende Ladeplanung — ohne sie kann der Blueprint nicht entscheiden, ob er mit dem Laden warten kann.
       collapsed: true
@@ -212,7 +212,7 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_helpers:
-      name: "5. Helfer-Entitäten (Pflicht — einmalig anlegen)"
+      name: "5) Helfer-Entitäten (Pflicht)"
       description: >-
         Diese Helfer speichern den Zustand zwischen zwei Läufen. Sie müssen einmalig angelegt werden (siehe mitgeliefertes Package). Der Blueprint schreibt hier hinein — es sind keine Sensoren.
       collapsed: true
@@ -256,7 +256,7 @@ blueprint:
         speicherverlust_gesamt:
           name: "Helfer: verschenkte Speicherkapazität (kWh)"
           description: >-
-            input_number als Gesamtzähler: Wie viel Energie ging ins Netz, obwohl die Batterie noch Platz hatte? Reine Statistik — beeinflusst die Steuerung nicht.
+            input_number als Gesamtzähler für tatsächlich verschenkte Speicherkapazität: Der Blueprint merkt sich abends, wie viel Ladekapazität ungenutzt blieb (gedeckelt durch die Einspeisung), verbucht diese Menge aber erst, wenn die Batterie in der Folgenacht bis auf die Reserve leerläuft — nur dann hätte die Energie wirklich gefehlt. Reine Statistik, beeinflusst die Steuerung nicht.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
         helper_offener_verlust:
@@ -326,7 +326,7 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_peak_shaving:
-      name: "6. Peak-Shaving (Netz-Überschuss puffern)"
+      name: "6) Peak-Shaving (Netz-Überschuss puffern)"
       description: >-
         Wenn viel ins Netz eingespeist wird, kann die Batterie den Überschuss zwischenpuffern, statt ihn zu verschenken. Praktisch bei Einspeise-Begrenzung oder geringer Einspeisevergütung.
       collapsed: true
@@ -350,7 +350,7 @@ blueprint:
           default: "00:30:00"
           selector: {"time": {}}
     sec_waermepumpe:
-      name: "7. Wärmepumpe / PV-Boost (Optional)"
+      name: "7) Wärmepumpe / PV-Boost (Optional)"
       description: >-
         Optional: Bei PV-Überschuss kann die Wärmepumpe den Warmwasserspeicher vorrangig aufheizen. Die Batterie tritt dafür zurück. Wer keine Wärmepumpe hat, lässt den Schalter unten einfach aus.
       collapsed: true
@@ -440,7 +440,7 @@ blueprint:
           default: "01:00:00"
           selector: {"time": {}}
     sec_float_voltage:
-      name: "8. Zellpflege & Top-Balancing (Feintuning)"
+      name: "8) Zellausgleich / Top-Balancing (Feintuning)"
       description: >-
         Damit die Zellen im Gleichgewicht bleiben, muss die Batterie regelmäßig voll werden. Diese Werte steuern, wann und wie lange der Blueprint dafür sorgt.
       collapsed: true
@@ -458,13 +458,13 @@ blueprint:
           default: 97
           selector: {"number": {"min": 70, "max": 100, "step": 1, "unit_of_measurement": "%"}}
         duration_top_balancing:
-          name: "Dauer der Zellpflege"
+          name: "Dauer des Zellausgleichs"
           description: >-
             Zeitdauer (hh:mm:ss), die das Top-Balancing nach dem Start läuft. Währenddessen wird der Ladestrom auf den Minimalwert (Abschnitt 2) gedrosselt, damit die Zellspannung oben bleibt und der Balancer arbeiten kann. Länger = gründlicheres Balancing, aber die Batterie nimmt in dieser Zeit kaum PV-Überschuss auf.
           default: "01:00:00"
           selector: {"time": {}}
         float_voltage_balancing:
-          name: "Float-Spannung während Zellpflege (V)"
+          name: "Float-Spannung während Zellausgleich (V)"
           description: >-
             Auf diesen Wert hebt der Blueprint die Erhaltungsladespannung während des Balancings an. Nur wirksam, wenn du in Abschnitt 2 eine Float-Entität hinterlegt hast.
           default: 55.2
@@ -472,7 +472,7 @@ blueprint:
         float_voltage_normal:
           name: "Float-Spannung normal (V)"
           description: >-
-            Erhaltungsladespannung in Volt für den Normalbetrieb. Auf diesen Wert stellt der Blueprint zurück, sobald die Zellpflege beendet ist. Sollte dem Standardwert deines Wechselrichters entsprechen (bei 16S-LiFePO4 typisch 54,4 V).
+            Erhaltungsladespannung in Volt für den Normalbetrieb. Auf diesen Wert stellt der Blueprint zurück, sobald der Zellausgleich beendet ist. Sollte dem Standardwert deines Wechselrichters entsprechen (bei 16S-LiFePO4 typisch 54,4 V).
           default: 53.6
           selector: {"number": {"min": 50.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
         default_tou_soc:
@@ -488,7 +488,7 @@ blueprint:
           default: 30
           selector: {"number": {"min": 10, "max": 60, "step": 1, "unit_of_measurement": "%"}}
     sec_temperature:
-      name: "9. Temperatur-Limits & C-Raten (Feintuning)"
+      name: "9) Temperatur-Limits & C-Raten (Feintuning)"
       description: >-
         Lithium-Zellen dürfen bei Kälte nur langsam (oder gar nicht) geladen werden. Der Blueprint begrenzt den Ladestrom deshalb temperaturabhängig. Die Voreinstellungen sind konservativ und passen für die meisten LiFePO4-Systeme.
       collapsed: true
@@ -578,7 +578,7 @@ blueprint:
           default: 0.0
           selector: {"number": {"min": 0.0, "max": 0.5, "step": 0.01, "mode": "slider"}}
     sec_tuning:
-      name: "10. Lade-Strategie & Zeitsteuerung (Feintuning)"
+      name: "10) Lade-Strategie & Zeitsteuerung (Feintuning)"
       description: >-
         Hier stellst du ein, wie vorausschauend der Blueprint plant. Die Voreinstellungen sind ein guter Startpunkt — meist muss hier nichts angepasst werden.
       collapsed: true
@@ -598,13 +598,13 @@ blueprint:
         faktor_fallback:
           name: "Ladefaktor Eskalation"
           description: >-
-            Multiplikator für die Eskalations-Prüfung (typisch 1,3, also strenger als der Normalfaktor). Damit entscheidet der Blueprint, ob die verbleibende Sonnenzeit überhaupt noch reicht. Reicht sie auch mit diesem Faktor nicht, gibt er die Feinsteuerung auf und schaltet auf vollen Ladestrom („Fall B“).
+            Sicherheitsfaktor für die Eskalations-Prüfung (typisch 1,2–1,3). Der Blueprint vergleicht die noch erwartete PV-Energie (Prognose abzüglich Hausverbrauch) mit dem, was die Batterie noch aufnehmen kann — multipliziert mit diesem Faktor. Reicht die erwartete Energie auch dann nicht, gibt er die Feinsteuerung auf und lädt mit vollem Strom, solange noch Sonne da ist („Fall B"). Höher = das System schaltet früher auf Volllast.
           default: 1.2
           selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
         puffer_kwh:
           name: "Sicherheits-Puffer (kWh)"
           description: >-
-            Fester Energie-Zuschlag in kWh auf den berechneten Bedarf. Fängt Prognosefehler ab: Der Blueprint plant so, als bräuchte die Batterie etwas mehr, als sie eigentlich braucht. Bei sehr wechselhaftem Wetter erhöhen.
+            Sicherheitsabschlag in kWh auf die erwartete PV-Energie. Der Blueprint rechnet mit etwas weniger Ertrag, als die Prognose verspricht — dadurch endet die Morgen-Blockade früher und die Eskalation auf vollen Ladestrom („Fall B") greift eher. Bei sehr wechselhaftem Wetter erhöhen. Wirkt auf die Energiebilanz, nicht auf den Ladestrom selbst.
           default: 1.0
           selector: {"number": {"min": 0.0, "max": 5.0, "step": 0.1}}
         fallback_max_soc:
@@ -708,13 +708,13 @@ trigger:
     to: "idle"
     from: "active"
     id: zwangsladung_ende
-  - alias: "Trigger Float-Boost START: Zellpflege Timer läuft los"
+  - alias: "Trigger Float-Boost START: Zellausgleich-Timer läuft los"
     platform: state
     entity_id: !input helper_timer_cooldown
     to: "active"
     from: "idle"
     id: float_boost_start
-  - alias: "Trigger Float-Boost ENDE: Zellpflege Timer abgelaufen"
+  - alias: "Trigger Float-Boost ENDE: Zellausgleich-Timer abgelaufen"
     platform: state
     entity_id: !input helper_timer_cooldown
     to: "idle"
@@ -752,7 +752,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.4.0]"
+      bp_version: "[V3.5.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1482,7 +1482,14 @@ action:
             {% endif %}
           {% endfor %}
         {% endif %}
-        {% set ziel = faktor_ziel_puffer * freie_kwh %}
+        {# Ziel-Energie fuer die T-Suche: bewusst STRENGER als beim Ladestrom.
+           Produkt aus dem Ladestrom-Puffer (Ungeplantes) und dem Eskalations-
+           faktor (reicht die erwartete Energie?). Begruendung: Die Blockade ist
+           asymmetrisch - endet sie zu spaet, wird die Batterie nicht mehr voll;
+           endet sie zu frueh, kostet das nur etwas Peak-Shaving-Fenster, und
+           der Ladestrom kann bei viel Ueberschuss ohnehin wieder hochgeregelt
+           werden. Deshalb lieber frueher aus der Blockade. #}
+        {% set ziel = faktor_ziel_puffer * faktor_fallback * freie_kwh %}
         {% set ns2 = namespace(best='', praefix=0.0, netto_ab_t=0.0) %}
         {% for paar in ns.kand %}
           {% if (ns.gesamt - ns2.praefix) >= ziel %}
@@ -1502,10 +1509,11 @@ action:
       blockade_dyn_gesamt: "{{ blockade_dyn.gesamt | default(0) | float(0) }}"
       blockade_dyn_netto_ab_t: "{{ blockade_dyn.netto_ab_t | default(0) | float(0) }}"
       # BLOCKADE-LOGIK (dynamisches Ende):
-      # Existiert ein T (spaetester Ladebeginn, ab dem Netto >= 1,3 x frei):
-      # blockieren. T wandert bei sinkender Prognose von selbst nach vorn.
-      # Kein T mehr -> direkte Freigabe an die Kaskade (Prio 8). Der Faktor
-      # faktor_fallback (1,2) wird NUR noch von Fall B (Max-Verriegelung) genutzt.
+      # Existiert ein T (spaetester Ladebeginn, ab dem noch genug Netto-Energie
+      # kommt): blockieren. Das Ziel ist bewusst streng gerechnet - Produkt aus
+      # faktor_ziel_puffer und faktor_fallback -, damit die Blockade lieber zu
+      # frueh als zu spaet endet. T wandert bei sinkender Prognose von selbst
+      # nach vorn. Kein T mehr -> direkte Freigabe an die Kaskade (Prio 8).
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
@@ -2600,7 +2608,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 6 (Morgen-Blockade): Laden vorerst gestoppt ({{ null_ampere }} A) – die Sonne liefert später am Tag genug, um die Batterie rechtzeitig voll zu bekommen.
-                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Prognose ab Blockade-Ende bis Tagesende: {{ blockade_dyn_netto_ab_t | round(1) }} kWh verfügbar ≥ {{ (freie_kwh * faktor_ziel_puffer) | round(1) }} kWh Bedarf (verfügbare Ladekapazität {{ freie_kwh | round(1) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }}).
+                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Prognose ab Blockade-Ende bis Tagesende: {{ blockade_dyn_netto_ab_t | round(1) }} kWh verfügbar ≥ {{ (freie_kwh * faktor_ziel_puffer * faktor_fallback) | round(1) }} kWh Bedarf (verfügbare Ladekapazität {{ freie_kwh | round(1) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }}).
                     Gesamt-Überschuss-Prognose Resttag (ab nächster Halbstunde): {{ blockade_dyn_gesamt | round(1) }} kWh. Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ null_ampere }} A.
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
