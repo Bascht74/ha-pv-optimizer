@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.6.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.6.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -650,6 +650,7 @@ trigger:
   - alias: "Trigger: Laufende Überwachung (alle 5 Minuten)"
     platform: time_pattern
     minutes: "/5"
+    id: monitoring_5min
   - alias: "Trigger: Zellspannungs-Schwelle erreicht (Top-Balancing sofort fangen)"
     platform: template
     value_template: >
@@ -762,7 +763,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.6.0]"
+      bp_version: "[V3.6.1]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -804,13 +805,21 @@ action:
             value_template: >
               {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
         then:
-          # Log-Entprellung ohne Helfer: Die Warnung erscheint nur einmal je
-          # halber Stunde (Minute 0-4 oder 30-34), damit das Logbuch bei einem
-          # anhaltenden Ausfall nicht im 5-Min-Takt zugespammt wird. Die
-          # Berechnung mit Ersatzwerten läuft davon unberührt jeden Durchlauf.
+          # Log-Entprellung ohne Helfer: Die Warnung soll nur einmal je halber
+          # Stunde erscheinen. Die alte Fensterprüfung (Minute 0-4 oder 30-34)
+          # war NICHT an einen bestimmten Lauf gebunden - liefen während eines
+          # anhaltenden Ausfalls mehrere Trigger fast gleichzeitig (z. B.
+          # Wechselrichter-Neustart bei einem Firmware-Update, mehrere Trigger
+          # gequeued), feuerte die Warnung je Lauf erneut, statt nur einmal im
+          # Fenster (Beleg 18.07.2026, Dachterrasse: zwei Warnungen im Abstand
+          # von 10 s). Fix: exakt an den 5-Minuten-Takt-Trigger UND die exakte
+          # Minute 0/30 gebunden - pro Halbstunde genau ein möglicher Log-Lauf,
+          # unabhängig davon, wie viele andere Trigger im selben Fenster feuern.
+          # Die Berechnung mit Ersatzwerten läuft davon unberührt jeden
+          # Durchlauf (der Retry oben ist bewusst nicht trigger-gebunden).
           - if:
               - condition: template
-                value_template: "{{ now().minute < 5 or (now().minute >= 30 and now().minute < 35) }}"
+                value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
             then:
               - action: logbook.log
                 data:
@@ -2568,7 +2577,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Die erwartete Netzeinspeisungs-Energie reicht mit Sicherheitsfaktor {{ faktor_fallback }} nicht mehr aus, um die Batterie rechtzeitig voll zu bekommen. Benötigt: {{ benoetigt_kwh | round(1) }} kWh (verfügbare Ladekapazität {{ freie_kwh | round(1) }} + Nachladebedarf {{ defizit_kwh | round(1) }}), erwarteter Netto-PV-Überschuss bis Sonnenuntergang: {{ netto_tagesueberschuss | round(1) }} kWh. Feinsteuerung aufgegeben, Ladestrom fest auf Maximum ({{ max_ampere | round(0) }} A) gesetzt, es wird durchgeladen ohne Rückregeln (Modus 'Zeit-reicht-nicht' / fall_b_max). Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ max_ampere | round(0) }} A.{{ solcast_log_addon }}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Die erwartete Netzeinspeisungs-Energie reicht nicht mehr aus, um die Batterie rechtzeitig voll zu bekommen. Vergleich: verfügbare Ladekapazität {{ freie_kwh | round(1) }} kWh × Sicherheitsfaktor {{ faktor_fallback }} = {{ (freie_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > erwarteter Netto-PV-Überschuss bis Sonnenuntergang {{ netto_tagesueberschuss | round(1) }} kWh. Gesamtbedarf inkl. Nachladebedarf: {{ benoetigt_kwh | round(1) }} kWh (verfügbare Ladekapazität {{ freie_kwh | round(1) }} + Nachladebedarf {{ defizit_kwh | round(1) }}). Feinsteuerung aufgegeben, Ladestrom fest auf Maximum ({{ max_ampere | round(0) }} A) gesetzt, es wird durchgeladen ohne Rückregeln (Modus 'Zeit-reicht-nicht' / fall_b_max). Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ max_ampere | round(0) }} A.{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
