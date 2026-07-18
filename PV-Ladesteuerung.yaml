@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.3.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.4.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -257,6 +257,12 @@ blueprint:
           name: "Helfer: verschenkte Speicherkapazität (kWh)"
           description: >-
             input_number als Gesamtzähler: Wie viel Energie ging ins Netz, obwohl die Batterie noch Platz hatte? Reine Statistik — beeinflusst die Steuerung nicht.
+          default: ""
+          selector: {"entity": {"domain": "input_number"}}
+        helper_offener_verlust:
+          name: "Helfer: offener Speicherverlust-Kandidat (kWh)"
+          description: >-
+            input_number als Zwischenspeicher: Abends bei Sonnenuntergang wird hier der POTENZIELLE Verlust geparkt (ungenutzte Ladekapazität, gedeckelt durch die Tages-Einspeisung). Am Sonnenaufgang wird geprüft, ob die Batterie über Nacht wirklich leer wurde (SOC ≤ ToU-Min-SOC) — nur dann wird der Kandidat als echter Verlust verbucht, sonst verworfen. Normalerweise 0. Reine Statistik.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
         helper_zwangsladung_aktiv:
@@ -584,10 +590,10 @@ blueprint:
           default: "13:30:00"
           selector: {"time": {}}
         faktor_ziel_puffer:
-          name: "Ladefaktor normal"
+          name: "Sicherheitsfaktor für Ungeplantes"
           description: >-
-            Multiplikator für den berechneten Ladestrom (typisch 1,5). Der Blueprint ermittelt, wie viel Strom rechnerisch nötig wäre, um die Batterie bis Sonnenuntergang zu füllen — und multipliziert ihn mit diesem Faktor. Höher = die Batterie wird zügiger voll (sicherer bei Prognosefehlern, aber weniger Überschuss bleibt für Peak-Shaving). Niedriger = knapper kalkuliert, mehr Überschuss verfügbar.
-          default: 1.3
+            Zusätzlicher Puffer auf den berechneten Ladestrom (typisch 1,1–1,2). Der Blueprint simuliert anhand der Solar-Prognose, welcher Ladestrom mindestens nötig wäre, um die Batterie bis Sonnenuntergang zu füllen, und hebt ihn automatisch an, wenn die Prognose unsicher ist (optimistischer und pessimistischer Solcast-Wert weit auseinander). Dieser Faktor kommt zusätzlich obendrauf und deckt ab, was die Prognose gar nicht wissen kann — plötzliche Gewitter, ungeplante Verbraucher. Höher = die Batterie wird zügiger voll, aber weniger Überschuss bleibt für Peak-Shaving.
+          default: 1.2
           selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
         faktor_fallback:
           name: "Ladefaktor Eskalation"
@@ -746,7 +752,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.3.0]"
+      bp_version: "[V3.4.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -788,11 +794,19 @@ action:
             value_template: >
               {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
         then:
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ bp_version }} WARNUNG: Der Deye-Zähler (Battery Total Charge / geladene Gesamtenergie) ist auch nach 10 s erneutem Auslesen noch 'nicht verfügbar'. Dieser Durchlauf rechnet daher mit Ersatzwerten – bitte die Deye-Anbindung prüfen!"
-              entity_id: !input helper_logbook_dummy
+          # Log-Entprellung ohne Helfer: Die Warnung erscheint nur einmal je
+          # halber Stunde (Minute 0-4 oder 30-34), damit das Logbuch bei einem
+          # anhaltenden Ausfall nicht im 5-Min-Takt zugespammt wird. Die
+          # Berechnung mit Ersatzwerten läuft davon unberührt jeden Durchlauf.
+          - if:
+              - condition: template
+                value_template: "{{ now().minute < 5 or (now().minute >= 30 and now().minute < 35) }}"
+            then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} WARNUNG: Der Deye-Zähler (Battery Total Charge / geladene Gesamtenergie) ist auch nach 10 s erneutem Auslesen noch 'nicht verfügbar'. Dieser Durchlauf rechnet daher mit Ersatzwerten – bitte die Deye-Anbindung prüfen! (Diese Warnung erscheint bei anhaltendem Ausfall nur alle 30 Min.)"
+                  entity_id: !input helper_logbook_dummy
 
   # ====================================================================
   # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN (JETZT kWh)
@@ -888,6 +902,7 @@ action:
       var_grid_export: !input grid_export_sensor
       var_grid_export_kwh: !input grid_export_kwh_heute
       var_speicherverlust: !input speicherverlust_gesamt
+      var_offener_verlust: !input helper_offener_verlust
       var_max_soc_heute: !input helper_max_soc_heute
       var_battery_soc: !input battery_soc_sensor
       var_wp_temp: !input wp_temp_sensor
@@ -1191,7 +1206,7 @@ action:
   # ====================================================================
   - variables:
       slot_daten: >
-        {% set ns = namespace(stunden=0.0, defizit=0.0) %}
+        {% set ns = namespace(stunden=0.0, defizit=0.0, netto_liste=[], p50_summe=0.0, blend_summe=0.0) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -1205,18 +1220,27 @@ action:
               {% endif %}
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
               {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
+              {# Fuer den Prognose-Unsicherheitsfaktor: P50 und Blend der
+                 Restslots getrennt aufsummieren. Liegen P10 und P50 dicht
+                 beieinander, ist P50/Blend ~ 1 (sichere Prognose); klaffen sie
+                 auseinander, steigt der Quotient (unsichere Prognose). #}
+              {% set ns.p50_summe = ns.p50_summe + (slot.pv_estimate * 0.5 * anteil) %}
+              {% set ns.blend_summe = ns.blend_summe + (blend * anteil) %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = (blend - haus_kwh) * anteil %}
               {% if netto > 0 %}
                 {% set ns.stunden = ns.stunden + (0.5 * anteil) %}
+                {# Netto-Ueberschuss je Slot (kWh) + Slot-Laenge (h) fuer die
+                   Ladestrom-Simulation. Nur Slots mit echtem Ueberschuss. #}
+                {% set ns.netto_liste = ns.netto_liste + [[netto | round(4), (0.5 * anteil) | round(4)]] %}
               {% else %}
                 {% set ns.defizit = ns.defizit + (netto | abs) %}
               {% endif %}
             {% endif %}
           {% endfor %}
         {% endif %}
-        {{ {'stunden': ns.stunden | round(3), 'defizit': ns.defizit | round(3)} | to_json }}
+        {{ {'stunden': ns.stunden | round(3), 'defizit': ns.defizit | round(3), 'slots': ns.netto_liste, 'p50': ns.p50_summe | round(3), 'blend': ns.blend_summe | round(3)} | to_json }}
 
   - variables:
       # HA konvertiert das to_json-Ergebnis von slot_daten u.U. selbst zurück in ein Dict
@@ -1226,6 +1250,80 @@ action:
       verf_stunden: "{{ slot_daten_dict.stunden | float(0) }}"
       defizit_kwh: "{{ slot_daten_dict.defizit | float(0) }}"
       benoetigt_kwh: "{{ freie_kwh + defizit_kwh }}"
+      rest_slots: "{{ slot_daten_dict.slots | default([], true) }}"
+      # ==================================================================
+      # PROGNOSE-UNSICHERHEITSFAKTOR (P50 / Blend der Restslots)
+      # Solcast liefert je Slot zwei Werte: pv_estimate (P50, mittlere
+      # Erwartung) und pv_estimate10 (P10, pessimistisch). Der Blueprint
+      # rechnet mit dem Mittel beider (Blend). Liegen P10 und P50 dicht
+      # beieinander, ist die Prognose sicher -> Quotient ~ 1,0. Klaffen sie
+      # auseinander (unsicheres Wetter), steigt der Quotient und der
+      # Ladestrom wird automatisch angehoben.
+      # Belegt an 5 Tagen (13.-17.07.): Korrelation zwischen Spreizung und
+      # Prognosefehler -0,92 - je groesser die Spreizung, desto weiter fiel
+      # der reale Ertrag hinter P50 zurueck.
+      # Fallback 1.0, wenn keine Prognosedaten vorliegen (dann greift ohnehin
+      # meist Fall B) - der manuelle Sicherheitsfaktor wirkt dann allein.
+      # ==================================================================
+      prognose_unsicherheit: >
+        {% set p50 = slot_daten_dict.p50 | float(0) %}
+        {% set bl = slot_daten_dict.blend | float(0) %}
+        {% if bl > 0.05 and p50 > 0 %}
+          {{ [[ (p50 / bl), 1.0 ] | max, 2.0 ] | min }}
+        {% else %}
+          1.0
+        {% endif %}
+      # ==================================================================
+      # LADESTROM-SIMULATION (statt linearer Verteilung über die Reststunden)
+      # Die alte Rechnung (benoetigt / verf_stunden) verteilte den Bedarf
+      # gleichmäßig über die Rest-Sonnenstunden und ignorierte, WIE VIEL
+      # Energie in den einzelnen Slots wirklich kommt. Bei ungleicher
+      # PV-Verteilung (z.B. früh viel, abends nichts) war der Strom dadurch
+      # zu niedrig, um die Spitzen abzugreifen -> Batterie wurde nicht voll,
+      # obwohl genug Gesamtenergie da war.
+      #
+      # Jetzt: Für einen Kandidaten-Strom X wird durchsimuliert, wie viel
+      # real ankäme: pro Slot min(Netto-Überschuss, X * U * Slot-Stunden).
+      # Gesucht ist das kleinste X, das den reinen Bedarf deckt; der
+      # Sicherheitsfaktor wird danach draufmultipliziert (liefert einen
+      # kleineren, schonenderen Wert als den Faktor mit hineinzusimulieren).
+      # Suche: grob in 5-A-Schritten, dann fein in 1-A-Schritten.
+      # ==================================================================
+      sim_x_grob: >
+        {% set ns = namespace(gefunden=0) %}
+        {% if rest_slots | length > 0 and benoetigt_kwh > 0 %}
+          {% for x in range(5, (max_ampere | int(140)) + 1, 5) %}
+            {% if ns.gefunden == 0 %}
+              {% set ns2 = namespace(summe=0.0) %}
+              {% for s in rest_slots %}
+                {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
+                {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
+              {% endfor %}
+              {% if ns2.summe >= benoetigt_kwh %}
+                {% set ns.gefunden = x %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.gefunden }}
+      sim_ampere_min: >
+        {% set grob = sim_x_grob | int(0) %}
+        {% set ns = namespace(gefunden=0) %}
+        {% if grob > 0 %}
+          {% for x in range([grob - 4, 1] | max, grob + 1) %}
+            {% if ns.gefunden == 0 %}
+              {% set ns2 = namespace(summe=0.0) %}
+              {% for s in rest_slots %}
+                {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
+                {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
+              {% endfor %}
+              {% if ns2.summe >= benoetigt_kwh %}
+                {% set ns.gefunden = x %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ns.gefunden }}
       # Roh-Leistung OHNE Faktor (W). Faktor kommt je Prio dazu.
       # verf_stunden <= 0 -> 999999 erzwingt später "auf Max".
       noetige_leistung_roh: >
@@ -1236,35 +1334,43 @@ action:
         {% endif %}
 
   - variables:
-      lade_quote: >
-        {% if netto_tagesueberschuss > 0 %}
-          {% set q = (freie_kwh * faktor_ziel_puffer) / netto_tagesueberschuss %}
-          {{ [ [q, 0] | max, 1.0 ] | min }}
-        {% else %}
-          1.0
-        {% endif %}
-
-  - variables:
       h_index_now: "{{ now().hour * 2 + (1 if now().minute >= 30 else 0) }}"
       # Haus-Profil ist kWh/Halbstunde -> für Momentan-Watt * 2000
       haus_aktuell_w: "{{ (json_profil[h_index_now] | float(0.2)) * 2000 }}"
       prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
 
       # === Zeit-basierte Ziel-Ströme ===
-      amp_roh_13: "{{ (noetige_leistung_roh * faktor_ziel_puffer) / nominale_spannung }}"
-      amp_roh_12: "{{ (noetige_leistung_roh * faktor_fallback) / nominale_spannung }}"
+      # === Ziel-Strom Prio 8 ===
+      # Primär aus der Slot-Simulation (kleinster Strom, der den Bedarf real
+      # deckt) × Prognose-Unsicherheit (P50/Blend) × manuellem Sicherheitsfaktor.
+      # Fallback auf die alte lineare Rechnung, wenn keine Slot-Daten vorliegen
+      # (Solcast fehlt) — dann greift ohnehin meist Fall B, weil
+      # netto_tagesueberschuss dann 0 ist.
+      amp_roh_13: >
+        {% if (sim_ampere_min | int(0)) > 0 %}
+          {{ (sim_ampere_min | int(0)) * (prognose_unsicherheit | float(1.0)) * faktor_ziel_puffer }}
+        {% else %}
+          {{ (noetige_leistung_roh * faktor_ziel_puffer) / nominale_spannung }}
+        {% endif %}
       # Prio 8 Normalfall (×1,3), gedeckelt durch min/max
       ziel_p5_raw: "{{ [[amp_roh_13 | round(0), min_ampere] | max, max_ampere] | min }}"
-      # Fall (b): erreicht die strengere ×1,2-Rechnung selbst schon Max?
-      # NUR wenn noch genug nutzbare Restladezeit da ist (min_reststunden) UND
-      # der Bedarf über der Bagatellgrenze liegt (fallback_min_kwh). Verhindert
-      # sinnlose Max-Verriegelung am Tagesende (Restzeit -> 0, Strom explodiert).
+      # Fall (b) / "Schleuse auf": Die erwartete Netto-PV-Energie (nach Abzug
+      # Hausverbrauch, aus Solcast) reicht mit dem Eskalations-Puffer nicht mehr,
+      # um die Batterie zu füllen -> Feinsteuerung aufgeben, voll laden solange
+      # noch Sonne da ist. ODER es wird gar kein Netto-Überschuss mehr erwartet
+      # (netto <= 0), dann erst recht sofort voll laden.
+      # Bewusst der ESKALATIONS-Faktor (faktor_fallback, strenger/kleiner als der
+      # normale Ladefaktor) - er entscheidet, ab wann die Realität zu weit vom
+      # Idealbild abweicht. NUR wenn noch genug Restladezeit da ist
+      # (min_reststunden) UND der Bedarf über der Bagatellgrenze liegt
+      # (fallback_min_kwh). Verhindert sinnlose Max-Verriegelung am Tagesende.
       fall_b_aktiv: >
-        {{ (amp_roh_12 | round(0)) >= (max_ampere | round(0)) and
+        {{ ((netto_tagesueberschuss | float(0)) <= 0
+            or (freie_kwh * (faktor_fallback | float(1.2))) > (netto_tagesueberschuss | float(0))) and
            verf_stunden >= (min_reststunden | float(1.0)) and
            benoetigt_kwh > (fallback_min_kwh | float(1.0)) }}
 
-      temp_log_addon: "{{ ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)' if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
+      temp_log_addon: "{{ (' (Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
@@ -1657,33 +1763,27 @@ action:
           - condition: trigger
             id: sunset_check
         sequence:
+          # SPEICHERVERLUST — SCHRITT 1 (abends): Nur den POTENZIELLEN Verlust
+          # ermitteln und parken. Noch KEINE Verbuchung, KEIN Log. Ob daraus ein
+          # echter Verlust wird, entscheidet sich erst am Sonnenaufgang (fiel die
+          # Batterie über Nacht unter die Reserve?). Der potenzielle Verlust ist
+          # die ungenutzte Ladekapazität beim höchsten Tages-SOC, gedeckelt durch
+          # die tatsächliche Tages-Einspeisung (mehr als eingespeist wurde, kann
+          # nicht "verschenkt" worden sein).
           - if:
               - condition: template
-                value_template: "{{ var_grid_export_kwh is string and var_grid_export_kwh | length > 0 and var_speicherverlust is string and var_speicherverlust | length > 0 and var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
+                value_template: "{{ var_grid_export_kwh is string and var_grid_export_kwh | length > 0 and var_offener_verlust is string and var_offener_verlust | length > 0 and var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
             then:
               - variables:
                   max_soc_tag: "{{ states(var_max_soc_heute) | float(0) }}"
                   missing_capacity_at_max_kwh: "{{ batterie_kapazitaet * (1 - (max_soc_tag / 100)) }}"
                   exported_kwh: "{{ states(var_grid_export_kwh) | float(0) }}"
-                  lost_kwh: "{{ [missing_capacity_at_max_kwh, exported_kwh] | min }}"
-                  current_tracker_val: "{{ states(var_speicherverlust) | float(0) }}"
-              - if:
-                  - condition: template
-                    value_template: "{{ lost_kwh > 0.1 }}"
-                then:
-                  - action: input_number.set_value
-                    target:
-                      entity_id: !input speicherverlust_gesamt
-                    data:
-                      value: "{{ current_tracker_val + lost_kwh }}"
-                  - action: logbook.log
-                    data:
-                      name: "PV Optimizer"
-                      message: >
-                        {{ bp_version }} Speicherverlust-Erfassung: Höchster Tages-Ladestand war {{ max_soc_tag }} %. Ungenutzte Ladekapazität zu diesem Zeitpunkt: {{ missing_capacity_at_max_kwh | round(2) }} kWh.
-                        Netzeinspeisung an diesem Tag: {{ exported_kwh | round(2) }} kWh.
-                        Davon {{ lost_kwh | round(2) }} kWh als "verschenkte Speicherkapazität" auf den Zähler addiert (Zähler neu: {{ (current_tracker_val + lost_kwh) | round(2) }} kWh = alt: {{ current_tracker_val | round(2) }} kWh + kleinerer Wert aus [ungenutzte Kapazität: {{ missing_capacity_at_max_kwh | round(2) }} kWh, Einspeisung: {{ exported_kwh | round(2) }} kWh]).
-                      entity_id: !input helper_logbook_dummy
+                  kandidat_kwh: "{{ [missing_capacity_at_max_kwh, exported_kwh] | min }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: "{{ var_offener_verlust }}"
+                data:
+                  value: "{{ [kandidat_kwh, 0] | max }}"
 
           - if:
               - condition: state
@@ -1725,6 +1825,45 @@ action:
                       entity_id: "{{ var_lade_modus }}"
                     data:
                       option: "nacht"
+
+  - choose:
+      # ============================================================
+      # SPEICHERVERLUST — SCHRITT 2 (Verbuchung): Läuft im regulären Takt.
+      # Die Prüfung ist fast immer sofort false (Kandidat = 0), kostet also
+      # nichts. Nur wenn abends ein Kandidat geparkt wurde UND die Batterie
+      # über Nacht bis auf/unter die Reserve (default_tou_soc) fällt, wird der
+      # potenzielle Verlust als ECHTER Verlust verbucht + geloggt und der
+      # Kandidat auf 0 gesetzt (verhindert Doppelverbuchung, solange SOC unter
+      # der Reserve bleibt). Kein "Verwerfen" nötig: Bleibt die Batterie über
+      # der Reserve, überschreibt der nächste Sonnenuntergang den Kandidaten
+      # ohnehin. Fängt den nächtlichen Tiefpunkt egal wann er eintritt (auch
+      # nach Sonnenaufgang, auch wenn kaum PV kommt und der SOC weiter fällt).
+      # ============================================================
+      - alias: "Speicherverlust verbuchen (wenn Batterie unter Reserve fiel)"
+        conditions:
+          - condition: template
+            value_template: "{{ var_offener_verlust is string and var_offener_verlust | length > 0 and (states(var_offener_verlust) | float(0)) > 0.1 and var_speicherverlust is string and var_speicherverlust | length > 0 and aktueller_soc <= (default_tou_soc | float(20)) }}"
+        sequence:
+          - variables:
+              kandidat_kwh: "{{ states(var_offener_verlust) | float(0) }}"
+              reserve_soc: "{{ default_tou_soc | float(20) }}"
+              current_tracker_val: "{{ states(var_speicherverlust) | float(0) }}"
+          - action: input_number.set_value
+            target:
+              entity_id: "{{ var_speicherverlust }}"
+            data:
+              value: "{{ current_tracker_val + kandidat_kwh }}"
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >
+                {{ bp_version }} Speicherverlust realisiert: Die Batterie ist über Nacht bis auf {{ aktueller_soc | round(0) }} % (Reserve {{ reserve_soc | round(0) }} %) gefallen. Die gestern verschenkte Ladekapazität von {{ kandidat_kwh | round(2) }} kWh hätte nachts ans Haus abgegeben werden können und musste stattdessen aus dem Netz bezogen werden. Auf den Verlust-Zähler addiert (neu: {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh = alt {{ current_tracker_val | round(2) }} + {{ kandidat_kwh | round(2) }} kWh).
+              entity_id: !input helper_logbook_dummy
+          - action: input_number.set_value
+            target:
+              entity_id: "{{ var_offener_verlust }}"
+            data:
+              value: "0"
 
   - choose:
       - alias: "BMS Balancing Logic"
@@ -2372,7 +2511,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Zeit reicht nicht): Die verbleibende Ladezeit reicht mit Sicherheitsfaktor {{ faktor_fallback }} nicht aus, um die Batterie rechtzeitig voll zu bekommen. Benötigt: {{ benoetigt_kwh | round(1) }} kWh (verfügbare Ladekapazität {{ freie_kwh | round(1) }} + Nachladebedarf {{ defizit_kwh | round(1) }}) in {{ verf_stunden | round(1) }} h → rechnerisch {{ amp_roh_12 | round(0) }} A nötig, das erreicht/übersteigt das Maximum von {{ max_ampere | round(0) }} A. Ladestrom fest auf Maximum ({{ max_ampere | round(0) }} A) gesetzt, es wird durchgeladen ohne Rückregeln (Modus 'Zeit-reicht-nicht' / fall_b_max). Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ max_ampere | round(0) }} A.{{ solcast_log_addon }}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Die erwartete Netzeinspeisungs-Energie reicht mit Sicherheitsfaktor {{ faktor_fallback }} nicht mehr aus, um die Batterie rechtzeitig voll zu bekommen. Benötigt: {{ benoetigt_kwh | round(1) }} kWh (verfügbare Ladekapazität {{ freie_kwh | round(1) }} + Nachladebedarf {{ defizit_kwh | round(1) }}), erwarteter Netto-PV-Überschuss bis Sonnenuntergang: {{ netto_tagesueberschuss | round(1) }} kWh. Feinsteuerung aufgegeben, Ladestrom fest auf Maximum ({{ max_ampere | round(0) }} A) gesetzt, es wird durchgeladen ohne Rückregeln (Modus 'Zeit-reicht-nicht' / fall_b_max). Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ max_ampere | round(0) }} A.{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2581,7 +2720,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 8 (Dynamische Ladung, zeit-basiert): Änderungsfilter passiert (Abweichung: {{ diff | round(1) }} A | letzte Änderung vor: {{ min_since }} Min | vorheriger Modus: {{ aktueller_modus }}).
-                        Bedarf: {{ benoetigt_kwh | round(1) }} kWh (verfügbare Ladekapazität {{ freie_kwh | round(1) }} + Nachladebedarf {{ defizit_kwh | round(1) }}) / {{ verf_stunden | round(1) }} h Ladezeit × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A.
+                        Bedarf: {{ benoetigt_kwh | round(1) }} kWh (verfügbare Ladekapazität {{ freie_kwh | round(1) }} + Nachladebedarf {{ defizit_kwh | round(1) }}).{% if (sim_ampere_min | int(0)) > 0 %} Simulation über die {{ rest_slots | length }} verbleibenden Prognose-Zeitfenster: mindestens {{ sim_ampere_min }} A nötig, × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A.{% else %} Keine Prognose-Zeitfenster verfügbar – Rückfall auf Zeitverteilung: {{ verf_stunden | round(1) }} h Ladezeit × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A.{% endif %}
                         Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p5 }} A.{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
