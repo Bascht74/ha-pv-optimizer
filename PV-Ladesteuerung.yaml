@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.5.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.6.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -720,6 +720,16 @@ trigger:
     to: "idle"
     from: "active"
     id: float_boost_ende
+  - alias: "Trigger: SOC verlässt 100 % (Nachkalibrierung während Zellausgleich)"
+    # Feuert genau im Moment des Unterschreitens, nicht wiederholt. Dient als
+    # zweiter Auslöser für die Tare-Nachkalibrierung: Fällt der Ladestand
+    # während der Balancing-Phase unter 100 %, ist das der letzte Moment, in
+    # dem die Batterie nachweislich voll WAR — dann wird dort kalibriert statt
+    # erst am Timer-Ende (wo die Messung nicht mehr aussagekräftig ist).
+    platform: numeric_state
+    entity_id: !input battery_soc_sensor
+    below: 100
+    id: soc_verlaesst_voll
   - alias: "Trigger Peak-Shaving ENDE: Hold-Timer abgelaufen"
     platform: state
     entity_id: !input helper_timer_peak
@@ -752,7 +762,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.5.0]"
+      bp_version: "[V3.6.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -2112,22 +2122,61 @@ action:
                 data:
                   value: "{{ var_float_balancing }}"
 
+      - alias: "NACHKALIBRIERUNG: Ladestand verlässt 100 % während Zellausgleich"
+        # Zweiter, früherer Auslöser für die Tare-Nachkalibrierung. Greift nur
+        # während der laufenden Balancing-Phase. In diesem Moment war die
+        # Batterie nachweislich gerade noch voll — der ideale Zeitpunkt, um die
+        # Nachladung der Phase zu erfassen. Danach übernimmt der Timer-Ende-Zweig
+        # nur noch, wenn der Ladestand durchgehend bei 100 % geblieben ist.
+        conditions:
+          - condition: trigger
+            id: soc_verlaesst_voll
+          - condition: template
+            value_template: "{{ states(var_timer_cooldown) == 'active' }}"
+          - condition: template
+            value_template: >
+              {{ (schatten_raw_soc | float(-1)) > 100 and
+                 (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
+                 var_helper_tare_charge != '' and var_battery_total_charge != '' }}
+        sequence:
+          - variables:
+              tare_alt: "{{ states(var_helper_tare_charge) | float(0) }}"
+          - action: input_number.set_value
+            target:
+              entity_id: "{{ var_helper_tare_charge }}"
+            data:
+              value: "{{ states(var_battery_total_charge) | float(0) }}"
+          - action: input_number.set_value
+            target:
+              entity_id: "{{ var_helper_tare_discharge }}"
+            data:
+              value: "{{ states(var_battery_total_discharge) | float(0) }}"
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >
+                {{ bp_version }} Interne SOC-Berechnung nachkalibriert: Der Ladestand hat während des Zellausgleichs die 100 % verlassen — die Batterie war bis eben nachweislich voll. Die rechnerische Abweichung lag bei {{ schatten_raw_soc | float(0) | round(2) }} %. Nullpunkt (Tare) auf die aktuellen Zählerstände nachgeführt (geladen: {{ tare_alt | round(2) }} → {{ states(var_battery_total_charge) | float(0) | round(2) }} kWh), interner Ladestand neu auf 100 % verankert.
+              entity_id: !input helper_logbook_dummy
+
       - alias: "FLOAT-BOOST BEENDEN (Timer ist abgelaufen)"
         conditions:
           - condition: trigger
             id: float_boost_ende
         sequence:
-          # SCHATTEN-BMS-TARE am Zellausgleich-ENDE: nur noch als NACHKALIBRIERUNG,
-          # falls die Batterie am Ende noch voll ist. Der harte 100%-Anker sitzt
-          # jetzt am START (Spannungs-Schwelle). Hier gelten die gleichen
-          # Bedingungen wie beim früheren Anti-Windup:
-          #   raw_drift > 100  UND  Zellspannung >= Schwelle  UND  geladen seit Tare.
-          # Ist die Spannung zwischenzeitlich gefallen (Verbrauch), wird NICHT
-          # kalibriert -> der START-Anker bleibt korrekt stehen.
+          # SCHATTEN-BMS-TARE am Zellausgleich-ENDE: nur noch als NACHKALIBRIERUNG.
+          # Der harte 100%-Anker sitzt am START (Spannungs-Schwelle).
+          # Dieser Zweig greift NUR, wenn der Ladestand die ganze Phase über bei
+          # 100 % geblieben ist. Ist er zwischendurch gefallen, hat der Trigger
+          # 'soc_verlaesst_voll' bereits in jenem Moment kalibriert — dort war die
+          # Messung aussagekräftig, hier nicht mehr.
+          # Die frühere Spannungs-Prüfung ist entfallen: Am Timer-Ende bricht die
+          # Klemmenspannung ohne Ladestrom ein (belegt am 18.07.: 56 V -> 54,4 V
+          # drei Minuten vor Timer-Ende, obwohl SOC noch 99,6 % war). Der
+          # Ladestand selbst ist das robustere Kriterium.
           - variables:
               ende_kalibrieren: >
                 {{ (schatten_raw_soc | float(-1)) > 100 and
-                   (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) and
+                   (aktueller_soc | float(0)) >= 100 and
                    (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
                    var_helper_tare_charge != '' and var_battery_total_charge != '' }}
           - if:
@@ -2154,7 +2203,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) zurückgesetzt ({{ var_float_balancing | round(3) }} V → {{ var_float_normal | round(3) }} V).{% if ende_kalibrieren %} Interne SOC-Berechnung (Nullpunkt/Tare) noch einmal auf 100 % nachkalibriert (Batterie am Ende noch voll).{% else %} Keine Nachkalibrierung – die Batterie ist am Ende nicht mehr voll (Zellspannung unter Schwelle), der SOC-Anker vom Balancing-Start bleibt gültig.{% endif %}
+                    {{ bp_version }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) zurückgesetzt ({{ var_float_balancing | round(3) }} V → {{ var_float_normal | round(3) }} V).{% if ende_kalibrieren %} Interne SOC-Berechnung (Nullpunkt/Tare) noch einmal auf 100 % nachkalibriert (Batterie am Ende noch voll).{% else %} Keine Nachkalibrierung nötig – entweder wurde bereits beim Verlassen der 100 % nachgeführt, oder der interne Ladestand sitzt schon richtig.{% endif %}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2717,8 +2766,8 @@ action:
                     {{ fremder_modus or
                        (diff >= 10) or
                        (diff >= 5 and min_since >= 60) or
-                       (diff <= -20) or
-                       (diff <= -15 and min_since >= 60) }}
+                       (diff <= -30) or
+                       (diff <= -20 and min_since >= 60) }}
               - if:
                   - condition: template
                     value_template: "{{ update_freigegeben }}"
