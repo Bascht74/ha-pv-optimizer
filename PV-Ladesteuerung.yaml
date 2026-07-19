@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.6.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.7.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -763,7 +763,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.6.1]"
+      bp_version: "[V3.7.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1476,9 +1476,15 @@ action:
       # DYNAMISCHES BLOCKADE-ENDE T:
       # Spätester Ladebeginn T (Halbstunden-Raster, nur VOLLSTÄNDIG in der
       # Zukunft liegende Slots = konservativ, der angebrochene Slot zählt
-      # nicht mehr), sodass Netto-Prognose ab T noch >= faktor_ziel_puffer
-      # (1,3) x freie_kwh. Liefert {'t': ISO oder '', 'gesamt': Netto ab
-      # naechster Slotgrenze}. 'gesamt' dient dem finalen 1,2-Halt.
+      # nicht mehr), sodass (Netto-Prognose ab T MINUS puffer_kwh) noch
+      # >= ziel. ziel = min(faktor_ziel_puffer x faktor_fallback x
+      # prognose_unsicherheit, 2,0) x freie_kwh - Boden = faktor_ziel_puffer x
+      # faktor_fallback x freie (aus den Variablen, aktuell 1,1 x 1,3 = 1,43;
+      # 0,13 vor Fall B), an unsicheren Tagen bis 2,0 x freie (0,7 vor Fall B).
+      # Der puffer_kwh-Abzug haelt die Groesse konsistent mit Fall B
+      # (netto_tagesueberschuss). Liefert {'t': ISO oder '', 'gesamt': Netto
+      # ab naechster Slotgrenze, 'netto_ab_t': Netto-nach-Puffer ab T,
+      # 'ziel': geforderte Ziel-Energie inkl. Unsicherheits-Skalierung}.
       # ================================================================
       blockade_dyn_json: >
         {% set ns = namespace(gesamt=0.0, kand=[]) %}
@@ -1501,32 +1507,49 @@ action:
             {% endif %}
           {% endfor %}
         {% endif %}
-        {# Ziel-Energie fuer die T-Suche: bewusst STRENGER als beim Ladestrom.
-           Produkt aus dem Ladestrom-Puffer (Ungeplantes) und dem Eskalations-
-           faktor (reicht die erwartete Energie?). Begruendung: Die Blockade ist
-           asymmetrisch - endet sie zu spaet, wird die Batterie nicht mehr voll;
-           endet sie zu frueh, kostet das nur etwas Peak-Shaving-Fenster, und
-           der Ladestrom kann bei viel Ueberschuss ohnehin wieder hochgeregelt
-           werden. Deshalb lieber frueher aus der Blockade. #}
-        {% set ziel = faktor_ziel_puffer * faktor_fallback * freie_kwh %}
+        {# Ziel-Energie fuer die T-Suche. Effektiver Faktor auf freie_kwh:
+           BODEN = faktor_ziel_puffer x faktor_fallback (= 1,43 bei 1,1 x 1,3),
+           also 0,13 ueber der Fall-B-Schwelle (1,3). An sicheren Tagen liegt
+           die Blockade damit genau diesen Vorsprung "vor" Fall B.
+           SKALIERUNG mit prognose_unsicherheit (P50/Blend der Restslots,
+           1,0..2,0): an unsicheren Tagen steigt die Huerde -> die Blockade
+           lueftet frueher bzw. setzt gar nicht erst ein (dann kommt "eh nicht
+           mehr viel vom Dach"). Der effektive Faktor ist auf 2,0 GEDECKELT
+           (max. 0,7 Vorsprung vor Fall B); da prognose_unsicherheit >= 1,0,
+           ist der Boden immer die Basis (1,43). Begruendung Asymmetrie: endet
+           die Blockade zu spaet, wird die Batterie nicht mehr voll; endet sie
+           zu frueh, kostet das nur etwas Peak-Shaving-Fenster - und da nach dem
+           Lueften schnell geladen wird, faellt freie_kwh und damit auch die
+           Fall-B-Schwelle (1,3 x freie), man entfernt sich also von Fall B. #}
+        {% set ziel_faktor = [ faktor_ziel_puffer * faktor_fallback * (prognose_unsicherheit | float(1.0)), 2.0 ] | min %}
+        {% set ziel = ziel_faktor * freie_kwh %}
         {% set ns2 = namespace(best='', praefix=0.0, netto_ab_t=0.0) %}
         {% for paar in ns.kand %}
-          {% if (ns.gesamt - ns2.praefix) >= ziel %}
+          {# Netto ab genau diesem Kandidaten (= spätester Ladebeginn) bis
+             Tagesende, ABZUEGLICH puffer_kwh. ns.gesamt ist Tagesnetto,
+             ns2.praefix die Summe der Slots davor -> Differenz = das, was ab T
+             noch für die Batterie bleibt.
+             Der puffer_kwh-Abzug macht diese Groesse identisch zur Fall-B-Groesse
+             netto_tagesueberschuss (= solcast_rest_blended - puffer_kwh). Ohne den
+             Abzug rechnete die Blockade dauerhaft ~puffer_kwh optimistischer als
+             Fall B; der strengere Faktor 1,43 wurde dadurch aufgehoben, sodass die
+             Blockade in die Uhr-Grenze lief und direkt an Fall B (1,3) uebergab,
+             statt energieseitig frueher zu lueften. Mit dem Abzug lueftet sie -
+             da 1,43 > 1,3 - vor Fall B. #}
+          {% set netto_ab_hier = ns.gesamt - ns2.praefix - (puffer_kwh | float(0)) %}
+          {% if netto_ab_hier >= ziel %}
             {% set ns2.best = paar[0] %}
-            {# Netto ab genau diesem Kandidaten (= spätester Ladebeginn) bis
-               Tagesende. ns.gesamt ist Tagesnetto, ns2.praefix die Summe der
-               Slots davor -> Differenz = das, was ab T noch für die Batterie
-               bleibt. Direkt vergleichbar mit freie_kwh (Bedarf). #}
-            {% set ns2.netto_ab_t = ns.gesamt - ns2.praefix %}
+            {% set ns2.netto_ab_t = netto_ab_hier %}
           {% endif %}
           {% set ns2.praefix = ns2.praefix + paar[1] %}
         {% endfor %}
-        {{ {'t': ns2.best, 'gesamt': ns.gesamt | round(2), 'netto_ab_t': ns2.netto_ab_t | round(2)} | to_json }}
+        {{ {'t': ns2.best, 'gesamt': ns.gesamt | round(2), 'netto_ab_t': ns2.netto_ab_t | round(2), 'ziel': ziel | round(2)} | to_json }}
       # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
       blockade_dyn: "{{ blockade_dyn_json if blockade_dyn_json is mapping else (blockade_dyn_json | from_json) }}"
       blockade_dyn_t: "{{ blockade_dyn.t | default('') }}"
       blockade_dyn_gesamt: "{{ blockade_dyn.gesamt | default(0) | float(0) }}"
       blockade_dyn_netto_ab_t: "{{ blockade_dyn.netto_ab_t | default(0) | float(0) }}"
+      blockade_dyn_ziel: "{{ blockade_dyn.ziel | default(0) | float(0) }}"
       # BLOCKADE-LOGIK (dynamisches Ende):
       # Existiert ein T (spaetester Ladebeginn, ab dem noch genug Netto-Energie
       # kommt): blockieren. Das Ziel ist bewusst streng gerechnet - Produkt aus
@@ -2666,7 +2689,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 6 (Morgen-Blockade): Laden vorerst gestoppt ({{ null_ampere }} A) – die Sonne liefert später am Tag genug, um die Batterie rechtzeitig voll zu bekommen.
-                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Prognose ab Blockade-Ende bis Tagesende: {{ blockade_dyn_netto_ab_t | round(1) }} kWh verfügbar ≥ {{ (freie_kwh * faktor_ziel_puffer * faktor_fallback) | round(1) }} kWh Bedarf (verfügbare Ladekapazität {{ freie_kwh | round(1) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }}).
+                    Spätester Ladebeginn: {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr (konfiguriert: {{ var_zeit_blockade }}). Prognose ab Blockade-Ende bis Tagesende: {{ blockade_dyn_netto_ab_t | round(1) }} kWh verfügbar (nach Abzug Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh, konsistent mit Fall B) ≥ {{ blockade_dyn_ziel | round(1) }} kWh Bedarf (verfügbare Ladekapazität {{ freie_kwh | round(1) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, effektiver Faktor gedeckelt auf 2,0).
                     Gesamt-Überschuss-Prognose Resttag (ab nächster Halbstunde): {{ blockade_dyn_gesamt | round(1) }} kWh. Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ null_ampere }} A.
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
@@ -2757,11 +2780,13 @@ action:
                   - condition: template
                     value_template: "{{ aktueller_modus == 'fall_b_max' }}"
                 sequence:
-                  - action: logbook.log
-                    data:
-                      name: "PV Optimizer"
-                      message: "{{ bp_version }} Prio 8 (Dynamische Ladung) übersprungen: Der Modus 'Zeit-reicht-nicht' (fall_b_max) ist aktiv – es wird ohne Rückregeln durchgeladen, bis zur nächsten Rücksetzung (Mitternacht oder Sonnenuntergang)."
-                      entity_id: !input helper_logbook_dummy
+                  # Kein Rückregeln UND keine Logausgabe: Dass ohne Rückregeln
+                  # durchgeladen wird, ist bereits bei "Prio 3 (Fall B / Schleuse
+                  # auf)" dokumentiert. Früher wurde hier im 5-Min-Takt
+                  # "Prio 8 übersprungen" geloggt - reines Log-Rauschen bis zur
+                  # nächtlichen Rücksetzung. Der stop-Schritt bleibt im Trace
+                  # sichtbar, erzeugt aber keinen Logbuch-Eintrag.
+                  - stop: "Fall-B-Modus (fall_b_max) aktiv – kein Rückregeln, keine Logausgabe."
             default:
               - variables:
                   diff: "{{ target_p5 - aktueller_ladestrom }}"
