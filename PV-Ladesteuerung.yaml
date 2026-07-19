@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.7.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.8.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -763,7 +763,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.7.0]"
+      bp_version: "[V3.8.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1779,6 +1779,34 @@ action:
                   name: "PV Optimizer"
                   message: "{{ bp_version }} Mitternachts-Check: Die Erhaltungsspannung (Float) stand noch auf dem Zellausgleich-Wert (Top-Balancing) ({{ var_float_balancing | round(3) }} V), obwohl der Nachlauf-Timer (Cooldown) inaktiv ist – vermutlich ging der Timer verloren. Zurückgesetzt auf Normalwert {{ var_float_normal | round(3) }} V."
                   entity_id: !input helper_logbook_dummy
+          # NACHT-MITTERNACHTS-CHECK: Der "Feierabend" (Sonnenuntergang) ist die
+          # EINZIGE Stelle, die den Ladestrom fuer die Nacht auf Max oeffnet.
+          # Faellt der einmalige Sonnenuntergangs-Trigger aus (Reload/Neustart
+          # nach Sonnenuntergang), bleibt das Register ueber Nacht gedrosselt
+          # (z.B. auf dem Zellausgleich-Wert 8 A) haengen. Hier als Sicherung
+          # nachziehen - nur wenn der Wert wirklich abweicht (sonst kein Log jede
+          # Nacht) UND weder Netz-Zwangsladung noch Zellausgleich (Cooldown-Timer)
+          # laufen (deren Ladestrom nicht ueberschreiben). Die uebrigen Prio-
+          # Zweige, die nachts ueberhaupt Strom setzen koennten, greifen hier
+          # nicht: Prio 3/6/8 sind is_day/zeit-gegated, Prio 7 (Peak-Shaving)
+          # braucht Netz-Export (nachts null). Der Modus bleibt auf dem oben
+          # gesetzten 'normal', die Tageslogik setzt morgens ohnehin neu.
+          - if:
+              - condition: template
+                value_template: >
+                  {{ not zwangsladung_aktiv and states(var_timer_cooldown) != 'active'
+                     and ((aktueller_ladestrom | round(0)) - (target_p0 | round(0))) | abs >= 2 }}
+            then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Mitternachts-Check: Der Ladestrom stand nachts nicht auf Maximum ({{ aktueller_ladestrom | round(0) }} A) – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload nach Sonnenuntergang). Ladestrom für die Nacht auf Maximum geöffnet: {{ aktueller_ladestrom | round(0) }} A → {{ target_p0 | round(0) }} A.{{ temp_log_addon }}"
+                  entity_id: !input helper_logbook_dummy
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wr_max_charge }}"
+                data:
+                  value: "{{ target_p0 }}"
           - if:
               - condition: template
                 value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
@@ -1805,6 +1833,27 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: "{{ bp_version }} Sicherheits-Rücksetzung: Die Zwangsladung war aktiv, aber das Netz-Ladeziel (ToU-SOC) stand nicht auf 100 % (ToU-SOC 1: {{ states(var_wr_tou_1) }} % < 100 %). Der Schalter wurde sicherheitshalber zurückgesetzt."
+                  entity_id: !input helper_logbook_dummy
+          # NETZ-LADESCHALTER-MITTERNACHTS-CHECK: Der Schalter wird nur bei
+          # Zwangsladung-START ein- und bei -ENDE ausgeschaltet (beide event-
+          # getriggert). Geht 'zwangsladung_ende' verloren (Reload/Neustart),
+          # koennte der Schalter AN bleiben, obwohl der Helfer schon AUS ist
+          # (der Reset oben greift nur bei Helfer == on). Dann laedt die Batterie
+          # nachts aus dem Netz. Hier hart absichern: Schalter an, aber keine
+          # Zwangsladung aktiv -> ausschalten.
+          - if:
+              - condition: template
+                value_template: >
+                  {{ var_wr_grid_charge_switch != '' and not zwangsladung_aktiv
+                     and states(var_wr_grid_charge_switch) == 'on' }}
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: "{{ var_wr_grid_charge_switch }}"
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Mitternachts-Check: Der Netz-Ladeschalter war an, obwohl keine Zwangsladung aktiv ist – vermutlich ging das Zwangsladung-Ende verloren (Reload/Neustart). Sicherheitshalber ausgeschaltet, damit die Batterie nachts nicht aus dem Netz lädt."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
