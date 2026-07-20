@@ -51,6 +51,33 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 - **Ask before creating a git commit**, even when the underlying code edit was already approved. Ask again, separately, before pushing.
 - Do not add new blueprint `input:` fields without asking first — instances are hand-configured per site, and a new field means manual reassignment on each one.
 
+## Log message convention
+
+Logbook messages follow one shape (established 20.07.2026):
+
+`{{ bp_version }} <Zweig-Name>: <Handlung>. <Entscheidung + kompakter Grund>. (<Details>)`
+
+- **Ohne Klammern — Handlung und kompakter Grund.** Was der Zweig getan hat (inkl. Ladestrom-Änderung `X A → Y A`) und die Entscheidung mit den *beiden Vergleichswerten und ihrem Operator*, z. B. `Spätester Ladebeginn 13:30 Uhr, da Bedarf 11.4 kWh < Verfügbar 12.2 kWh`.
+- **In Klammern — die vollständige Herleitung.** Je Wert der Rechenweg mit Variablen und Ergebnis (`Bedarf = freie Ladekapazität 6.4 kWh von 32.2 kWh × Sicherheitsfaktor 1.1 × …`). Rein informative Zusätze mit `Informativ:` kennzeichnen.
+- **Immer das ausgerechnete Ergebnis** einer Berechnung zeigen (`= 11.4 kWh`), nicht nur die Faktoren, und den Ausgangswert vor Abzügen (`Prognose 13.2 kWh − Puffer 1.0 kWh`) — die Zahlen sollen nachrechenbar sein.
+- **Die Parameter aufnehmen, die der Zweig in seinen Conditions prüft**, außer rein logische/triviale (Monat, Uhrzeit, `is_day`) — es sei denn, so ein Parameter ist der Hauptcharakter der Meldung.
+- **Bezugsgröße nennen, wenn ein Wert sonst mehrdeutig ist** (z. B. `freie Ladekapazität 6.4 kWh von 32.2 kWh` klärt, worauf sich „frei" bezieht). Fallweise entscheiden.
+- **Keine Prosa / kein Füllwerk**: keine erklärenden Sätze („die Sonne liefert später genug"), keine Querverweise („konsistent mit Fall B"), keine doppelte Wertnennung, keine redundanten Zusätze („ab nächster Halbstunde").
+- **Immer den auslösenden Grund nennen** — die *tatsächlich geprüfte* Bedingung des Zweigs (z. B. „da der WP-Anlauf-Timer läuft"), nicht eine vorgelagerte Ursache und nicht weglassen. Handlung ohne „warum" ist unvollständig.
+- **Beide Vergleichswerte mit vollem Rechenweg** — nicht nur eine Seite herleiten. Steht `A > B`, gehört sowohl die Herleitung von `A` als auch die von `B` in die Klammer (inkl. Ausgangswert vor Abzügen).
+- **Mehrdeutige Größen im Klartext erklären — und zwar KONSEQUENT in JEDER Meldung, in der sie vorkommen**, nicht nur einmal. Z. B. `Nachladebedarf … für Phasen, in denen der Hausverbrauch die PV übersteigt`, `freie Ladekapazität … von … kWh gesamt`. Lieber ein Wort mehr als eine unklare Variable; die Erklärung NICHT beim Kürzen entfernen.
+- **„Informativ:" nur mit klarem Zweck** — Zusatzwerte nur, wenn sie die Meldung erklären; verwirrende oder unbeteiligte Parameter (z. B. ein Bagatell-Guard) weglassen.
+- **Natürliches Deutsch, keine 1:1-Übersetzungen aus dem Englischen** — nicht „Feinsteuerung aufgegeben", „Haltephase", „Hold-Timer". So formulieren, wie es ein deutscher Muttersprachler schreiben würde; Fachbegriffe eindeutig (`Peak-Shaving`/`Lastspitzen-Kappung`, `Nachlaufzeit`, `kleinerer Wert aus … und …` statt „min aus").
+- **Log-Häufigkeit NICHT verändern**: Beim Umformulieren ausschließlich den `message:`-Text ändern — nie die umgebenden `if`/`choose`-Bedingungen oder Guards. Eine Meldung darf nach der Änderung nicht öfter erscheinen als vorher und nicht neu auftauchen, wo vorher keine kam.
+- **Wenig Artikel — Telegrammstil bei der Handlung.** „Ladestrom auf 200 A angehoben" statt „Der Ladestrom wird auf 200 A angehoben", sofern es sprachlich nicht holpert. Notwendige Artikel im Nebensatz bleiben.
+- **Optionale Rechenweg-Teile nur zeigen, wenn sie greifen.** Ein `min()`-Deckel (z. B. Temperatur-Limit) wird nur genannt, wenn er tatsächlich limitiert (`temperatur_limit_ampere < …`), sonst weglassen — analog `temp_log_addon`. Kein Rechenweg-Ballast, der im Normalfall nichts erklärt.
+- **Keine technischen Interna.** Interne Modus-/Statusnamen (`fall_b_max`, Registerbezeichner o. Ä.) gehören nicht in die Meldung.
+- **Nichts loggen, was ohnehin immer gilt.** Wenn eine Meldung nur im Änderungsfall geschrieben wird, nicht zusätzlich „Änderungsfilter passiert" schreiben — das ist per Definition erfüllt.
+- **Änderungsbeträge mit Vorzeichen** (`+34.0 A`, `−20.0 A`), damit die Richtung erkennbar ist; überall dort, wo eine Differenz genannt wird.
+- **Wertwechsel als „von X auf Y" ausschreiben** (`von 54.400 V auf 56.000 V angehoben`, `Ladestrom von 8 A auf 0 A`), nicht als `X → Y`, wenn es in einem Fließtext-Satz mit Verb (angehoben/gesetzt/gedrosselt/zurückgesetzt/gestoppt) steht. Keine doppelte Nennung des Zielwerts (nicht „auf 200 A angehoben (0 A → 200 A)").
+- **Gleiche Min/Max-Werte zusammenfassen:** Bei einer Spanne, deren Grenzen gleich sind, nur EINEN Wert nennen (`vorher 30 %`), nicht `30–30 %`; sind sie ungleich, `vorher uneinheitlich`.
+- Einheiten mit Leerzeichen (`11.4 kWh`, `8 A`), `0 A` (nicht „0A").
+
 ## Blueprint architecture
 
 - `mode: queued`, single automation, `choose:`-based priority cascade in the main action block: the first matching branch wins, and branch position determines precedence. Priorities are numbered in-code and kept contiguous; renumbering alone is a patch-level, non-behavioral change.
