@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.9.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.10.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -763,7 +763,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.9.1]"
+      bp_version: "[V3.10.0]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1217,7 +1217,6 @@ action:
       potential_export: "{{ grid_export - batterie_leistung }}"
       real_export: "{{ grid_export }}"
 
-      netto_tagesueberschuss: "{{ solcast_rest_blended - puffer_kwh }}"
       netto_nach_blockade: "{{ solcast_nach_blockade - puffer_kwh }}"
 
   # ====================================================================
@@ -1225,7 +1224,7 @@ action:
   # ====================================================================
   - variables:
       slot_daten: >
-        {% set ns = namespace(stunden=0.0, defizit=0.0, netto_liste=[], p50_summe=0.0, blend_summe=0.0) %}
+        {% set ns = namespace(alle=[], p50_summe=0.0, blend_summe=0.0) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -1248,18 +1247,35 @@ action:
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = (blend - haus_kwh) * anteil %}
-              {% if netto > 0 %}
-                {% set ns.stunden = ns.stunden + (0.5 * anteil) %}
-                {# Netto-Ueberschuss je Slot (kWh) + Slot-Laenge (h) fuer die
-                   Ladestrom-Simulation. Nur Slots mit echtem Ueberschuss. #}
-                {% set ns.netto_liste = ns.netto_liste + [[netto | round(4), (0.5 * anteil) | round(4)]] %}
-              {% else %}
-                {% set ns.defizit = ns.defizit + (netto | abs) %}
-              {% endif %}
+              {# Alle Slots chronologisch sammeln [netto, stunden]; erst danach
+                 aggregieren, damit "aufholbarer Nachladebedarf" bestimmt werden
+                 kann (siehe unten). #}
+              {% set ns.alle = ns.alle + [[netto | round(4), (0.5 * anteil) | round(4)]] %}
             {% endif %}
           {% endfor %}
         {% endif %}
-        {{ {'stunden': ns.stunden | round(3), 'defizit': ns.defizit | round(3), 'slots': ns.netto_liste, 'p50': ns.p50_summe | round(3), 'blend': ns.blend_summe | round(3)} | to_json }}
+        {# NACHLADEBEDARF nur zaehlen, solange er durch NACHFOLGENDEN PV-Ueberschuss
+           aufgeholt werden kann. Defizit-Slots NACH dem letzten Ueberschuss-Slot
+           (= Abend, PV faellt unter Hausverbrauch) sind nicht mehr ladbar
+           (Batterie kann nicht ueber 100 %) und werden verworfen. #}
+        {% set nsl = namespace(last_pos=-1) %}
+        {% for i in range(ns.alle | length) %}
+          {% if ns.alle[i][0] > 0 %}{% set nsl.last_pos = i %}{% endif %}
+        {% endfor %}
+        {% set ns3 = namespace(stunden=0.0, defizit=0.0, netto_liste=[]) %}
+        {% for i in range(ns.alle | length) %}
+          {% set n = ns.alle[i][0] %}
+          {% set h = ns.alle[i][1] %}
+          {% if n > 0 %}
+            {% set ns3.stunden = ns3.stunden + h %}
+            {# Netto-Ueberschuss je Slot (kWh) + Slot-Laenge (h) fuer die
+               Ladestrom-Simulation. Nur Slots mit echtem Ueberschuss. #}
+            {% set ns3.netto_liste = ns3.netto_liste + [[n, h]] %}
+          {% elif i < nsl.last_pos %}
+            {% set ns3.defizit = ns3.defizit + (n | abs) %}
+          {% endif %}
+        {% endfor %}
+        {{ {'stunden': ns3.stunden | round(3), 'defizit': ns3.defizit | round(3), 'slots': ns3.netto_liste, 'p50': ns.p50_summe | round(3), 'blend': ns.blend_summe | round(3)} | to_json }}
 
   - variables:
       # HA konvertiert das to_json-Ergebnis von slot_daten u.U. selbst zurück in ein Dict
@@ -1363,8 +1379,8 @@ action:
       # Primär aus der Slot-Simulation (kleinster Strom, der den Bedarf real
       # deckt) × Prognose-Unsicherheit (P50/Blend) × manuellem Sicherheitsfaktor.
       # Fallback auf die alte lineare Rechnung, wenn keine Slot-Daten vorliegen
-      # (Solcast fehlt) — dann greift ohnehin meist Fall B, weil
-      # netto_tagesueberschuss dann 0 ist.
+      # (Solcast fehlt) — dann greift ohnehin meist Fall B, weil ohne Prognose
+      # kein Rest-Überschuss ausgewiesen wird.
       amp_roh_13: >
         {% if (sim_ampere_min | int(0)) > 0 %}
           {{ (sim_ampere_min | int(0)) * (prognose_unsicherheit | float(1.0)) * faktor_ziel_puffer }}
@@ -1491,7 +1507,7 @@ action:
       # 'd_ab_t' (Nachladebedarf ab T), 'ueber_ges' (Brutto-Ueberschuss Resttag)}.
       # ================================================================
       blockade_dyn_json: >
-        {% set ns = namespace(u_ges=0.0, d_ges=0.0, kand=[]) %}
+        {% set ns = namespace(alle=[]) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
           {% set blockade_time = today_at(var_zeit_blockade | string) %}
           {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
@@ -1501,19 +1517,26 @@ action:
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
-              {% set ueber = [netto, 0] | max %}
-              {% set defi = [-netto, 0] | max %}
-              {% set ns.u_ges = ns.u_ges + ueber %}
-              {% set ns.d_ges = ns.d_ges + defi %}
-              {% if s_start <= blockade_time %}
-                {# s_start | string erzwingt einen String; slot.period_start kann
-                   je nach Solcast-Integration ein datetime-Objekt sein, das
-                   spaeter to_json crashen liesse (Type not JSON serializable). #}
-                {% set ns.kand = ns.kand + [[s_start | string, ueber, defi]] %}
-              {% endif %}
+              {# Alle Restslots chronologisch: [zeit-str, ist_kandidat, ueber, defi].
+                 s_start | string erzwingt einen String; slot.period_start kann je
+                 nach Solcast-Integration ein datetime-Objekt sein, das spaeter
+                 to_json crashen liesse (Type not JSON serializable). #}
+              {% set ns.alle = ns.alle + [[s_start | string, (s_start <= blockade_time), [netto, 0] | max, [-netto, 0] | max]] %}
             {% endif %}
           {% endfor %}
         {% endif %}
+        {# Nachladebedarf nur zaehlen, solange er durch NACHFOLGENDEN PV-Ueberschuss
+           aufgeholt werden kann: letzten Ueberschuss-Slot bestimmen, Defizite danach
+           (= Abend, PV faellt unter Hausverbrauch) verwerfen -- die Batterie kann
+           sie nicht mehr aufnehmen (nicht > 100 %). #}
+        {% set nsl = namespace(last_pos=-1, u_ges=0.0, d_aufholbar=0.0) %}
+        {% for i in range(ns.alle | length) %}
+          {% set nsl.u_ges = nsl.u_ges + ns.alle[i][2] %}
+          {% if ns.alle[i][2] > 0 %}{% set nsl.last_pos = i %}{% endif %}
+        {% endfor %}
+        {% for i in range(ns.alle | length) %}
+          {% if i < nsl.last_pos %}{% set nsl.d_aufholbar = nsl.d_aufholbar + ns.alle[i][3] %}{% endif %}
+        {% endfor %}
         {# Faktor auf den GESAMTEN Bedarf (freier Platz + Nachladebedarf).
            Basis faktor_ziel_puffer x faktor_fallback (0,13 ueber Fall B bei
            1,1 x 1,3), mit prognose_unsicherheit skaliert (1,0..2,0), Deckel 2,0.
@@ -1522,24 +1545,26 @@ action:
            (kostet nur Peak-Shaving-Fenster) als zu spaet (Batterie nicht voll). #}
         {% set ziel_faktor = [ faktor_ziel_puffer * faktor_fallback * (prognose_unsicherheit | float(1.0)), 2.0 ] | min %}
         {% set ns2 = namespace(best='', pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
-        {% for paar in ns.kand %}
-          {# u_ab / d_ab = Brutto-Ueberschuss bzw. Nachladebedarf ab diesem
-             Kandidaten T bis Tagesende (Gesamt minus Summe der Slots davor). #}
-          {% set u_ab = ns.u_ges - ns2.pu %}
-          {% set d_ab = ns.d_ges - ns2.pd %}
-          {% set verf = u_ab - (puffer_kwh | float(0)) %}
-          {% set bedarf = ziel_faktor * (freie_kwh + d_ab) %}
-          {% if verf >= bedarf %}
-            {% set ns2.best = paar[0] %}
-            {% set ns2.verf = verf %}
-            {% set ns2.bedarf = bedarf %}
-            {% set ns2.u_ab_t = u_ab %}
-            {% set ns2.d_ab_t = d_ab %}
+        {% for i in range(ns.alle | length) %}
+          {% if ns.alle[i][1] %}
+            {# u_ab / d_ab = Brutto-Ueberschuss bzw. aufholbarer Nachladebedarf ab
+               diesem Kandidaten T bis Tagesende (Gesamt minus Summe der Slots davor). #}
+            {% set u_ab = nsl.u_ges - ns2.pu %}
+            {% set d_ab = nsl.d_aufholbar - ns2.pd %}
+            {% set verf = u_ab - (puffer_kwh | float(0)) %}
+            {% set bedarf = ziel_faktor * (freie_kwh + d_ab) %}
+            {% if verf >= bedarf %}
+              {% set ns2.best = ns.alle[i][0] %}
+              {% set ns2.verf = verf %}
+              {% set ns2.bedarf = bedarf %}
+              {% set ns2.u_ab_t = u_ab %}
+              {% set ns2.d_ab_t = d_ab %}
+            {% endif %}
           {% endif %}
-          {% set ns2.pu = ns2.pu + paar[1] %}
-          {% set ns2.pd = ns2.pd + paar[2] %}
+          {% set ns2.pu = ns2.pu + ns.alle[i][2] %}
+          {% set ns2.pd = ns2.pd + (ns.alle[i][3] if i < nsl.last_pos else 0) %}
         {% endfor %}
-        {{ {'t': ns2.best, 'ueber_ges': ns.u_ges | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
+        {{ {'t': ns2.best, 'ueber_ges': nsl.u_ges | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
       # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
       blockade_dyn: "{{ blockade_dyn_json if blockade_dyn_json is mapping else (blockade_dyn_json | from_json) }}"
       blockade_dyn_t: "{{ blockade_dyn.t | default('') }}"
@@ -2646,7 +2671,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_kwh) | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt) × Eskalationsfaktor {{ faktor_fallback }}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh).{{ solcast_log_addon }}
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh).{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2735,7 +2760,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt) × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
                     Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh.
                     Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
                   entity_id: !input helper_logbook_dummy
@@ -2858,7 +2883,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 8 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
-                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
+                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
