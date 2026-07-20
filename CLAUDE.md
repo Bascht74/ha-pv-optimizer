@@ -71,6 +71,15 @@ Logbook messages follow one shape (established 20.07.2026):
 - **Log-Häufigkeit NICHT verändern**: Beim Umformulieren ausschließlich den `message:`-Text ändern — nie die umgebenden `if`/`choose`-Bedingungen oder Guards. Eine Meldung darf nach der Änderung nicht öfter erscheinen als vorher und nicht neu auftauchen, wo vorher keine kam.
 - **Wenig Artikel — Telegrammstil bei der Handlung.** „Ladestrom auf 200 A angehoben" statt „Der Ladestrom wird auf 200 A angehoben", sofern es sprachlich nicht holpert. Notwendige Artikel im Nebensatz bleiben.
 - **Optionale Rechenweg-Teile nur zeigen, wenn sie greifen.** Ein `min()`-Deckel (z. B. Temperatur-Limit) wird nur genannt, wenn er tatsächlich limitiert (`temperatur_limit_ampere < …`), sonst weglassen — analog `temp_log_addon`. Kein Rechenweg-Ballast, der im Normalfall nichts erklärt.
+- **Retry-/Versuchszähler nur bei > 1 zeigen.** `(nach N Versuchen übernommen)` nur, wenn `repeat.index > 1`; ein einzelner Versuch (Normalfall) wird nicht erwähnt.
+- **Einheitliche Terminologie (Log-Text):**
+  - Batterie-Ladestand → durchgängig **„Ladestand (SOC)"** (deutsches Wort, englischer Fachbegriff in Klammern beim ersten Vorkommen der Meldung), NICHT alleinstehend „SOC", „Tages-SOC", „Ziel-SOC" (→ „höchster Tages-Ladestand (SOC)", „Ziel-Ladestand").
+  - Rechnerischer Schatten-BMS-Wert → **„interner Ladestand"** (nicht „interner SOC", „Interne SOC-Berechnung").
+  - **Netzeinspeisung** einheitlich (nicht „Netz-Einspeise-Überschuss").
+  - **„Wärmepumpe" ausschreiben** — im Log-Text kein „WP-…" (→ „Wärmepumpen-Anlaufsperre", „Wärmepumpen-Warmwasser-Boost" usw.). (Variablennamen/Alias/Kommentare bleiben unberührt.)
+  - **„Cooldown"** nicht im Log-Text (englisch) → nur „Nachlauf-Timer".
+- **Kein doppeltes Verb bei Mehrfach-Wertwechsel.** Bei Ziel + Hysterese nur EIN Verb (fürs Ziel: angehoben/zurückgestellt), die Hysterese als Wert in Klammer ohne eigenes Verb (nicht „…angehoben (Hysterese angepasst)").
+- **Optionale Klammer-Zusätze: Satz-Punkt ans Ende** (nach dem `{% endif %}`), nicht in die bedingte Klammer — sonst fehlt bei aktivem Zweig der Schlusspunkt.
 - **Keine technischen Interna.** Interne Modus-/Statusnamen (`fall_b_max`, Registerbezeichner o. Ä.) gehören nicht in die Meldung.
 - **Nichts loggen, was ohnehin immer gilt.** Wenn eine Meldung nur im Änderungsfall geschrieben wird, nicht zusätzlich „Änderungsfilter passiert" schreiben — das ist per Definition erfüllt.
 - **Änderungsbeträge mit Vorzeichen** (`+34.0 A`, `−20.0 A`), damit die Richtung erkennbar ist; überall dort, wo eine Differenz genannt wird.

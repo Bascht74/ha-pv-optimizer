@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.9.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.9.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -763,7 +763,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.9.0]"
+      bp_version: "[V3.9.1]"
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -824,7 +824,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} WARNUNG: Der Deye-Zähler (Battery Total Charge / geladene Gesamtenergie) ist auch nach 10 s erneutem Auslesen noch 'nicht verfügbar'. Dieser Durchlauf rechnet daher mit Ersatzwerten – bitte die Deye-Anbindung prüfen! (Diese Warnung erscheint bei anhaltendem Ausfall nur alle 30 Min.)"
+                  message: "{{ bp_version }} WARNUNG: Deye-Entität 'geladene Gesamtenergie' (Battery Total Charge) ist auch nach erneutem Auslesen 10 Sekunden später weiterhin 'nicht verfügbar'. Dieser Durchlauf rechnet daher mit Ersatzwerten. Bitte Deye-Anbindung prüfen! (Informativ: Warnung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
                   entity_id: !input helper_logbook_dummy
 
   # ====================================================================
@@ -875,7 +875,7 @@ action:
             data:
               name: "PV Optimizer"
               # json_str | string erzwingt String vor truncate (json_str kann Liste sein).
-              message: "{{ bp_version }} Prognose-Profil (JSON): Der Helfer-Wert ist ungültig ('{{ json_str | string | truncate(30) }}') und es ist kein Mitternachtslauf. Zeitfenster {{ h_index }} übersprungen, kein Neuaufbau (Kaltstart) ausgelöst."
+              message: "{{ bp_version }} Prognose-Profil (JSON): Aktuelles Zeitfenster übersprungen, da der Wert der Helfer-Entität ungültig ist ('{{ json_str | string | truncate(30) }}'). Neuaufbau erfolgt durch den Mitternachtslauf."
               entity_id: !input helper_logbook_dummy
           - stop: "JSON-Slot übersprungen: Helfer ungültig, warte auf Wiederherstellung oder Mitternacht."
       - variables:
@@ -1589,7 +1589,7 @@ action:
       - action: logbook.log
         data:
           name: "PV Optimizer"
-          message: "{{ bp_version }} Morgen-Blockade beendet: Für heute freigegeben – die Blockade greift heute nicht erneut (Rücksetzung um Mitternacht)."
+          message: "{{ bp_version }} Morgen-Blockade beendet: Für heute freigegeben (Informativ: Blockade greift heute nicht erneut)."
           entity_id: !input helper_logbook_dummy
 
   - if:
@@ -1610,7 +1610,7 @@ action:
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ bp_version }} WARNUNG: Die BMS-Sensoren sind seit über 5 Minuten offline! Sicherheitshalber wird mit dem sanften Notlauf-Ladestrom {{ temperatur_limit_ampere | round(0) }} A weitergeladen (Standardwert bei Sensor-Ausfall)."
+          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über 5 Minuten offline. Es wird sicherheitshalber nur mit Notlauf-Ladestrom von {{ temperatur_limit_ampere | round(0) }} A weitergeladen."
     else:
       - action: persistent_notification.dismiss
         data:
@@ -1754,7 +1754,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: Die WP-Warmwasser-Zieltemperatur stand noch auf dem PV-Boost-Wert ({{ var_wp_ziel_temp_pv }} °C). Nach {{ repeat.index }} Versuch(en) auf Normalwert zurückgesetzt: Ziel {{ var_wp_ziel_temp_normal }} °C, Hysterese {{ var_wp_hysterese_normal }} °C."
+                  message: "{{ bp_version }} Mitternachts-Check: Wärmepumpen-Warmwasser-Zieltemperatur von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da sie noch auf dem PV-Boost-Wert stand{% if (repeat.index | int(1)) > 1 %} (nach {{ repeat.index }} Versuchen übernommen){% endif %}."
                   entity_id: !input helper_logbook_dummy
           # FLOAT-MITTERNACHTS-CHECK: Wenn der Cooldown-Timer (Balancing) verloren
           # ging, feuert float_boost_ende nie und die Float-Spannung bleibt auf
@@ -1775,7 +1775,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: Die Erhaltungsspannung (Float) stand noch auf dem Zellausgleich-Wert (Top-Balancing) ({{ var_float_balancing | round(3) }} V), obwohl der Nachlauf-Timer (Cooldown) inaktiv ist – vermutlich ging der Timer verloren. Zurückgesetzt auf Normalwert {{ var_float_normal | round(3) }} V."
+                  message: "{{ bp_version }} Mitternachts-Check: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt, da sie noch auf dem Zellausgleich-Wert stand, obwohl der Nachlauf-Timer inaktiv ist (Timer vermutlich verloren)."
                   entity_id: !input helper_logbook_dummy
           # NACHT-MITTERNACHTS-CHECK: Der "Feierabend" (Sonnenuntergang) ist die
           # EINZIGE Stelle, die den Ladestrom fuer die Nacht auf Max oeffnet.
@@ -1798,7 +1798,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: Der Ladestrom stand nachts nicht auf Maximum ({{ aktueller_ladestrom | round(0) }} A) – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload nach Sonnenuntergang). Ladestrom für die Nacht auf Maximum geöffnet: {{ aktueller_ladestrom | round(0) }} A → {{ target_p0 | round(0) }} A.{{ temp_log_addon }}"
+                  message: "{{ bp_version }} Mitternachts-Check: Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A (Maximum) geöffnet, da er nachts nicht auf Maximum stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{{ temp_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1851,7 +1851,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: Der Netz-Ladeschalter war an, obwohl keine Zwangsladung aktiv ist – vermutlich ging das Zwangsladung-Ende verloren (Reload/Neustart). Sicherheitshalber ausgeschaltet, damit die Batterie nachts nicht aus dem Netz lädt."
+                  message: "{{ bp_version }} Mitternachts-Check: Netz-Ladeschalter ausgeschaltet, da er an war, obwohl keine Zwangsladung aktiv ist (vermutlich Zwangsladung-Ende verloren, z.B. Reload/Neustart) – so lädt die Batterie nachts nicht aus dem Netz."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -1892,11 +1892,11 @@ action:
               - action: persistent_notification.create
                 data:
                   title: "⚠️ PV Optimizer Warnung"
-                  message: "{{ bp_version }} Hinweis: Die Batterie wurde heute nicht voll (Ziel {{ top_balancing_soc }} %), obwohl die Steuerung {{ eingriff_dauer | round(1) }} Stunden lang eingegriffen hat. Bitte die Auslegung/Logik prüfen!"
+                  message: "{{ bp_version }} Hinweis: Batterie wurde heute nicht voll, obwohl die Steuerung aktiv war. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} % < Ziel-Ladestand {{ top_balancing_soc }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Diagnose: Die Batterie hat heute die Ziel-Schwelle nicht erreicht, obwohl die Steuerung aktiv war (höchster Tages-Ladestand: {{ states(var_max_soc_heute) }} % < Ziel {{ top_balancing_soc }} % | Eingriffsdauer: {{ eingriff_dauer | round(1) }} h > 0.5 h)."
+                  message: "{{ bp_version }} Diagnose: Batterie wurde heute nicht voll, obwohl die Steuerung aktiv war. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} % < Ziel-Ladestand {{ top_balancing_soc }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
                   entity_id: !input helper_logbook_dummy
 
           - if:
@@ -1906,7 +1906,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Feierabend: Die Sonne ist untergegangen. Ladestrom für die Nacht auf Maximum freigegeben (Ladestrom geändert: {{ aktueller_ladestrom | round(0) }} A → {{ target_p0 }} A).{{ temp_log_addon }}"
+                  message: "{{ bp_version }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A (Maximum) geöffnet.{{ temp_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -1954,7 +1954,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} Speicherverlust realisiert: Die Batterie ist über Nacht bis auf {{ aktueller_soc | round(0) }} % (Reserve {{ reserve_soc | round(0) }} %) gefallen. Die gestern verschenkte Ladekapazität von {{ kandidat_kwh | round(2) }} kWh hätte nachts ans Haus abgegeben werden können und musste stattdessen aus dem Netz bezogen werden. Auf den Verlust-Zähler addiert (neu: {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh = alt {{ current_tracker_val | round(2) }} + {{ kandidat_kwh | round(2) }} kWh).
+                {{ bp_version }} Speicherverlust realisiert: {{ kandidat_kwh | round(2) }} kWh gestern verschenkte Ladekapazität auf den Verlust-Zähler addiert (Erhöhung von {{ current_tracker_val | round(2) }} kWh auf {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh), da die Batterie über Nacht bis auf {{ aktueller_soc | round(0) }} % gefallen ist. Der Verlust hätte womöglich nachts ans Haus gehen können und musste stattdessen ggf. aus dem Netz bezogen werden.
               entity_id: !input helper_logbook_dummy
           - action: input_number.set_value
             target:
@@ -2124,7 +2124,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Zwangsladung gestartet, Netz-Ladeschalter aktiviert, da die Batterie seit über 10 Tagen nicht voll war (Ladestand {{ aktueller_soc | round(0) }} %; Zwangsladung greift nur im Winter, Nov–Feb)."
+              message: "{{ bp_version }} Netz-Zwangsladung gestartet, Netz-Ladeschalter aktiviert, da die Batterie seit über 10 Tagen nicht voll war (Ladestand (SOC) {{ aktueller_soc | round(0) }} %; Zwangsladung greift nur im Winter, Nov–Feb)."
               entity_id: !input helper_logbook_dummy
 
       - alias: "ZWANGSLADUNG: 100% ERREICHT"
@@ -2146,7 +2146,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Zwangsladung hat 100 % erreicht (Ladestand {{ aktueller_soc | round(1) }} %), Nachlauf-Timer für den Zellausgleich (Cooldown) gestartet."
+              message: "{{ bp_version }} Netz-Zwangsladung hat 100 % erreicht (Ladestand (SOC) {{ aktueller_soc | round(1) }} %), Nachlauf-Timer für den Zellausgleich gestartet."
               entity_id: !input helper_logbook_dummy
 
       - alias: "ZWANGSLADUNG BEENDEN"
@@ -2177,7 +2177,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Zwangsladung beendet, Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt, da der Nachlauf-Timer (Cooldown) abgelaufen ist."
+              message: "{{ bp_version }} Netz-Zwangsladung beendet, Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt, da der Nachlauf-Timer abgelaufen ist."
               entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -2234,7 +2234,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} Interne SOC-Berechnung nachkalibriert: Der Ladestand hat während des Zellausgleichs die 100 % verlassen — die Batterie war bis eben nachweislich voll. Die rechnerische Abweichung lag bei {{ schatten_raw_soc | float(0) | round(2) }} %. Nullpunkt (Tare) auf die aktuellen Zählerstände nachgeführt (geladen: {{ tare_alt | round(2) }} → {{ states(var_battery_total_charge) | float(0) | round(2) }} kWh), interner Ladestand neu auf 100 % verankert.
+                {{ bp_version }} Interne Ladestand-Berechnung nachkalibriert: Nullpunkt (Tara) für 'geladen' von {{ tare_alt | round(2) }} kWh auf {{ states(var_battery_total_charge) | float(0) | round(2) }} kWh nachgeführt und interner Ladestand auf 100 % verankert, da der Ladestand (SOC) während des Zellausgleichs von 100 % wieder gefallen ist (Informativ: Batterie war gerade eben noch voll, rechnerische Abweichung {{ schatten_raw_soc | float(0) | round(2) }} %).
               entity_id: !input helper_logbook_dummy
 
       - alias: "FLOAT-BOOST BEENDEN (Timer ist abgelaufen)"
@@ -2282,7 +2282,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt.{% if ende_kalibrieren %} Interner Ladestand (Tare) auf 100 % nachkalibriert.{% else %} Keine Nachkalibrierung nötig.{% endif %}
+                    {{ bp_version }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt.{% if ende_kalibrieren %} Interner Ladestand (Tara) auf 100 % nachkalibriert.{% else %} Keine Nachkalibrierung nötig.{% endif %}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2315,13 +2315,13 @@ action:
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
-                      message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving) abgebrochen: Die Wärmepumpe läuft an (WP-Sperre aktiv). Die Haltephase wurde beendet, die Batterie geht auf {{ null_ampere }} A – der PV-Überschuss fließt zur Wärmepumpe. Die Kappung startet neu, sobald die Netzeinspeisung nach der WP-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W steigt."
+                      message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Batterieladen auf {{ null_ampere }} A geändert, damit PV-Überschuss zur anlaufenden Wärmepumpe fließt (Wärmepumpen-Sperre aktiv). Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
                       entity_id: !input helper_logbook_dummy
             default:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving) beendet: Haltephase abgelaufen (keine Netzeinspeisung über {{ schwelle_peak_shaving | round(0) }} W mehr). Die Ladesteuerung fällt zurück auf den Normalbetrieb (Prio 8)."
+                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen und Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W, zurück zum Normalbetrieb."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -2407,8 +2407,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} WP-Warmwasser-Boost (PV) ausgelöst: Warmwasser {{ ww_temp | round(1) }} °C liegt unter dem PV-Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C, und die Netzeinspeisung {{ real_export | round(0) }} W übersteigt die Schwelle {{ schwelle_wp_boost | round(0) }} W.
-                Warmwasser-Ziel auf {{ var_wp_ziel_temp_pv }} °C angehoben, Hysterese auf {{ var_wp_hysterese_pv }} °C gesetzt. Timer gestartet (Anlauf + Laufzeit).{{ solcast_log_addon }}
+                {{ bp_version }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Warmwasser-Ziel von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben (Hysterese {{ var_wp_hysterese_pv }} °C). Anlauf- und Laufzeit-Timer gestartet (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C, Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W).{{ solcast_log_addon }}
               entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: ENDE (Reset auf Normalwerte)"
@@ -2453,8 +2452,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} WP-Warmwasser-Boost (PV) beendet: Timer abgelaufen, zurück auf Normalwerte:
-                Warmwasser-Ziel auf {{ var_wp_ziel_temp_normal }} °C, Hysterese auf {{ var_wp_hysterese_normal }} °C gesetzt (Versuche: {{ repeat.index }}, Timer inaktiv).
+                {{ bp_version }} Wärmepumpen-Warmwasser-Boost (PV) beendet: Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da der Laufzeit-Timer abgelaufen ist{% if (repeat.index | int(1)) > 1 %} (nach {{ repeat.index }} Versuchen übernommen){% endif %}.
               entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: WATCHDOG (Sicherheits-Reset auf Normalwerte)"
@@ -2509,7 +2507,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} WP-Watchdog (Sicherheits-Reset): Beide WP-Timer sind inaktiv, aber die Warmwasser-Zieltemperatur stand noch auf dem PV-Boost-Wert ({{ var_wp_ziel_temp_pv }} °C) statt auf dem Normalwert {{ var_wp_ziel_temp_normal }} °C. Mögliche Ursachen: die Wärmepumpe/ViCare hat den regulären Reset nicht übernommen, oder ein Timer ging verloren (z. B. HA-Neustart ohne Wiederherstellung). Nach {{ repeat.index }} Versuch(en) korrigiert: Ziel {{ var_wp_ziel_temp_normal }} °C, Hysterese {{ var_wp_hysterese_normal }} °C.
+                {{ bp_version }} Wärmepumpen-Watchdog (Sicherheits-Reset): Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da beide Wärmepumpen-Timer inaktiv sind, das Ziel aber noch auf dem PV-Boost-Wert stand{% if (repeat.index | int(1)) > 1 %} (nach {{ repeat.index }} Versuchen übernommen){% endif %} (Informativ: vermutlich hat die Wärmepumpe/ViCare den regulären Reset nicht übernommen oder ein Timer ging verloren, z. B. HA-Neustart).
               entity_id: !input helper_logbook_dummy
 
   # ====================================================================
@@ -2577,7 +2575,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing START): Batterie als voll markiert, interner SOC auf 100 % kalibriert, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gedrosselt, Nachlauf-Timer gestartet, da höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V (Informativ: Ladestand {{ aktueller_soc | round(0) }} %)."
+                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing START): Batterie als voll markiert, interner Ladestand auf 100 % kalibriert, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gedrosselt, Nachlauf-Timer gestartet, da höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V (Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %)."
                   entity_id: !input helper_logbook_dummy
 
           # Spätere Register-Korrektur (nur wenn NICHT gerade gestartet, sonst doppelt)
@@ -2588,7 +2586,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing) Sicherheitskorrektur: Sollwert erneut von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gesetzt, da der Wechselrichter den Ladestrom nicht übernommen hat (ist {{ aktueller_ladestrom | round(0) }} A ≠ Soll {{ target_p1 | round(0) }} A, höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V. Informativ: Ladestand {{ aktueller_soc | round(0) }} %)."
+                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing) Sicherheitskorrektur: Sollwert erneut von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gesetzt, da der Wechselrichter den Ladestrom nicht übernommen hat (ist {{ aktueller_ladestrom | round(0) }} A ≠ Soll {{ target_p1 | round(0) }} A, höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V. Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2677,7 +2675,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 4 (WP-Anlaufsperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der anlaufenden Wärmepumpe voll zur Verfügung steht (Steuerung ausgelöst über den WP-Warmwasser-Boost)."
+                  message: "{{ bp_version }} Prio 4 (Wärmepumpen-Anlaufsperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der anlaufenden Wärmepumpe voll zur Verfügung steht (Steuerung ausgelöst über den Wärmepumpen-Warmwasser-Boost)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2706,7 +2704,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 5 (WP-Kompressor-Sperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der Wärmepumpe zur Verfügung steht, da ihr Kompressor gerade läuft (Kompressor-Status: {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }})."
+                  message: "{{ bp_version }} Prio 5 (Wärmepumpen-Kompressor-Sperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der Wärmepumpe zur Verfügung steht, da ihr Kompressor gerade läuft (Kompressor-Status: {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }})."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2782,7 +2780,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Lastspitzen-Kappung (Peak-Shaving) aktiv: Der WP-Laufzeit-Timer wurde vorzeitig beendet (Timer inaktiv). Der Normalbetrieb (Prio 8) ist nach der Kappung wieder freigegeben."
+                  message: "{{ bp_version }} Lastspitzen-Kappung (Peak-Shaving): Wärmepumpen-Laufzeit-Timer beendet, da die Wärmepumpe keinen PV-Überschuss mehr abnimmt (ist fertig und Netzeinspeisung wieder über {{ schwelle_peak_shaving | round(0) }} W). Die Batterie wird jetzt die Einspeisespitze kappen; der beendete Timer sperrt danach den Normalbetrieb (Prio 8) nicht mehr."
                   entity_id: !input helper_logbook_dummy
           # Ziel ist wieder der KONSTANTE Parameter peak_ampere -> einfacher
           # Vergleich reicht, kein Zappeln möglich (Treppenfilter entfernt).
@@ -2793,7 +2791,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben, damit die Batterie den Netz-Einspeise-Überschuss aufnimmt und Lastspitzen kappt, da Netzeinspeisung über Schwelle {{ schwelle_peak_shaving | round(0) }} W festgestellt wurde ({% if (temperatur_limit_ampere | float(9999)) < (peak_ampere | float(9999)) %}durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt. {% endif %}Informativ: aktuelle Netzeinspeisung {{ real_export | round(0) }} W, Batterie puffert {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben, damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da eine Netzeinspeisung über Schwelle {{ schwelle_peak_shaving | round(0) }} W festgestellt wurde ({% if (temperatur_limit_ampere | float(9999)) < (peak_ampere | float(9999)) %}durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt. {% endif %}Informativ: aktuelle Netzeinspeisung {{ real_export | round(0) }} W, Batterie puffert {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
