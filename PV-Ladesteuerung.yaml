@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.14.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.14.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -152,9 +152,9 @@ blueprint:
           default: 7
           selector: {"number": {"min": 2, "max": 20, "step": 1, "unit_of_measurement": "A"}}
         notfall_ampere:
-          name: "Notlauf-Ladestrom bei BMS-Ausfall (A)"
+          name: "Max. Ladestrom bei BMS-Ausfall (A) — Obergrenze"
           description: >-
-            Obergrenze für den Ladestrom, solange alle BMS-Packs offline sind. Ohne BMS lassen sich Zellspannungen und Temperaturen nicht überwachen — statt die Ladung ganz zu stoppen, wird deshalb nur noch gebremst weitergeladen. Bewusst niedrig wählen; der Wert wirkt als Deckel, nicht als Sollwert.
+            OBERGRENZE für den Ladestrom, solange alle BMS-Packs offline sind — KEIN Sollwert. Ohne BMS lassen sich Zellspannungen und Temperaturen nicht überwachen; statt die Ladung ganz zu stoppen, wird deshalb nur noch gebremst weitergeladen. Die normale Regelung arbeitet darunter weiter und lädt oft mit weniger: Braucht sie z. B. nur 16 A, bleibt es bei 16 A, auch wenn hier 30 A stehen. Der Wert begrenzt also nur nach oben. Bewusst niedrig wählen.
           default: 10
           selector: {"number": {"min": 2, "max": 50, "step": 1, "unit_of_measurement": "A"}}
         grid_ampere_zwangsladung:
@@ -775,7 +775,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.14.0]"
+      bp_version: "[V3.14.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1671,7 +1671,7 @@ action:
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom sicherheitshalber auf höchstens {{ temperatur_limit_ampere | round(0) }} A gedeckelt, solange Zellspannungen und Temperaturen nicht überwacht werden können. Aktuell {{ aktueller_ladestrom | round(0) }} A."
+          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom-Obergrenze sicherheitshalber auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, solange Zellspannungen und Temperaturen nicht überwacht werden können. Das ist nur ein Deckel — die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A."
       # Logbuch-Eintrag, gedrosselt auf max. eine Meldung je halber Stunde -
       # gleiches Muster wie die Deye-Ausfallwarnung: exakt an den 5-Minuten-Takt
       # UND Minute 0/30 gebunden, damit gleichzeitig gequeuete Trigger die
@@ -1683,7 +1683,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} BMS offline: Ladestrom auf höchstens {{ temperatur_limit_ampere | round(0) }} A gedeckelt, aktuell {{ aktueller_ladestrom | round(0) }} A, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
+              message: "{{ bp_version }} BMS offline: Ladestrom-Obergrenze auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. Die Obergrenze ist kein Sollwert: Die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A. (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
               entity_id: !input helper_logbook_dummy
     else:
       - action: persistent_notification.dismiss
