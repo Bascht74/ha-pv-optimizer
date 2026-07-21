@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.14.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.0.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -350,16 +350,16 @@ blueprint:
           default: 6500
           selector: {"number": {"min": 1000, "max": 30000, "step": 100, "unit_of_measurement": "W"}}
         peak_ampere:
-          name: "Ladestrom beim Peak-Shaving (A)"
+          name: "Mindest-Steigerung beim Peak-Shaving (A)"
           description: >-
-            Ladestrom in Ampere, mit dem die Batterie beim Peak-Shaving lädt. Faustregel: ungefähr so hoch, dass die typische Überschussleistung gerade aufgenommen wird (Watt ÷ Batteriespannung ≈ Ampere).
-          default: 48
-          selector: {"number": {"min": 20, "max": 100, "step": 1, "unit_of_measurement": "A"}}
+            ACHTUNG, Bedeutung ab V4.0.0 geändert: Dies ist KEIN fester Ladestrom mehr, sondern die kleinste Stufe, um die der Ladestrom angehoben wird, wenn die Einspeisung die Start-Schwelle überschreitet. Der Blueprint rechnet bei jeder Überschreitung aus, wie viel Strom die überschüssigen Watt binden würden (Watt über der Schwelle ÷ Batteriespannung); ist das weniger als dieser Wert, wird stattdessen um diesen Wert erhöht. So tastet sich die Ladung in Stufen nach oben, statt einen festen Strom zu raten.
+          default: 20
+          selector: {"number": {"min": 5, "max": 100, "step": 1, "unit_of_measurement": "A"}}
         duration_peak_hold:
           name: "Nachlaufzeit (Hold-Timer)"
           description: >-
-            Zeitdauer (hh:mm:ss), die Peak-Shaving nach dem letzten Überschuss noch aktiv bleibt. Ohne diese Nachlaufzeit würde die Batterie bei jeder Wolke sofort abschalten. Solange weiter Überschuss anliegt, wird der Timer immer wieder auf diesen Wert zurückgesetzt — Peak-Shaving läuft also durch, solange eingespeist wird.
-          default: "00:30:00"
+            Zeitdauer (hh:mm:ss), die Peak-Shaving nach dem letzten Überschuss noch aktiv bleibt. Ohne diese Nachlaufzeit würde die Batterie bei jeder Wolke sofort abschalten. Solange weiter Überschuss anliegt, wird der Timer immer wieder auf diesen Wert zurückgesetzt — Peak-Shaving läuft also durch, solange eingespeist wird. Erst nach Ablauf übernimmt wieder die normale Ladeberechnung (Prio 8).
+          default: "01:00:00"
           selector: {"time": {}}
     sec_waermepumpe:
       name: "7) Wärmepumpe / PV-Boost (Optional)"
@@ -775,7 +775,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.14.1]"
+      bp_version: "[V4.0.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1411,10 +1411,25 @@ action:
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
-      # Peak-Shaving nutzt den FESTEN Parameter peak_ampere (gedeckelt nur
-      # durch Temperatur). Die frühere Kopplung an den dynamischen P5-Wert
-      # (raw_peak = max(...)) war eine nicht abgestimmte Änderung und ist entfernt.
-      target_p3: "{{ [peak_ampere, temperatur_limit_ampere] | min }}"
+      # PEAK-SHAVING-TREPPE (ab V4.0.0)
+      #
+      # Frueher: fester Zielstrom peak_ampere (48 A). Problem: eine feste Zahl
+      # passt nie - mal zu niedrig (Einspeisegrenze wurde trotzdem gerissen),
+      # mal zu hoch (Batterie unnoetig frueh voll).
+      #
+      # Jetzt: Bei JEDER Ueberschreitung der Schwelle wird der Ladestrom um eine
+      # Stufe ANGEHOBEN (nie abgesenkt - bewusst, siehe unten). Die Stufe ist der
+      # rechnerische Bedarf (Watt ueber der Schwelle / Batteriespannung),
+      # mindestens aber peak_ampere. Dadurch tastet sich die Ladung in wenigen
+      # Schritten an den tatsaechlichen Bedarf heran, statt ihn zu raten.
+      #
+      # KEIN Absenken: Ein Rueckregeln wuerde bei jeder Wolke Modbus-Schreibzugriffe
+      # auslosen und zappeln. Faellt die PV ab, laeuft der Hold-Timer aus und
+      # Prio 8 uebernimmt die Berechnung wieder.
+      peak_delta: >
+        {% set roh = (real_export - schwelle_peak_shaving) / (nominale_spannung | float(51.2)) %}
+        {{ [roh, peak_ampere | float(20)] | max | round(0) }}
+      target_p3: "{{ [ (aktueller_ladestrom | float(0)) + (peak_delta | float(20)), max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0) }}"
       # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
 
@@ -2856,16 +2871,19 @@ action:
                   name: "PV Optimizer"
                   message: "{{ bp_version }} Lastspitzen-Kappung (Peak-Shaving): Wärmepumpen-Laufzeit-Timer beendet, da die Wärmepumpe keinen PV-Überschuss mehr abnimmt (ist fertig und Netzeinspeisung wieder über {{ schwelle_peak_shaving | round(0) }} W). Die Batterie wird jetzt die Einspeisespitze kappen; der beendete Timer sperrt danach den Normalbetrieb (Prio 8) nicht mehr."
                   entity_id: !input helper_logbook_dummy
-          # Ziel ist wieder der KONSTANTE Parameter peak_ampere -> einfacher
-          # Vergleich reicht, kein Zappeln möglich (Treppenfilter entfernt).
+          # TREPPE: Nur anheben, solange die Einspeisung die Schwelle wirklich
+          # ueberschreitet - und nur, wenn die neue Stufe hoeher liegt als der
+          # aktuelle Sollwert. Liegt die Einspeisung darunter, bleibt der Strom
+          # unveraendert stehen (kein Absenken, kein Modbus-Zappeln); das Ende
+          # regelt allein der Hold-Timer.
           - if:
               - condition: template
-                value_template: "{{ ((aktueller_ladestrom | round(0)) - (target_p3 | round(0))) | abs >= 2 }}"
+                value_template: "{{ real_export > schwelle_peak_shaving and (target_p3 | round(0)) > (aktueller_ladestrom | round(0)) }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben, damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da eine Netzeinspeisung über Schwelle {{ schwelle_peak_shaving | round(0) }} W festgestellt wurde ({% if (temperatur_limit_ampere | float(9999)) < (peak_ampere | float(9999)) %}durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt. {% endif %}Informativ: aktuelle Netzeinspeisung {{ real_export | round(0) }} W, Batterie puffert {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W (Stufe = größerer Wert aus rechnerischem Bedarf {{ ((real_export - schwelle_peak_shaving) / (nominale_spannung | float(51.2))) | round(0) }} A für {{ (real_export - schwelle_peak_shaving) | round(0) }} W über der Schwelle und Mindest-Steigerung {{ peak_ampere | round(0) }} A.{% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
