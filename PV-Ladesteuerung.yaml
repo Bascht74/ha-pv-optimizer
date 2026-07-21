@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.11.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.12.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -763,7 +763,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.11.0]"
+      bp_version: "[V3.12.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1573,8 +1573,12 @@ action:
       # entfernt sein. Laeuft die Blockade bereits, haelt sie bis zum reg.
       # dynamischen Ausstieg (blockade_dyn_t == '' bzw. Deckel) durch -> der
       # Ausstieg bleibt dynamisch, kein vorzeitiges Abbrechen 2h vor T.
+      # BMS komplett offline -> Blockade beenden: ohne Zellspannungen/Temperaturen
+      # soll nicht auf 0 A blockiert, sondern mit dem gedeckelten Notlauf-Strom
+      # weitergeladen werden (Prio 8 uebernimmt, temperatur_limit_ampere = 10 A).
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
+           and not packs_offline_bestaetigt
            and now().month not in winter_monate
            and blockade_dyn_t != ''
            and (aktueller_modus == 'blockade'
@@ -1630,7 +1634,20 @@ action:
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über 5 Minuten offline. Es wird sicherheitshalber nur mit Notlauf-Ladestrom von {{ temperatur_limit_ampere | round(0) }} A weitergeladen."
+          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom sicherheitshalber auf höchstens {{ temperatur_limit_ampere | round(0) }} A gedeckelt, solange Zellspannungen und Temperaturen nicht überwacht werden können. Aktuell {{ aktueller_ladestrom | round(0) }} A."
+      # Logbuch-Eintrag, gedrosselt auf max. eine Meldung je halber Stunde -
+      # gleiches Muster wie die Deye-Ausfallwarnung: exakt an den 5-Minuten-Takt
+      # UND Minute 0/30 gebunden, damit gleichzeitig gequeuete Trigger die
+      # Meldung nicht mehrfach schreiben.
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ bp_version }} BMS offline: Ladestrom auf höchstens {{ temperatur_limit_ampere | round(0) }} A gedeckelt, aktuell {{ aktueller_ladestrom | round(0) }} A, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
+              entity_id: !input helper_logbook_dummy
     else:
       - action: persistent_notification.dismiss
         data:
