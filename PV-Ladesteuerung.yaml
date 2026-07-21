@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.10.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.11.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -763,7 +763,16 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.10.0]"
+      bp_version: "[V3.11.0]"
+      # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
+      #     damit keine Neuzuweisung je Instanz noetig ist) ---
+      # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
+      # zugleich das einzige Fenster, in dem die Netz-Zwangsladung starten darf.
+      winter_monate: [11, 12, 1, 2]
+      # Mindestdauer (Stunden), die die Morgen-Blockade beim START noch laufen
+      # koennen muss; liegt der spaeteste Ladebeginn naeher, wird gar nicht erst
+      # blockiert (Whipsaw-Schutz gegen kurze Mikro-Blockaden).
+      blockade_min_dauer_h: 2
       var_battery_total_charge: !input battery_total_charge
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
@@ -1135,27 +1144,6 @@ action:
         {% endif %}
         {{ ns.val }}
 
-      solcast_nach_blockade: >
-        {% set ns = namespace(val=0) %}
-        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
-          {% for stunde in state_attr(var_solcast_heute, 'detailedForecast') %}
-            {% set s_start = as_datetime(stunde.period_start) | as_local %}
-
-            {% set blockade_time = today_at(var_zeit_blockade | string) %}
-            {% if s_start >= blockade_time and s_start.date() == now().date() %}
-              {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
-              {% set blend = ((stunde.pv_estimate + stunde.pv_estimate10) / 2) * 0.5 %}
-              {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {% set haus_kwh = json_profil[h_index] | float(0.2) %}
-              {% set netto = blend - haus_kwh %}
-              {% set ns.val = ns.val + netto %}
-            {% endif %}
-          {% endfor %}
-        {% else %}
-          {% set ns.val = states(var_solcast_rest_sensor) | float(0) %}
-        {% endif %}
-        {{ ns.val }}
-
       temp_min_live: >
         {% set vals = [] %}
         {% if pack1_online %}{% set vals = vals + [states(var_bms1_temp_min) | float(-99)] %}{% endif %}
@@ -1216,8 +1204,6 @@ action:
       # tatsächlich ins Netz geht, nicht was die Batterie gerade puffert.
       potential_export: "{{ grid_export - batterie_leistung }}"
       real_export: "{{ grid_export }}"
-
-      netto_nach_blockade: "{{ solcast_nach_blockade - puffer_kwh }}"
 
   # ====================================================================
   # NEU: ZEITANTEILIGE HALBSTUNDEN-SCHLEIFE (Ladezeit + Defizit)
@@ -1427,7 +1413,7 @@ action:
         or (states(var_timer_cooldown) == 'active' and not zwangsladung_aktiv)) }}
 
       schnee_falle_aktiv: >
-        {% set is_winter = now().month in [11, 12, 1, 2] %}
+        {% set is_winter = now().month in winter_monate %}
         {% set power_low = pv_power < (pv_forecast / 2) %}
         {% set diff_high = (pv_forecast - pv_power) > 1000 %}
         {{ is_winter and power_low and diff_high }}
@@ -1582,9 +1568,18 @@ action:
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
+      # 2h-Mindestdauer als reine START-Schwelle: nur beim ERSTEN Eintritt
+      # (Modus noch nicht 'blockade') muss der spaeteste Ladebeginn >= 2h
+      # entfernt sein. Laeuft die Blockade bereits, haelt sie bis zum reg.
+      # dynamischen Ausstieg (blockade_dyn_t == '' bzw. Deckel) durch -> der
+      # Ausstieg bleibt dynamisch, kein vorzeitiges Abbrechen 2h vor T.
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
-           and blockade_dyn_t != '' and not blockade_heute_beendet }}
+           and now().month not in winter_monate
+           and blockade_dyn_t != ''
+           and (aktueller_modus == 'blockade'
+                or (as_datetime(blockade_dyn_t) - now()).total_seconds() >= (blockade_min_dauer_h | float(2)) * 3600)
+           and not blockade_heute_beendet }}
 
 # ====================================================================
 # ROOT-ACTIONS STATE-MACHINE
@@ -2119,7 +2114,7 @@ action:
           - condition: trigger
             id: zwangsladung_start
           - condition: template
-            value_template: "{{ now().month in [11, 12, 1, 2] }}"
+            value_template: "{{ now().month in winter_monate }}"
           - condition: state
             entity_id: !input helper_zwangsladung_aktiv
             state: "off"
