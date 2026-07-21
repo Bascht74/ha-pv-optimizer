@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.13.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.14.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -151,6 +151,12 @@ blueprint:
             Der kleinste Strom, den der Blueprint setzt, wenn er die Ladung stark bremst (z. B. während des Top-Balancings). Nicht 0 wählen: Ein kleiner Reststrom hält die Zellspannung oben, damit der Balancer arbeiten kann.
           default: 7
           selector: {"number": {"min": 2, "max": 20, "step": 1, "unit_of_measurement": "A"}}
+        notfall_ampere:
+          name: "Notlauf-Ladestrom bei BMS-Ausfall (A)"
+          description: >-
+            Obergrenze für den Ladestrom, solange alle BMS-Packs offline sind. Ohne BMS lassen sich Zellspannungen und Temperaturen nicht überwachen — statt die Ladung ganz zu stoppen, wird deshalb nur noch gebremst weitergeladen. Bewusst niedrig wählen; der Wert wirkt als Deckel, nicht als Sollwert.
+          default: 10
+          selector: {"number": {"min": 2, "max": 50, "step": 1, "unit_of_measurement": "A"}}
         grid_ampere_zwangsladung:
           name: "Netzlade-Strom bei Zwangsladung (A)"
           description: >-
@@ -769,7 +775,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.13.0]"
+      bp_version: "[V3.14.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1001,6 +1007,7 @@ action:
       max_ampere: !input max_ampere
       null_ampere: 0
       min_ampere: !input min_ampere
+      notfall_ampere: !input notfall_ampere
       peak_ampere: !input peak_ampere
       nominale_spannung: !input nominale_spannung
       default_tou_soc: !input default_tou_soc
@@ -1074,7 +1081,7 @@ action:
       # ENTPRELLUNG DES BMS-OFFLINE-NOTLAUFS
       #
       # Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf
-      # 'unavailable'. Ohne Entprellung loeste das sofort den 10A-Notlauf und
+      # 'unavailable'. Ohne Entprellung loeste das sofort den Notlauf-Strom und
       # eine Warnung aus - unnoetig, denn der ESP ist nach wenigen Sekunden
       # wieder da.
       #
@@ -1189,15 +1196,15 @@ action:
 
       temp_limit_ampere_raw: >
         {% if packs_offline_bestaetigt %}
-          10
+          {{ notfall_ampere }}
         {% elif packs_online == 0 %}
           {# Kurzer Reboot (noch nicht als offline bestaetigt): NICHT auf 0A #}
           {# rechnen (packs_online==0 wuerde die Multiplikation zu 0 machen). #}
-          {# Es wird mit dem sanften Notlauf-Strom 10A weitergeladen - Laden #}
+          {# Es wird mit dem sanften Notlauf-Strom weitergeladen - Laden #}
           {# laeuft also durch, aber gebremst, nicht mit voller Leistung. #}
           {# Damit identisch zum bisherigen Verhalten bei packs_online==0; #}
           {# nur die WARNUNG ist ueber packs_offline_bestaetigt entprellt. #}
-          10
+          {{ notfall_ampere }}
         {% else %}
           {{ (temp_limit_crate * pack_capacity_ah * packs_online) | round(0) }}
         {% endif %}
@@ -1424,7 +1431,7 @@ action:
       # Batterie voll genug zum Balancieren. SOC-unabhaengig (der SOC kaeme bei
       # BMS-Ausfall ohnehin nur aus dem Schatten-BMS).
       # Sicherheit: Der Ladestrom ist in dieser Lage ohnehin auf den Notlaufwert
-      # gedeckelt (temperatur_limit_ampere = 10 A), das Balancing laeuft also
+      # gedeckelt (temperatur_limit_ampere = notfall_ampere), das Balancing laeuft also
       # sanft. Das Ende regelt - wie beim normalen Pfad - allein der Cooldown-
       # Timer: Beim Start wird heute_schon_voll sofort gesetzt, damit faellt
       # dieser Auslöser weg und die Float-Spannung wird nach Timerablauf
@@ -1605,7 +1612,7 @@ action:
       # Ausstieg bleibt dynamisch, kein vorzeitiges Abbrechen 2h vor T.
       # BMS komplett offline -> Blockade beenden: ohne Zellspannungen/Temperaturen
       # soll nicht auf 0 A blockiert, sondern mit dem gedeckelten Notlauf-Strom
-      # weitergeladen werden (Prio 8 uebernimmt, temperatur_limit_ampere = 10 A).
+      # weitergeladen werden (Prio 8 uebernimmt, temperatur_limit_ampere = notfall_ampere).
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
            and not packs_offline_bestaetigt
