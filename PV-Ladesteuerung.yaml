@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.12.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V3.13.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -91,6 +91,12 @@ blueprint:
             Die number-Entität für die Erhaltungsladespannung. Der Blueprint hebt sie während des Zellausgleichs kurzzeitig an (Abschnitt 8) und setzt sie danach zurück. Leer lassen, wenn dein Wechselrichter das nicht unterstützt — dann entfällt nur die Spannungsanhebung, das Balancing läuft trotzdem.
           default: ""
           selector: {"entity": {"domain": "number"}}
+        wr_battery_voltage_sensor:
+          name: "Messwert: Batteriespannung (V) — optional"
+          description: >-
+            Die Sensor-Entität mit der aktuell GEMESSENEN Batterie-Gesamtspannung des Wechselrichters (nicht die Stellgröße darüber). Wird nur als Ersatz-Auslöser für den Zellausgleich gebraucht: Fallen alle BMS-Packs aus, fehlen die Zellspannungen — dann startet der Zellausgleich stattdessen, sobald dieser Messwert die Float-Spannung des Zellausgleichs (Abschnitt 8) erreicht. Leer lassen, wenn nicht vorhanden — dann entfällt nur diese Ersatz-Auslösung.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
         wr_grid_charge_switch:
           name: "Stellgröße: Netzladung Ein/Aus"
           description: >-
@@ -763,7 +769,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V3.12.0]"
+      bp_version: "[V3.13.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -973,6 +979,7 @@ action:
       var_timer_cooldown: !input helper_timer_cooldown
       var_wp_boost_aktiv: !input wp_boost_aktiv
       var_wr_float_voltage: !input wr_float_voltage_sensor
+      var_wr_battery_voltage: !input wr_battery_voltage_sensor
       var_schwelle_peak_shaving: !input schwelle_peak_shaving
       var_schwelle_wp_boost: !input schwelle_wp_boost
 
@@ -1408,8 +1415,31 @@ action:
       zwangsladung_aktiv: "{{ is_state(var_zwangsladung_aktiv, 'on') }}"
       heute_schon_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
       aktueller_modus: "{{ states(var_lade_modus) if var_lade_modus != '' else 'normal' }}"
+      # ERSATZ-AUSLOESER BEI BMS-KOMPLETTAUSFALL
+      #
+      # Fallen alle BMS-Packs aus, sind vmax1-3 'unavailable' -> float(0) und der
+      # normale, zellspannungsbasierte Start kann NIE ausloesen (0 >= 3.46 ist
+      # falsch). Ersatzweise wird dann die gemessene Batterie-GESAMTspannung
+      # herangezogen: erreicht sie die Zellausgleich-Float-Spannung, ist die
+      # Batterie voll genug zum Balancieren. SOC-unabhaengig (der SOC kaeme bei
+      # BMS-Ausfall ohnehin nur aus dem Schatten-BMS).
+      # Sicherheit: Der Ladestrom ist in dieser Lage ohnehin auf den Notlaufwert
+      # gedeckelt (temperatur_limit_ampere = 10 A), das Balancing laeuft also
+      # sanft. Das Ende regelt - wie beim normalen Pfad - allein der Cooldown-
+      # Timer: Beim Start wird heute_schon_voll sofort gesetzt, damit faellt
+      # dieser Auslöser weg und die Float-Spannung wird nach Timerablauf
+      # zuverlaessig wieder gesenkt (kein Haengenbleiben auf Balancing-Spannung).
+      batterie_spannung: "{{ states(var_wr_battery_voltage) | float(0) if var_wr_battery_voltage != '' else 0 }}"
+      bms_ausfall_balancing: >
+        {{ var_wr_battery_voltage != '' and packs_offline_bestaetigt
+           and batterie_spannung >= (var_float_balancing | float(99)) }}
+      # Auslösegrund fuer die Prio-1-Meldungen. Bei BMS-Ausfall waeren die
+      # Zellspannungen 0.0 V - die Meldung darf dann nicht "0.0 V >= 3.46 V"
+      # behaupten, sondern muss den Ersatz-Auslöser nennen.
+      balancing_grund: >-
+        {% if bms_ausfall_balancing %}alle BMS-Packs ausgefallen sind und die gemessene Batteriespannung {{ batterie_spannung | round(2) }} V die Zellausgleich-Spannung {{ var_float_balancing | round(2) }} V erreicht hat{% else %}höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V{% endif %}
       top_balancing_noetig: >
-        {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)))
+        {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing))
         or (states(var_timer_cooldown) == 'active' and not zwangsladung_aktiv)) }}
 
       schnee_falle_aktiv: >
@@ -2559,7 +2589,7 @@ action:
           - variables:
               balancing_start_jetzt: >
                 {{ states(var_timer_cooldown) == 'idle' and not zwangsladung_aktiv and
-                (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage)) }}
+                (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing) }}
           - if:
               - condition: template
                 value_template: "{{ balancing_start_jetzt }}"
@@ -2612,7 +2642,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing START): Batterie als voll markiert, interner Ladestand auf 100 % kalibriert, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gedrosselt, Nachlauf-Timer gestartet, da höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V (Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %)."
+                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing START): Batterie als voll markiert, interner Ladestand auf 100 % kalibriert, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gedrosselt, Nachlauf-Timer gestartet, da {{ balancing_grund }} (Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %)."
                   entity_id: !input helper_logbook_dummy
 
           # Spätere Register-Korrektur (nur wenn NICHT gerade gestartet, sonst doppelt)
@@ -2623,7 +2653,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing) Sicherheitskorrektur: Sollwert erneut von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gesetzt, da der Wechselrichter den Ladestrom nicht übernommen hat (ist {{ aktueller_ladestrom | round(0) }} A ≠ Soll {{ target_p1 | round(0) }} A, höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V. Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %)."
+                  message: "{{ bp_version }} Prio 1 (Zellausgleich / Top-Balancing) Sicherheitskorrektur: Sollwert erneut von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gesetzt, da der Wechselrichter den Ladestrom nicht übernommen hat (ist {{ aktueller_ladestrom | round(0) }} A ≠ Soll {{ target_p1 | round(0) }} A, Zellausgleich läuft, da {{ balancing_grund }}. Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %)."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
