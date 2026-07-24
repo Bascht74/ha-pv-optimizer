@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.0.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.1.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -350,9 +350,9 @@ blueprint:
           default: 6500
           selector: {"number": {"min": 1000, "max": 30000, "step": 100, "unit_of_measurement": "W"}}
         peak_ampere:
-          name: "Mindest-Steigerung beim Peak-Shaving (A)"
+          name: "Steigerung je Schritt beim Peak-Shaving (A)"
           description: >-
-            ACHTUNG, Bedeutung ab V4.0.0 geändert: Dies ist KEIN fester Ladestrom mehr, sondern die kleinste Stufe, um die der Ladestrom angehoben wird, wenn die Einspeisung die Start-Schwelle überschreitet. Der Blueprint rechnet bei jeder Überschreitung aus, wie viel Strom die überschüssigen Watt binden würden (Watt über der Schwelle ÷ Batteriespannung); ist das weniger als dieser Wert, wird stattdessen um diesen Wert erhöht. So tastet sich die Ladung in Stufen nach oben, statt einen festen Strom zu raten.
+            ACHTUNG, Bedeutung ab V4.0.0 geändert: Dies ist KEIN fester Ladestrom mehr, sondern die Stufe, um die der Ladestrom jedes Mal angehoben wird, solange die Einspeisung über der Start-Schwelle liegt — so lange, bis sie darunter bleibt. Abgesenkt wird nie; sobald die Einspeisung nachlässt, läuft die Nachlaufzeit ab und die normale Ladeberechnung übernimmt wieder. Faustregel: 20 A entsprechen bei 48-V-Batterien rund 1 kW je Schritt.
           default: 20
           selector: {"number": {"min": 5, "max": 100, "step": 1, "unit_of_measurement": "A"}}
         duration_peak_hold:
@@ -689,6 +689,14 @@ trigger:
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
     for: "00:00:30"
     id: export_wp_boost_schwelle
+  - alias: "Trigger: Home-Assistant-Neustart (Einlesepause)"
+    # Nach einem HA-Neustart sind Deye- und BMS-Entitaeten kurzzeitig
+    # 'unavailable'. Dieser Lauf tut nichts ausser 20 s zu warten - da die
+    # Automation im Modus 'queued' laeuft, stauen sich gleichzeitig
+    # ausgeloeste Laeufe dahinter und finden danach saubere Werte vor.
+    platform: homeassistant
+    event: start
+    id: ha_start
   - alias: "Trigger: Tägliche Maintenance (Reset & BMS Check)"
     platform: time
     at: "23:58:00"
@@ -771,11 +779,25 @@ trace:
   stored_traces: 400
 
 action:
+  # NEUSTART-EINLESEPAUSE
+  #
+  # Nach einem HA-Neustart melden Deye- und BMS-Entitaeten kurzzeitig
+  # 'unavailable'. Dieser Lauf wartet nur - im Modus 'queued' stauen sich
+  # gleichzeitig ausgeloeste Laeufe dahinter und finden danach saubere Werte
+  # vor. Danach wird der Lauf beendet: Zum Regeln waeren die Werte zwar da,
+  # aber der naechste regulaere Trigger uebernimmt das ohnehin.
+  - if:
+      - condition: trigger
+        id: ha_start
+    then:
+      - delay: "00:00:20"
+      - stop: "Neustart-Einlesepause beendet - Regelung übernimmt der nächste reguläre Lauf."
+
   # ====================================================================
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.0.0]"
+      bp_version: "[V4.1.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -786,6 +808,9 @@ action:
       # blockiert (Whipsaw-Schutz gegen kurze Mikro-Blockaden).
       blockade_min_dauer_h: 2
       var_battery_total_charge: !input battery_total_charge
+      # Bewusst schon hier (nicht erst weiter unten): Der DEYE-RETRY direkt
+      # darunter prueft dieses Register mit.
+      var_wr_max_charge: !input wr_max_charge_current
       var_battery_total_discharge: !input battery_total_discharge
       var_helper_tare_charge: !input helper_tare_charge
       var_helper_blockade_beendet: !input helper_blockade_beendet
@@ -800,8 +825,12 @@ action:
   # Blueprint mit Fallback-Werten weiter - das kann Fehlentscheidungen
   # ausloesen (z.B. SOC=0 -> falscher Blockade-Austritt).
   #
-  # Geprueft wird var_battery_total_charge stellvertretend fuer die GESAMTE
-  # Deye-Anbindung: Faellt dieser Sensor aus, sind meist alle betroffen.
+  # Geprueft werden var_battery_total_charge UND var_wr_max_charge
+  # stellvertretend fuer die GESAMTE Deye-Anbindung: Faellt einer aus, sind
+  # meist alle betroffen. var_wr_max_charge ist zusaetzlich noetig, weil sein
+  # Fallback (aktueller_ladestrom -> float(140)) sonst eine Aenderung
+  # vortaeuscht und einen ueberfluessigen Register-Schreibvorgang samt
+  # Falschmeldung ausloest (belegt 24.07.2026 nach einem Neustart).
   # Der Delay wirkt auf ALLE Deye-Werte des Laufs (SOC, Netz-Export,
   # PV-Leistung, Schatten-BMS-Zaehler) - Jinja rendert states() erst zur
   # Laufzeit, liest also nach dem Warten frisch ein.
@@ -814,17 +843,27 @@ action:
   - if:
       - condition: template
         value_template: >
-          {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
+          {{ states(var_battery_total_charge) in ['unavailable','unknown']
+             or states(var_wr_max_charge) in ['unavailable','unknown'] }}
     then:
-      # Stiller Retry: keine Meldung, nur warten und danach neu lesen.
+      # Stiller Retry 1: keine Meldung, nur warten und danach neu lesen.
       - delay: "00:00:10"
-      # Zweite Pruefung NACH dem Delay: ist der Wert immer noch weg?
-      # Nur dann handelt es sich um ein echtes Problem (nicht mehr um den
-      # normalen, kurzen Modbus-Aussetzer) -> jetzt warnen.
+      # Zweite Pruefung NACH dem Delay: ist ein Wert immer noch weg?
       - if:
           - condition: template
             value_template: >
-              {{ states(var_battery_total_charge) in ['unavailable','unknown'] }}
+              {{ states(var_battery_total_charge) in ['unavailable','unknown']
+                 or states(var_wr_max_charge) in ['unavailable','unknown'] }}
+        then:
+          # Stiller Retry 2 (zusammen max. 20 s Wartezeit).
+          - delay: "00:00:10"
+      # Dritte Pruefung: auch nach 20 s weg -> echtes Problem (kein normaler
+      # kurzer Modbus-Aussetzer mehr) -> warnen und den Lauf beenden.
+      - if:
+          - condition: template
+            value_template: >
+              {{ states(var_battery_total_charge) in ['unavailable','unknown']
+                 or states(var_wr_max_charge) in ['unavailable','unknown'] }}
         then:
           # Log-Entprellung ohne Helfer: Die Warnung soll nur einmal je halber
           # Stunde erscheinen. Die alte Fensterprüfung (Minute 0-4 oder 30-34)
@@ -845,8 +884,12 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} WARNUNG: Deye-Entität 'geladene Gesamtenergie' (Battery Total Charge) ist auch nach erneutem Auslesen 10 Sekunden später weiterhin 'nicht verfügbar'. Dieser Durchlauf rechnet daher mit Ersatzwerten. Bitte Deye-Anbindung prüfen! (Informativ: Warnung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
+                  message: "{{ bp_version }} WARNUNG: Deye-Anbindung auch nach 20 Sekunden Wartezeit weiterhin 'nicht verfügbar' ({% if states(var_battery_total_charge) in ['unavailable','unknown'] %}geladene Gesamtenergie{% if states(var_wr_max_charge) in ['unavailable','unknown'] %} und Ladestrom-Register{% endif %}{% else %}Ladestrom-Register{% endif %}). Dieser Durchlauf wird abgebrochen, damit nicht mit Ersatzwerten geregelt wird. Bitte Deye-Anbindung prüfen! (Informativ: Warnung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
                   entity_id: !input helper_logbook_dummy
+          # Lauf beenden: Ohne Ladestrom-Register basiert jede Entscheidung auf
+          # dem Fallback-Wert (140 A) und taeuscht eine Aenderung vor; setzen
+          # laesst sich ohnehin nichts, solange der Deye nicht antwortet.
+          - stop: "Deye-Anbindung nicht verfügbar - Regelung für diesen Durchlauf ausgesetzt."
 
   # ====================================================================
   # DATENPFLEGE: 30-MINUTEN JSON PROFIL UPDATEN & RESETTEN (JETZT kWh)
@@ -951,7 +994,6 @@ action:
       var_solcast_heute: !input solcast_heute_sensor
       var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
-      var_wr_max_charge: !input wr_max_charge_current
       var_wr_grid_charge_switch: !input wr_grid_charge_switch
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
@@ -1411,25 +1453,25 @@ action:
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
-      # PEAK-SHAVING-TREPPE (ab V4.0.0)
+      # PEAK-SHAVING-TREPPE (ab V4.0.0, vereinfacht in V4.1.0)
       #
-      # Frueher: fester Zielstrom peak_ampere (48 A). Problem: eine feste Zahl
-      # passt nie - mal zu niedrig (Einspeisegrenze wurde trotzdem gerissen),
-      # mal zu hoch (Batterie unnoetig frueh voll).
+      # Bei JEDER Ueberschreitung der Schwelle wird der Ladestrom um eine feste
+      # Stufe (peak_ampere) ANGEHOBEN, bis die Einspeisung unter der Schwelle
+      # bleibt.
       #
-      # Jetzt: Bei JEDER Ueberschreitung der Schwelle wird der Ladestrom um eine
-      # Stufe ANGEHOBEN (nie abgesenkt - bewusst, siehe unten). Die Stufe ist der
-      # rechnerische Bedarf (Watt ueber der Schwelle / Batteriespannung),
-      # mindestens aber peak_ampere. Dadurch tastet sich die Ladung in wenigen
-      # Schritten an den tatsaechlichen Bedarf heran, statt ihn zu raten.
+      # WARUM KEINE BEDARFSRECHNUNG (V4.0.0 hatte eine, sie war wirkungslos):
+      # Der Wechselrichter deckelt die Einspeisung bereits auf die
+      # Einspeisegrenze. Der gemessene Export liegt deshalb IMMER nur knapp
+      # ueber der Schwelle - die abgeregelte Leistung entsteht gar nicht erst
+      # und ist nirgends messbar. Auch ueber potential_export nicht: dort
+      # kuerzt sich der Ladestrom heraus, die Rechnung ergibt strukturell
+      # ~aktueller_ladestrom + 2 A. Der Mindestschritt gewann dadurch in 100 %
+      # der Faelle (belegt 23.07.2026) - die Rechnung war reines Beiwerk.
       #
       # KEIN Absenken: Ein Rueckregeln wuerde bei jeder Wolke Modbus-Schreibzugriffe
       # auslosen und zappeln. Faellt die PV ab, laeuft der Hold-Timer aus und
       # Prio 8 uebernimmt die Berechnung wieder.
-      peak_delta: >
-        {% set roh = (real_export - schwelle_peak_shaving) / (nominale_spannung | float(51.2)) %}
-        {{ [roh, peak_ampere | float(20)] | max | round(0) }}
-      target_p3: "{{ [ (aktueller_ladestrom | float(0)) + (peak_delta | float(20)), max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0) }}"
+      target_p3: "{{ [ (aktueller_ladestrom | float(0)) + (peak_ampere | float(20)), max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0) }}"
       # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
 
@@ -1620,6 +1662,25 @@ action:
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
+      # PEAK-SHAVING HAT VORRANG (ab V4.1.0): Die Blockade endet, sobald die
+      # Einspeisung die Peak-Schwelle reisst - sonst regelt der Wechselrichter
+      # ab, waehrend die Batterie auf 0 A steht (belegt 23.07.2026: 7973 W
+      # Export waehrend der Blockade).
+      #
+      # Warum an den TRIGGER gekoppelt und nicht an real_export:
+      # 'export_peak_schwelle' ist ueber 'for: 00:00:30' entprellt - ein
+      # einzelner Messausreisser hebt die Blockade also nicht auf. Zugleich
+      # wirkt es SOFORT im selben Lauf; ein direkter real_export-Vergleich
+      # waere ungefiltert, der Hold-Timer allein dagegen zu langsam (er wird
+      # erst weiter unten im Lauf gestartet, ist hier also noch 'idle' -> die
+      # Blockade haette den Lauf noch gewonnen und erst der naechste, bis zu
+      # 5 Min spaeter, freigegeben).
+      # Der Austritt wird dadurch korrekt erkannt: blockade_aktiv ist bereits
+      # false, waehrend aktueller_modus noch 'blockade' ist -> Tagesmarker.
+      # Die Timer-Bedingung deckt den Rest der Peak-Phase ab (der Trigger
+      # feuert nur auf der Flanke) und den Fall, dass die Blockade nie lief -
+      # dann gibt es keinen Tagesmarker, der sie draussen haelt.
+      #
       # 2h-Mindestdauer als reine START-Schwelle: nur beim ERSTEN Eintritt
       # (Modus noch nicht 'blockade') muss der spaeteste Ladebeginn >= 2h
       # entfernt sein. Laeuft die Blockade bereits, haelt sie bis zum reg.
@@ -1631,6 +1692,7 @@ action:
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
            and not packs_offline_bestaetigt
+           and states(var_timer_peak) != 'active' and trigger.id != 'export_peak_schwelle'
            and now().month not in winter_monate
            and blockade_dyn_t != ''
            and (aktueller_modus == 'blockade'
@@ -1875,7 +1937,7 @@ action:
           # Nacht) UND weder Netz-Zwangsladung noch Zellausgleich (Cooldown-Timer)
           # laufen (deren Ladestrom nicht ueberschreiben). Die uebrigen Prio-
           # Zweige, die nachts ueberhaupt Strom setzen koennten, greifen hier
-          # nicht: Prio 3/6/8 sind is_day/zeit-gegated, Prio 7 (Peak-Shaving)
+          # nicht: Prio 3/7/8 sind is_day/zeit-gegated, Prio 6 (Peak-Shaving)
           # braucht Netz-Export (nachts null). Der Modus bleibt auf dem oben
           # gesetzten 'normal', die Tageslogik setzt morgens ohnehin neu.
           - if:
@@ -2404,13 +2466,13 @@ action:
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
-                      message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Batterieladen auf {{ null_ampere }} A geändert, damit PV-Überschuss zur anlaufenden Wärmepumpe fließt (Wärmepumpen-Sperre aktiv). Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
+                      message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Batterieladen auf {{ null_ampere }} A geändert, damit PV-Überschuss zur anlaufenden Wärmepumpe fließt (Wärmepumpen-Sperre aktiv). Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
                       entity_id: !input helper_logbook_dummy
             default:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen und Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W, zurück zum Normalbetrieb."
+                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen und Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W, zurück zum Normalbetrieb."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -2429,7 +2491,8 @@ action:
             value_template: >
               {{ real_export > schwelle_peak_shaving
                  and not wp_sperre_aktiv
-                 and not wp_boost_startet_gleich }}
+                 and not wp_boost_startet_gleich
+                 and trigger.id != 'export_wp_boost_schwelle' }}
         sequence:
           - action: timer.start
             target:
@@ -2450,6 +2513,14 @@ action:
         conditions:
           - condition: template
             value_template: "{{ var_wp_boost_aktiv }}"
+          # Trigger-Entkopplung: Die Export-Trigger für Peak-Shaving (6500 W)
+          # und WP-Boost (6400 W) werden bei steigendem Export fast gleichzeitig
+          # wahr (beide 'for: 30s'). Ohne diese Bedingung liefen dann zwei
+          # Läufe in derselben Sekunde und hoben den Ladestrom doppelt an
+          # (belegt 23.07.2026, 15:49:45). Jeder Export-Trigger bedient jetzt
+          # nur noch seinen eigenen Zweig; der 5-Minuten-Takt bedient beide.
+          - condition: template
+            value_template: "{{ trigger.id != 'export_peak_schwelle' }}"
           - condition: template
             value_template: "{{ real_export > schwelle_wp_boost }}"
           - condition: template
@@ -2810,40 +2881,7 @@ action:
                     data:
                       option: "wp_sperre"
 
-      - alias: "PRIO 6: MORGEN-BLOCKADE (0A)"
-        conditions:
-          - condition: template
-            value_template: "{{ blockade_aktiv }}"
-        sequence:
-          - if:
-              - condition: template
-                value_template: "{{ (aktueller_ladestrom | round(0)) != (null_ampere | round(0)) }}"
-            then:
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: >
-                    {{ bp_version }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
-                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh.
-                    Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
-                  entity_id: !input helper_logbook_dummy
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wr_max_charge }}"
-                data:
-                  value: "{{ null_ampere }}"
-              - if:
-                  - condition: template
-                    value_template: "{{ var_lade_modus != '' }}"
-                then:
-                  - action: input_select.select_option
-                    target:
-                      entity_id: "{{ var_lade_modus }}"
-                    data:
-                      option: "blockade"
-
-      - alias: "PRIO 7: PEAK SHAVING"
+      - alias: "PRIO 6: PEAK SHAVING"
         conditions:
           - condition: template
             value_template: "{{ states(var_timer_wp_anlauf) != 'active' }}"
@@ -2883,7 +2921,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 7 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W (Stufe = größerer Wert aus rechnerischem Bedarf {{ ((real_export - schwelle_peak_shaving) / (nominale_spannung | float(51.2))) | round(0) }} A für {{ (real_export - schwelle_peak_shaving) | round(0) }} W über der Schwelle und Mindest-Steigerung {{ peak_ampere | round(0) }} A.{% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2899,6 +2937,39 @@ action:
                       entity_id: "{{ var_lade_modus }}"
                     data:
                       option: "peak_shaving"
+
+      - alias: "PRIO 7: MORGEN-BLOCKADE (0A)"
+        conditions:
+          - condition: template
+            value_template: "{{ blockade_aktiv }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ (aktueller_ladestrom | round(0)) != (null_ampere | round(0)) }}"
+            then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: >
+                    {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
+                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh.
+                    Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
+                  entity_id: !input helper_logbook_dummy
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wr_max_charge }}"
+                data:
+                  value: "{{ null_ampere }}"
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "blockade"
 
       - alias: "PRIO 8: DYNAMISCHES FERTIGLADEN (ZEIT-BASIERT)"
         conditions:
