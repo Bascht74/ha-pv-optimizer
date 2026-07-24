@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.1.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.2.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -797,7 +797,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.1.0]"
+      bp_version: "[V4.2.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -2485,11 +2485,35 @@ action:
             # Automation erneut ausfuehrt - sofort wieder gecancelt. Das erzeugte die
             # falsche Meldung 'Hold-Timer abgelaufen'.
             #
-            # Das Neustarten bei jedem Lauf bleibt gewollt: Solange Export >
-            # Schwelle (und keine WP laeuft), wird der Hold-Timer immer wieder auf
+            # Das Neustarten bei jedem Lauf bleibt gewollt: Solange Clipping
+            # droht (und keine WP laeuft), wird der Hold-Timer immer wieder auf
             # volle Dauer gesetzt - Peak-Shaving laeuft also durch.
+            #
+            # START vs. VERLAENGERUNG (ab V4.2.0 getrennt):
+            # Bis V4.1.0 zaehlte fuer beides nur real_export. Das war ein
+            # Regelkreis-Fehler: Sobald das Peak-Shaving WIRKT, puffert die
+            # Batterie und real_export faellt unter die Schwelle - der Erfolg
+            # der Massnahme beendete also die Massnahme. Der Timer lief dann
+            # nach voller Nachlaufzeit ab, Prio 8 senkte den Strom, der Export
+            # sprang zurueck ueber die Schwelle und die Treppe begann von vorn
+            # (belegt 24.07.2026: Ende 15:32:45, Neustart 15:33:31).
+            #
+            # - START ueber real_export: Nur wenn wirklich zu viel ins Netz
+            #   geht. potential_export waere hier zu scharf - eine normale
+            #   Prio-8-Ladung treibt ihn hoch und wuerde Peak-Shaving ausloesen,
+            #   obwohl gar kein Clipping droht.
+            # - VERLAENGERUNG ueber potential_export (= Export OHNE Batterie-
+            #   ladung): Solange ohne die Batterie geclippt wuerde, bleibt das
+            #   Peak-Shaving aktiv. Die Nachlaufzeit startet damit erst, wenn
+            #   auch ohne Batterie kein Clipping mehr droht.
+            #
+            # Getragen wird beides vom 5-Minuten-Takt (12 Gelegenheiten je
+            # Nachlaufstunde); das Ende meldet der Timer selbst ueber den
+            # Trigger 'peak_shaving_ende'.
             value_template: >
-              {{ real_export > schwelle_peak_shaving
+              {{ (real_export > schwelle_peak_shaving
+                  or (states(var_timer_peak) == 'active'
+                      and potential_export > schwelle_peak_shaving))
                  and not wp_sperre_aktiv
                  and not wp_boost_startet_gleich
                  and trigger.id != 'export_wp_boost_schwelle' }}
