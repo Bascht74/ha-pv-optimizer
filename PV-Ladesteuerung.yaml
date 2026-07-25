@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.2.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.3.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -653,6 +653,7 @@ trigger_variables:
   tv_grid_export: !input grid_export_sensor
   tv_schwelle_peak_shaving: !input schwelle_peak_shaving
   tv_schwelle_wp_boost: !input schwelle_wp_boost
+  tv_wp_kompressor: !input wp_kompressor_sensor
 
 trigger:
   - alias: "Trigger: JSON Profil pflegen (Alle 30 Min)"
@@ -689,6 +690,17 @@ trigger:
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
     for: "00:00:30"
     id: export_wp_boost_schwelle
+  - alias: "Trigger: WP-Kompressor aus (10 s entprellt)"
+    # Nur wirksam, wenn der optionale Kompressor-Sensor belegt ist - bei leerem
+    # Input ergibt das Template dauerhaft 'false' und der Trigger feuert nie.
+    # Bewusst der ROHZUSTAND des Sensors, nicht wp_kompressor_aktiv: Jenes
+    # haelt nach dem Abschalten noch 11 Minuten 'true' (Nachlauf fuer die
+    # Prio-5-Sperre) - fuer das Beenden der Laufzeit waere das zu traege.
+    platform: template
+    value_template: >
+      {{ tv_wp_kompressor != '' and is_state(tv_wp_kompressor, 'off') }}
+    for: "00:00:10"
+    id: wp_kompressor_aus
   - alias: "Trigger: Home-Assistant-Neustart (Einlesepause)"
     # Nach einem HA-Neustart sind Deye- und BMS-Entitaeten kurzzeitig
     # 'unavailable'. Dieser Lauf tut nichts ausser 20 s zu warten - da die
@@ -797,7 +809,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.2.0]"
+      bp_version: "[V4.3.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1905,7 +1917,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: Wärmepumpen-Warmwasser-Zieltemperatur von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da sie noch auf dem PV-Boost-Wert stand{% if (repeat.index | int(1)) > 1 %} (nach {{ repeat.index }} Versuchen übernommen){% endif %}."
+                  message: "{{ bp_version }} Mitternachts-Check: Wärmepumpen-Warmwasser-Zieltemperatur von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da sie noch auf dem PV-Boost-Wert stand{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %}."
                   entity_id: !input helper_logbook_dummy
           # FLOAT-MITTERNACHTS-CHECK: Wenn der Cooldown-Timer (Balancing) verloren
           # ging, feuert float_boost_ende nie und die Float-Spannung bleibt auf
@@ -2510,10 +2522,19 @@ action:
             # Getragen wird beides vom 5-Minuten-Takt (12 Gelegenheiten je
             # Nachlaufstunde); das Ende meldet der Timer selbst ueber den
             # Trigger 'peak_shaving_ende'.
+            #
+            # BATTERIE-GUARD (ab V4.2.1): Dieselbe Bedingung wie in Prio 6.
+            # Ohne sie lief der Timer weiter, obwohl der Zweig gar nicht mehr
+            # greifen konnte (volle Batterie / heute_schon_voll nach dem
+            # Zellausgleich) - beim Ablauf meldete er dann faelschlich
+            # 'Peak-Shaving beendet, zurueck zum Normalbetrieb', ohne dass je
+            # eines lief (belegt 21.07.2026: Zellausgleich-Start 17:03:17,
+            # danach Phantom-Meldungen um 17:35:00 und 18:53:13).
             value_template: >
               {{ (real_export > schwelle_peak_shaving
                   or (states(var_timer_peak) == 'active'
                       and potential_export > schwelle_peak_shaving))
+                 and aktueller_soc < 99 and not heute_schon_voll
                  and not wp_sperre_aktiv
                  and not wp_boost_startet_gleich
                  and trigger.id != 'export_wp_boost_schwelle' }}
@@ -2531,6 +2552,49 @@ action:
           - action: timer.cancel
             target:
               entity_id: !input helper_timer_peak
+
+  # WP-LAUFZEIT BEENDEN (ab V4.3.0)
+  #
+  # Die Waermepumpen-Laufzeit sperrt Prio 8 - der Ueberschuss gehoert in dieser
+  # Zeit der Waermepumpe. Beendet wird sie, sobald der Verdichter nachweislich
+  # nicht mehr laeuft; dann ist der Ueberschuss wieder frei fuer die Batterie:
+  #
+  #   MIT Kompressor-Sensor: Er meldet 10 s durchgehend 'off' (Trigger
+  #     'wp_kompressor_aus'). Bewusst der Rohzustand - wp_kompressor_aktiv
+  #     haelt nach dem Abschalten noch 11 Min 'true' (Prio-5-Nachlauf).
+  #   OHNE Sensor (Fallback): Die Einspeisung steigt wieder ueber die
+  #     Peak-Schwelle. Bei laufendem Verdichter ist das ausgeschlossen - er
+  #     zieht rund 2 kW und drueckt den Export sicher darunter.
+  #
+  # Waehrend der Anlaufphase wird NIE beendet (die Waermepumpe laeuft gerade
+  # erst an und zieht noch keine volle Leistung).
+  #
+  # Der Cancel erzeugt active->idle und damit den Trigger 'wp_boost_ende', der
+  # die Zieltemperatur zuruecksetzt und die Waermepumpe stoppt. Die Laufzeit
+  # muss deshalb lang genug sein, dass sie ihr Ziel VORHER erreicht - sonst
+  # bricht man sie mitten im Heizen ab (25.07.2026: Stopp bei 55 statt 59 C,
+  # weil der Timer nach 45 Min ablief).
+  #
+  # Reihenfolge: Dieser Block liegt VOR der Prio-Kaskade. Nach dem Beenden
+  # greift im selben Lauf zuerst Prio 6 (Peak-Shaving) - Prio 8 bleibt in
+  # diesem Durchgang ohnehin gesperrt, weil wp_laufzeit_aktiv am Laufanfang
+  # berechnet wurde.
+  - if:
+      - condition: template
+        value_template: >
+          {{ states(var_timer_wp_boost) == 'active'
+             and states(var_timer_wp_anlauf) != 'active'
+             and (trigger.id == 'wp_kompressor_aus'
+                  or (var_wp_kompressor == '' and real_export > schwelle_peak_shaving)) }}
+    then:
+      - action: timer.cancel
+        target:
+          entity_id: "{{ var_timer_wp_boost }}"
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: "{{ bp_version }} Wärmepumpen-Laufzeit beendet, da der Verdichter keinen PV-Überschuss mehr abnimmt{% if trigger.id == 'wp_kompressor_aus' %} (Verdichter meldet seit 10 Sekunden „aus\"){% else %} (Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W — bei laufendem Verdichter nicht möglich){% endif %}. Der Überschuss steht wieder der Batterie zur Verfügung; Warmwasser-Ziel wird auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Warmwasser aktuell {{ ww_temp | round(1) }} °C)."
+          entity_id: !input helper_logbook_dummy
 
   - choose:
       - alias: "WP-BOOST: START (Tägliches Warmwasser)"
@@ -2636,7 +2700,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} Wärmepumpen-Warmwasser-Boost (PV) beendet: Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da der Laufzeit-Timer abgelaufen ist{% if (repeat.index | int(1)) > 1 %} (nach {{ repeat.index }} Versuchen übernommen){% endif %}.
+                {{ bp_version }} Wärmepumpen-Warmwasser-Boost (PV) beendet: Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da der Laufzeit-Timer abgelaufen ist{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %}.
               entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: WATCHDOG (Sicherheits-Reset auf Normalwerte)"
@@ -2691,7 +2755,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} Wärmepumpen-Watchdog (Sicherheits-Reset): Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da beide Wärmepumpen-Timer inaktiv sind, das Ziel aber noch auf dem PV-Boost-Wert stand{% if (repeat.index | int(1)) > 1 %} (nach {{ repeat.index }} Versuchen übernommen){% endif %} (Informativ: vermutlich hat die Wärmepumpe/ViCare den regulären Reset nicht übernommen oder ein Timer ging verloren, z. B. HA-Neustart).
+                {{ bp_version }} Wärmepumpen-Watchdog (Sicherheits-Reset): Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da beide Wärmepumpen-Timer inaktiv sind, das Ziel aber noch auf dem PV-Boost-Wert stand{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %} (Informativ: vermutlich hat die Wärmepumpe/ViCare den regulären Reset nicht übernommen oder ein Timer ging verloren, z. B. HA-Neustart).
               entity_id: !input helper_logbook_dummy
 
   # ====================================================================
@@ -2917,30 +2981,45 @@ action:
           - condition: template
             value_template: "{{ aktueller_soc < 99 and not heute_schon_voll }}"
         sequence:
-          # Peak-Shaving löst den WP-Laufzeit-Timer auf: Nach Peak-Ende soll
-          # Prio 8 wieder freigegeben sein. Der Ziel/Hysterese-Reset kommt über
-          # den wp_boost_ende-Trigger (Cancel erzeugt active->idle), abgesichert
-          # durch Watchdog (5 Min) und Mitternachts-Check.
-          - if:
-              - condition: template
-                value_template: "{{ states(var_timer_wp_boost) == 'active' }}"
-            then:
-              - action: timer.cancel
-                target:
-                  entity_id: "{{ var_timer_wp_boost }}"
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Lastspitzen-Kappung (Peak-Shaving): Wärmepumpen-Laufzeit-Timer beendet, da die Wärmepumpe keinen PV-Überschuss mehr abnimmt (ist fertig und Netzeinspeisung wieder über {{ schwelle_peak_shaving | round(0) }} W). Die Batterie wird jetzt die Einspeisespitze kappen; der beendete Timer sperrt danach den Normalbetrieb (Prio 8) nicht mehr."
-                  entity_id: !input helper_logbook_dummy
+          # KEIN Abbruch des WP-Laufzeit-Timers (bis V4.2.1 tat Peak-Shaving das):
+          # Der Abbruch setzte das Warmwasser-Ziel vorzeitig zurueck, die
+          # Waermepumpe hoerte auf zu heizen und erreichte ihre Zieltemperatur
+          # nicht. Die damalige Begruendung ("Einspeisung wieder ueber der
+          # Schwelle => die Waermepumpe nimmt keinen Ueberschuss mehr ab, ist
+          # also fertig") ist falsch: Am 25.07.2026 lief es genau umgekehrt -
+          # der Laufzeit-Timer lief um 14:35 regulaer ab, das Ziel ging von 59
+          # auf 50 C zurueck, die Waermepumpe stellte bei 55 C ab und erst die
+          # dadurch frei gewordenen ~2000 W trieben die Einspeisung ueber die
+          # Schwelle (4579 W -> 6601 W in 2,5 Min).
+          # Der Timer laeuft jetzt regulaer aus und setzt sich selbst zurueck.
+          # Folge: Prio 8 bleibt bis dahin gesperrt (einzige Wirkung von
+          # wp_laufzeit_aktiv), der Ladestrom bleibt also auf dem zuletzt
+          # gesetzten Peak-Wert stehen - konsistent zum "nie absenken"-Prinzip
+          # der Treppe.
+          #
           # TREPPE: Nur anheben, solange die Einspeisung die Schwelle wirklich
           # ueberschreitet - und nur, wenn die neue Stufe hoeher liegt als der
           # aktuelle Sollwert. Liegt die Einspeisung darunter, bleibt der Strom
           # unveraendert stehen (kein Absenken, kein Modbus-Zappeln); das Ende
           # regelt allein der Hold-Timer.
+          #
+          # MINDESTABSTAND 30 s zwischen zwei Stufen (ab V4.3.0): Die beiden
+          # Export-Trigger (6500 W Peak / 6400 W WP-Boost) lauschen auf denselben
+          # Sensor und werden bei steigendem Export praktisch gleichzeitig wahr -
+          # am 25.07.2026 lagen die zwei Laeufe 34 ms auseinander und hoben den
+          # Strom in einem Zug von 0 auf 40 A. Die Trigger-Entkopplung aus V4.1.0
+          # griff nicht, weil sie nur den Timer-START filtert: Lief der Timer
+          # bereits, erhoehte Prio 6 in JEDEM Folgelauf. Der Zeitabstand wirkt
+          # unabhaengig davon, welcher der 17 Trigger den Lauf ausgeloest hat,
+          # und bremst die Treppe im 5-Minuten-Takt nicht.
           - if:
               - condition: template
-                value_template: "{{ real_export > schwelle_peak_shaving and (target_p3 | round(0)) > (aktueller_ladestrom | round(0)) }}"
+                value_template: >
+                  {% set reg = states[var_wr_max_charge] %}
+                  {% set seit = (now() - reg.last_changed).total_seconds() if reg is not none else 999 %}
+                  {{ real_export > schwelle_peak_shaving
+                     and (target_p3 | round(0)) > (aktueller_ladestrom | round(0))
+                     and seit >= 30 }}
             then:
               - action: logbook.log
                 data:
@@ -2999,6 +3078,10 @@ action:
         conditions:
           - condition: template
             value_template: "{{ is_day and aktueller_soc < 97 }}"
+          # Solange die Waermepumpen-Laufzeit laeuft, regelt Prio 8 NICHT: Der
+          # Ueberschuss gehoert der Waermepumpe. Beendet wird die Laufzeit
+          # gezielt (siehe Block "WP-LAUFZEIT BEENDEN"), nicht ueber diese
+          # Bedingung.
           - condition: template
             value_template: "{{ not wp_laufzeit_aktiv }}"
           # Abend-Sperre: unter der Mindest-Restladezeit nicht mehr nachregeln.

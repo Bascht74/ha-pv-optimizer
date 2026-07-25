@@ -23,6 +23,8 @@ There is no CI and no test framework. Before treating any change to `PV-Ladesteu
 5. **Version consistency.** The version tag appears in exactly two places: `blueprint.name` (line 2) and the `bp_version` variable near the top of `action:`. Both must match. Log messages interpolate `{{ bp_version }}`, so they never need separate updates.
 6. **Position/order:** a variable must be defined before its first use; confirm new blocks sit where intended.
 7. **Neighboring logic unaffected:** compare match counts for nearby, unrelated conditions before/after the edit.
+8. **Value-range check on any formula that consumes a measurement.** A reference test with self-chosen inputs only proves the formula computes — not that those inputs ever occur. Ask: *what range does this sensor actually take at this site?* and verify it against a real log/CSV. V4.0.0 shipped a demand calculation that was mathematically fine but structurally inert, because the inverter caps export at the feed-in limit and the measured excess is therefore always ~110 W — the test inputs (9000 W, 10500 W) could never occur. This is the same class of failure as the V3.1.0 anti-windup fix.
+9. **Guard consistency between a timer and the branch it gates.** If a branch has entry conditions (e.g. `aktueller_soc < 99 and not heute_schon_voll`), the block that starts/refreshes its timer needs the same ones — otherwise the timer describes a state the branch can no longer enter, and its expiry logs a phantom "beendet" message. Fixed in V4.2.1 after two such messages appeared in the 21.07 log.
 
 ## Versioning scheme (follow exactly — do not deviate without being told to)
 
