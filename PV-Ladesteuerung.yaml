@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.3.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.4.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -614,9 +614,9 @@ blueprint:
           default: 1.2
           selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
         puffer_kwh:
-          name: "Sicherheits-Puffer (kWh)"
+          name: "Sicherheits-Puffer (kWh) — Obergrenze"
           description: >-
-            Sicherheitsabschlag in kWh auf die erwartete PV-Energie. Der Blueprint rechnet mit etwas weniger Ertrag, als die Prognose verspricht — dadurch endet die Morgen-Blockade früher und die Eskalation auf vollen Ladestrom („Fall B") greift eher. Bei sehr wechselhaftem Wetter erhöhen. Wirkt auf die Energiebilanz, nicht auf den Ladestrom selbst.
+            Sicherheitsabschlag auf die erwartete PV-Energie. Abgezogen werden 10 % des noch erwarteten Überschusses, höchstens aber dieser Wert. Der Blueprint rechnet dadurch mit etwas weniger Ertrag, als die Prognose verspricht — die Morgen-Blockade endet früher und die Eskalation auf vollen Ladestrom („Fall B") greift eher. Ab V4.4.0 anteilig statt fest: Ein fester Abzug wirkt abends, wenn nur noch wenig Sonne übrig ist, unverhältnismäßig stark (1 kWh von 4 kWh sind 25 %) — gerade dann, wenn die Prognose am sichersten ist. Bei sehr wechselhaftem Wetter erhöhen. Wirkt auf die Energiebilanz, nicht auf den Ladestrom selbst.
           default: 1.0
           selector: {"number": {"min": 0.0, "max": 5.0, "step": 0.1}}
         fallback_max_soc:
@@ -809,12 +809,21 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.3.0]"
+      bp_version: "[V4.4.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
       # zugleich das einzige Fenster, in dem die Netz-Zwangsladung starten darf.
       winter_monate: [11, 12, 1, 2]
+      # Anteil des noch erwarteten PV-Ueberschusses, der als Sicherheitspuffer
+      # abgezogen wird - gedeckelt durch den Input puffer_kwh. Ein FESTER Abzug
+      # wirkt umgekehrt proportional: 1 kWh von 4 kWh Restertrag sind 25 %, von
+      # 20 kWh nur 5 %. Ausgerechnet abends, wenn die Prognose am sichersten ist,
+      # bremste er am staerksten und loeste Fall B aus, obwohl der Ladestrom gar
+      # nicht limitierte (belegt 26.07.2026, PV-Standort: Bedarf 3,1 > Verfuegbar
+      # 3,0 nur wegen des Puffers; real floss danach im Mittel 1,78 kW, waehrend
+      # Prio 8 schon 2,15 kW erlaubt haette).
+      puffer_anteil: 0.10
       # Mindestdauer (Stunden), die die Morgen-Blockade beim START noch laufen
       # koennen muss; liegt der spaeteste Ladebeginn naeher, wird gar nicht erst
       # blockiert (Whipsaw-Schutz gegen kurze Mikro-Blockaden).
@@ -1448,6 +1457,10 @@ action:
       # der bei benoetigt_kwh auf der Batterieseite steht (BRUTTO-Rechnung,
       # konsistent mit Prio 8 und der Blockade).
       brutto_ueberschuss_rest: "{{ (rest_slots | map('first') | map('float') | sum) | float(0) }}"
+      # Wirksamer Puffer fuer Fall B: puffer_anteil des Rest-Ueberschusses,
+      # gedeckelt durch puffer_kwh. Die Blockade rechnet ihren eigenen Puffer,
+      # weil sie sich auf den Ueberschuss AB dem Kandidaten-Zeitpunkt bezieht.
+      puffer_fall_b: "{{ [ brutto_ueberschuss_rest * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min }}"
       # Fall (b) / "Schleuse auf": Der erwartete Brutto-PV-Ueberschuss reicht mit
       # dem Eskalations-Puffer nicht mehr, um den GESAMTEN Bedarf (freier Platz +
       # Nachladebedarf) zu decken -> Feinregelung aufgeben, voll laden solange
@@ -1457,7 +1470,7 @@ action:
       # defizit). NUR wenn noch genug Restladezeit da ist (min_reststunden) UND
       # der Bedarf ueber der Bagatellgrenze liegt (fallback_min_kwh).
       fall_b_aktiv: >
-        {{ ((brutto_ueberschuss_rest - (puffer_kwh | float(0))) < (benoetigt_kwh * (faktor_fallback | float(1.2)))) and
+        {{ ((brutto_ueberschuss_rest - puffer_fall_b) < (benoetigt_kwh * (faktor_fallback | float(1.2)))) and
            verf_stunden >= (min_reststunden | float(1.0)) and
            benoetigt_kwh > (fallback_min_kwh | float(1.0)) }}
 
@@ -1643,7 +1656,9 @@ action:
                diesem Kandidaten T bis Tagesende (Gesamt minus Summe der Slots davor). #}
             {% set u_ab = nsl.u_ges - ns2.pu %}
             {% set d_ab = nsl.d_aufholbar - ns2.pd %}
-            {% set verf = u_ab - (puffer_kwh | float(0)) %}
+            {# Puffer anteilig zum Ueberschuss AB T, gedeckelt durch puffer_kwh #}
+            {% set p_ab = [ u_ab * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}
+            {% set verf = u_ab - p_ab %}
             {% set bedarf = ziel_faktor * (freie_kwh + d_ab) %}
             {% if verf >= bedarf %}
               {% set ns2.best = ns.alle[i][0] %}
@@ -2587,13 +2602,41 @@ action:
              and (trigger.id == 'wp_kompressor_aus'
                   or (var_wp_kompressor == '' and real_export > schwelle_peak_shaving)) }}
     then:
+      # Zieltemperatur und Hysterese SOFORT zuruecksetzen - vor dem Cancel.
+      # Sonst entsteht eine Luecke: Der Cancel loest 'wp_boost_ende' aus, dessen
+      # Reset-Zweig aber bis zu 30 s braucht (Retry mit 10-s-Delays). In dieser
+      # Luecke sah der Watchdog "beide Timer idle, Ziel noch auf PV-Wert" und
+      # feuerte einen Fehlalarm - am 26.07.2026 lief der Reset dadurch dreifach
+      # (14:37:55 Laufzeit-Ende, 14:38:17 Watchdog, 14:38:29 Boost-Ende).
+      # Hier bewusst OHNE Retry-Schleife (wuerde die Prio-Kaskade um bis zu 30 s
+      # verzoegern); uebernimmt die Waermepumpe den Wert nicht, greift der
+      # Reset-Zweig von 'wp_boost_ende' mit seinem Retry-Baustein.
+      - action: number.set_value
+        target:
+          entity_id: !input wp_hysterese_number
+        data:
+          value: "{{ var_wp_hysterese_normal }}"
+      - action: water_heater.set_temperature
+        target:
+          entity_id: !input wp_water_heater
+        data:
+          temperature: "{{ var_wp_ziel_temp_normal }}"
+      - if:
+          - condition: template
+            value_template: "{{ var_wp_ziel_number != '' }}"
+        then:
+          - action: number.set_value
+            target:
+              entity_id: "{{ var_wp_ziel_number }}"
+            data:
+              value: "{{ var_wp_ziel_temp_normal }}"
       - action: timer.cancel
         target:
           entity_id: "{{ var_timer_wp_boost }}"
       - action: logbook.log
         data:
           name: "PV Optimizer"
-          message: "{{ bp_version }} Wärmepumpen-Laufzeit beendet, da der Verdichter keinen PV-Überschuss mehr abnimmt{% if trigger.id == 'wp_kompressor_aus' %} (Verdichter meldet seit 10 Sekunden „aus\"){% else %} (Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W — bei laufendem Verdichter nicht möglich){% endif %}. Der Überschuss steht wieder der Batterie zur Verfügung; Warmwasser-Ziel wird auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Warmwasser aktuell {{ ww_temp | round(1) }} °C)."
+          message: "{{ bp_version }} Wärmepumpen-Laufzeit beendet, da der Verdichter keinen PV-Überschuss mehr abnimmt{% if trigger.id == 'wp_kompressor_aus' %} (Verdichter meldet seit 10 Sekunden „aus\"){% else %} (Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W — bei laufendem Verdichter nicht möglich){% endif %}. Der Überschuss steht wieder der Batterie zur Verfügung; Warmwasser-Ziel auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C, Warmwasser aktuell {{ ww_temp | round(1) }} °C)."
           entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -2662,6 +2705,15 @@ action:
         conditions:
           - condition: trigger
             id: wp_boost_ende
+          # Nur handeln, wenn tatsaechlich noch etwas falsch steht. Wurde die
+          # Laufzeit ueber den Block "WP-LAUFZEIT BEENDEN" gestoppt, hat der die
+          # Werte bereits gesetzt - dann hier weder schreiben noch loggen.
+          # Beim regulaeren Timer-Ablauf steht das Ziel dagegen noch auf dem
+          # PV-Wert und der Zweig laeuft wie bisher (inkl. Retry-Baustein).
+          - condition: template
+            value_template: >
+              {{ (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0))
+                 or (var_wp_ziel_number != '' and (states(var_wp_ziel_number) | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0))) }}
         sequence:
           - action: number.set_value
             target:
@@ -2715,6 +2767,14 @@ action:
             value_template: "{{ var_wp_boost_aktiv }}"
           - condition: template
             value_template: "{{ states(var_timer_wp_boost) == 'idle' and states(var_timer_wp_anlauf) == 'idle' }}"
+          # KEINE Karenzzeit noetig: Der Watchdog prueft weiter unten selbst, ob
+          # das Ziel noch auf dem PV-Wert steht. Der Block "WP-LAUFZEIT BEENDEN"
+          # setzt Ziel und Hysterese inzwischen SOFORT (vor dem Cancel), und die
+          # Automation laeuft im Modus 'queued' - ein gleichzeitig ausgeloester
+          # Lauf wartet also, bis der Reset-Zweig samt Retry fertig ist, und
+          # findet danach korrekte Werte vor. Der Fehlalarm vom 26.07.2026
+          # (14:38:17) entstand nur, weil der Laufzeit-Block damals ausschliesslich
+          # den Timer cancelte und das Zuruecksetzen dem Reset-Zweig ueberliess.
           - condition: template
             value_template: >
               {{ var_wp_ziel_temp_pv != var_wp_ziel_temp_normal and
@@ -2893,8 +2953,8 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_kwh) | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh).{{ solcast_log_addon }}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(1) }} kWh
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh)).{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3056,7 +3116,7 @@ action:
                   message: >
                     {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
-                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ puffer_kwh | round(1) }} kWh.
+                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh).
                     Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
