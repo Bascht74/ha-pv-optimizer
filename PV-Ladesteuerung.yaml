@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.4.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.4.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -94,7 +94,8 @@ blueprint:
         wr_battery_voltage_sensor:
           name: "Messwert: Batteriespannung (V) — optional"
           description: >-
-            Die Sensor-Entität mit der aktuell GEMESSENEN Batterie-Gesamtspannung des Wechselrichters (nicht die Stellgröße darüber). Wird nur als Ersatz-Auslöser für den Zellausgleich gebraucht: Fallen alle BMS-Packs aus, fehlen die Zellspannungen — dann startet der Zellausgleich stattdessen, sobald dieser Messwert die Float-Spannung des Zellausgleichs (Abschnitt 8) erreicht. Leer lassen, wenn nicht vorhanden — dann entfällt nur diese Ersatz-Auslösung.
+            Sensor mit der gemessenen Batterie-Gesamtspannung (nicht die Stellgröße). Dient als Ersatz-Auslöser für den Zellausgleich, wenn alle
+            BMS-Packs ausgefallen sind und keine Zellspannungen mehr vorliegen. Leer lassen, wenn nicht vorhanden.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
         wr_grid_charge_switch:
@@ -154,7 +155,8 @@ blueprint:
         notfall_ampere:
           name: "Max. Ladestrom bei BMS-Ausfall (A) — Obergrenze"
           description: >-
-            OBERGRENZE für den Ladestrom, solange alle BMS-Packs offline sind — KEIN Sollwert. Ohne BMS lassen sich Zellspannungen und Temperaturen nicht überwachen; statt die Ladung ganz zu stoppen, wird deshalb nur noch gebremst weitergeladen. Die normale Regelung arbeitet darunter weiter und lädt oft mit weniger: Braucht sie z. B. nur 16 A, bleibt es bei 16 A, auch wenn hier 30 A stehen. Der Wert begrenzt also nur nach oben. Bewusst niedrig wählen.
+            Obergrenze für den Ladestrom, solange alle BMS-Packs offline sind — kein Sollwert, die normale Regelung arbeitet darunter weiter. Bewusst
+            niedrig wählen: Ohne BMS lassen sich Zellspannungen und Temperaturen nicht überwachen.
           default: 10
           selector: {"number": {"min": 2, "max": 50, "step": 1, "unit_of_measurement": "A"}}
         grid_ampere_zwangsladung:
@@ -178,7 +180,8 @@ blueprint:
         grid_export_kwh_heute:
           name: "Netz-Einspeisung heute (kWh)"
           description: >-
-            Sensor mit der heute eingespeisten Energie in kWh (Tageszähler). Wird nur für die Statistik „verschenkte Speicherkapazität" ausgewertet — der Blueprint prüft damit, ob tagsüber ungenutzte Ladekapazität blieb und diese Energie in der Folgenacht tatsächlich gefehlt hat. Beeinflusst die Steuerung nicht.
+            Sensor mit der heute eingespeisten Energie in kWh (Tageszähler). Wird nur für die Statistik „verschenkte Speicherkapazität" ausgewertet,
+            beeinflusst die Steuerung nicht.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         pv_power_sensor:
@@ -250,7 +253,8 @@ blueprint:
         json_tracking_sensor:
           name: "Helfer: 100-%-Tage-Liste"
           description: >-
-            input_text, in dem die Tage gespeichert werden, an denen die Batterie voll wurde (als JSON-Liste, maximal 14 Tage). Daraus erkennt der Blueprint, ob längere Zeit kein Balancing stattgefunden hat, und hebt dann den ToU-Min-SOC an. Wichtig: ein input_text, kein Sensor — Home Assistant würde den Listenwert in einem Sensor-State sonst in ein ungültiges Format umwandeln.
+            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage). Daraus erkennt der Blueprint längere
+            Balancing-Pausen. Muss ein input_text sein — ein Sensor würde die Liste umformatieren.
           default: ""
           selector: {"entity": {"domain": "input_text"}}
         helper_blockade_beendet:
@@ -268,13 +272,14 @@ blueprint:
         speicherverlust_gesamt:
           name: "Helfer: verschenkte Speicherkapazität (kWh)"
           description: >-
-            input_number als Gesamtzähler für tatsächlich verschenkte Speicherkapazität: Der Blueprint merkt sich abends, wie viel Ladekapazität ungenutzt blieb (gedeckelt durch die Einspeisung), verbucht diese Menge aber erst, wenn die Batterie in der Folgenacht bis auf die Reserve leerläuft — nur dann hätte die Energie wirklich gefehlt. Reine Statistik, beeinflusst die Steuerung nicht.
+            input_number als Gesamtzähler für tatsächlich verschenkte Speicherkapazität. Reine Statistik, beeinflusst die Steuerung nicht.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
         helper_offener_verlust:
           name: "Helfer: offener Speicherverlust-Kandidat (kWh)"
           description: >-
-            input_number als Zwischenspeicher: Abends bei Sonnenuntergang wird hier der POTENZIELLE Verlust geparkt (ungenutzte Ladekapazität, gedeckelt durch die Tages-Einspeisung). Am Sonnenaufgang wird geprüft, ob die Batterie über Nacht wirklich leer wurde (SOC ≤ ToU-Min-SOC) — nur dann wird der Kandidat als echter Verlust verbucht, sonst verworfen. Normalerweise 0. Reine Statistik.
+            input_number als Zwischenspeicher für den abends ermittelten potenziellen Verlust. Am Morgen wird er verbucht oder verworfen.
+            Normalerweise 0, reine Statistik.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
         helper_zwangsladung_aktiv:
@@ -352,13 +357,15 @@ blueprint:
         peak_ampere:
           name: "Steigerung je Schritt beim Peak-Shaving (A)"
           description: >-
-            ACHTUNG, Bedeutung ab V4.0.0 geändert: Dies ist KEIN fester Ladestrom mehr, sondern die Stufe, um die der Ladestrom jedes Mal angehoben wird, solange die Einspeisung über der Start-Schwelle liegt — so lange, bis sie darunter bleibt. Abgesenkt wird nie; sobald die Einspeisung nachlässt, läuft die Nachlaufzeit ab und die normale Ladeberechnung übernimmt wieder. Faustregel: 20 A entsprechen bei 48-V-Batterien rund 1 kW je Schritt.
+            Stufe, um die der Ladestrom angehoben wird, solange die Einspeisung über der Start-Schwelle liegt — kein fester Ladestrom. Abgesenkt wird
+            nie. Faustregel: 20 A entsprechen bei 48-V-Batterien rund 1 kW je Schritt.
           default: 20
           selector: {"number": {"min": 5, "max": 100, "step": 1, "unit_of_measurement": "A"}}
         duration_peak_hold:
           name: "Nachlaufzeit (Hold-Timer)"
           description: >-
-            Zeitdauer (hh:mm:ss), die Peak-Shaving nach dem letzten Überschuss noch aktiv bleibt. Ohne diese Nachlaufzeit würde die Batterie bei jeder Wolke sofort abschalten. Solange weiter Überschuss anliegt, wird der Timer immer wieder auf diesen Wert zurückgesetzt — Peak-Shaving läuft also durch, solange eingespeist wird. Erst nach Ablauf übernimmt wieder die normale Ladeberechnung (Prio 8).
+            Nachlaufzeit (hh:mm:ss), die Peak-Shaving nach dem letzten Überschuss aktiv bleibt — ohne sie würde die Batterie bei jeder Wolke
+            abschalten. Solange Überschuss anliegt, wird sie immer wieder zurückgesetzt.
           default: "01:00:00"
           selector: {"time": {}}
     sec_waermepumpe:
@@ -460,7 +467,8 @@ blueprint:
         top_balancing_voltage:
           name: "Start: Zellspannung (V)"
           description: >-
-            Zellspannung in Volt, ab der das Top-Balancing startet. Sobald die höchste Einzelzelle (Sensoren aus Abschnitt 1) diesen Wert erreicht, drosselt der Blueprint den Ladestrom und lässt den Balancer arbeiten. Bei LiFePO4 sind 3,45–3,50 V sinnvoll — dort wird die Kennlinie steil, und Zellunterschiede werden sichtbar.
+            Zellspannung, ab der das Top-Balancing startet. Bei LiFePO4 sind 3,45–3,50 V sinnvoll — dort wird die Kennlinie steil und Zellunterschiede
+            werden sichtbar.
           default: 3.4
           selector: {"number": {"min": 3.3, "max": 3.6, "step": 0.01, "unit_of_measurement": "V"}}
         top_balancing_soc:
@@ -472,7 +480,8 @@ blueprint:
         duration_top_balancing:
           name: "Dauer des Zellausgleichs"
           description: >-
-            Zeitdauer (hh:mm:ss), die das Top-Balancing nach dem Start läuft. Währenddessen wird der Ladestrom auf den Minimalwert (Abschnitt 2) gedrosselt, damit die Zellspannung oben bleibt und der Balancer arbeiten kann. Länger = gründlicheres Balancing, aber die Batterie nimmt in dieser Zeit kaum PV-Überschuss auf.
+            Dauer (hh:mm:ss) des Zellausgleichs. Währenddessen ist der Ladestrom auf den Minimalwert gedrosselt, damit die Zellspannung oben bleibt.
+            Länger = gründlicher, aber die Batterie nimmt kaum PV-Überschuss auf.
           default: "01:00:00"
           selector: {"time": {}}
         float_voltage_balancing:
@@ -598,25 +607,29 @@ blueprint:
         zeit_blockade_ende:
           name: "Spätester Ladebeginn (Morgen-Blockade)"
           description: >-
-            Uhrzeit, zu der die Morgen-Blockade spätestens endet und die Ladung freigegeben wird. Hintergrund: Morgens hält der Blueprint die Batterie bewusst zurück, damit sie die Mittagsspitze noch aufnehmen kann — sonst wäre sie um 9 Uhr voll und der Überschuss ginge ins Netz. Bei guter Prognose löst er die Blockade auch früher auf; diese Uhrzeit ist nur die harte Obergrenze. Früher = sicherer (Batterie wird zuverlässiger voll), später = mehr Platz für die Mittagsspitze.
+            Harte Obergrenze, wann die Morgen-Blockade spätestens endet. Bei guter Prognose löst der Blueprint sie früher auf. Früher = Batterie wird
+            zuverlässiger voll, später = mehr Platz für die Mittagsspitze.
           default: "13:30:00"
           selector: {"time": {}}
         faktor_ziel_puffer:
           name: "Sicherheitsfaktor für Ungeplantes"
           description: >-
-            Zusätzlicher Puffer auf den berechneten Ladestrom (typisch 1,1–1,2). Der Blueprint simuliert anhand der Solar-Prognose, welcher Ladestrom mindestens nötig wäre, um die Batterie bis Sonnenuntergang zu füllen, und hebt ihn automatisch an, wenn die Prognose unsicher ist (optimistischer und pessimistischer Solcast-Wert weit auseinander). Dieser Faktor kommt zusätzlich obendrauf und deckt ab, was die Prognose gar nicht wissen kann — plötzliche Gewitter, ungeplante Verbraucher. Höher = die Batterie wird zügiger voll, aber weniger Überschuss bleibt für Peak-Shaving.
+            Sicherheitsaufschlag auf den berechneten Ladestrom (typisch 1,1–1,2). Deckt ab, was die Prognose nicht wissen kann — plötzliche Gewitter,
+            ungeplante Verbraucher. Höher = Batterie wird zügiger voll, aber weniger Überschuss bleibt für Peak-Shaving.
           default: 1.2
           selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
         faktor_fallback:
           name: "Ladefaktor Eskalation"
           description: >-
-            Sicherheitsfaktor für die Eskalations-Prüfung (typisch 1,2–1,3). Der Blueprint vergleicht die noch erwartete PV-Energie (Prognose abzüglich Hausverbrauch) mit dem, was die Batterie noch aufnehmen kann — multipliziert mit diesem Faktor. Reicht die erwartete Energie auch dann nicht, gibt er die Feinsteuerung auf und lädt mit vollem Strom, solange noch Sonne da ist („Fall B"). Höher = das System schaltet früher auf Volllast.
+            Sicherheitsfaktor für die Eskalations-Prüfung (typisch 1,2–1,3). Reicht die erwartete PV-Energie multipliziert mit diesem Faktor nicht
+            aus, um die Batterie zu füllen, lädt der Blueprint mit vollem Strom („Fall B"). Höher = schaltet früher auf Volllast.
           default: 1.2
           selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
         puffer_kwh:
           name: "Sicherheits-Puffer (kWh) — Obergrenze"
           description: >-
-            Sicherheitsabschlag auf die erwartete PV-Energie. Abgezogen werden 10 % des noch erwarteten Überschusses, höchstens aber dieser Wert. Der Blueprint rechnet dadurch mit etwas weniger Ertrag, als die Prognose verspricht — die Morgen-Blockade endet früher und die Eskalation auf vollen Ladestrom („Fall B") greift eher. Ab V4.4.0 anteilig statt fest: Ein fester Abzug wirkt abends, wenn nur noch wenig Sonne übrig ist, unverhältnismäßig stark (1 kWh von 4 kWh sind 25 %) — gerade dann, wenn die Prognose am sichersten ist. Bei sehr wechselhaftem Wetter erhöhen. Wirkt auf die Energiebilanz, nicht auf den Ladestrom selbst.
+            Sicherheitsabschlag auf die erwartete PV-Energie: 10 % des Rest-Überschusses, höchstens dieser Wert. Höher = Morgen-Blockade endet früher
+            und die Eskalation auf vollen Ladestrom („Fall B") greift eher. Bei wechselhaftem Wetter erhöhen.
           default: 1.0
           selector: {"number": {"min": 0.0, "max": 5.0, "step": 0.1}}
         fallback_max_soc:
@@ -809,20 +822,16 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.4.0]"
+      bp_version: "[V4.4.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
       # zugleich das einzige Fenster, in dem die Netz-Zwangsladung starten darf.
       winter_monate: [11, 12, 1, 2]
-      # Anteil des noch erwarteten PV-Ueberschusses, der als Sicherheitspuffer
-      # abgezogen wird - gedeckelt durch den Input puffer_kwh. Ein FESTER Abzug
-      # wirkt umgekehrt proportional: 1 kWh von 4 kWh Restertrag sind 25 %, von
-      # 20 kWh nur 5 %. Ausgerechnet abends, wenn die Prognose am sichersten ist,
-      # bremste er am staerksten und loeste Fall B aus, obwohl der Ladestrom gar
-      # nicht limitierte (belegt 26.07.2026, PV-Standort: Bedarf 3,1 > Verfuegbar
-      # 3,0 nur wegen des Puffers; real floss danach im Mittel 1,78 kW, waehrend
-      # Prio 8 schon 2,15 kW erlaubt haette).
+      # Sicherheitspuffer anteilig statt fest, gedeckelt durch puffer_kwh:
+      # Ein fester Abzug wirkt umgekehrt proportional (1 kWh von 4 kWh sind 25 %,
+      # von 20 kWh nur 5 %) und bremst damit abends am staerksten - gerade dann,
+      # wenn nur wenig Ueberschuss uebrig und die Prognose am sichersten ist.
       puffer_anteil: 0.10
       # Mindestdauer (Stunden), die die Morgen-Blockade beim START noch laufen
       # koennen muss; liegt der spaeteste Ladebeginn naeher, wird gar nicht erst
@@ -851,7 +860,7 @@ action:
   # meist alle betroffen. var_wr_max_charge ist zusaetzlich noetig, weil sein
   # Fallback (aktueller_ladestrom -> float(140)) sonst eine Aenderung
   # vortaeuscht und einen ueberfluessigen Register-Schreibvorgang samt
-  # Falschmeldung ausloest (belegt 24.07.2026 nach einem Neustart).
+  # Falschmeldung ausloest.
   # Der Delay wirkt auf ALLE Deye-Werte des Laufs (SOC, Netz-Export,
   # PV-Leistung, Schatten-BMS-Zaehler) - Jinja rendert states() erst zur
   # Laufzeit, liest also nach dem Warten frisch ein.
@@ -892,8 +901,7 @@ action:
           # anhaltenden Ausfalls mehrere Trigger fast gleichzeitig (z. B.
           # Wechselrichter-Neustart bei einem Firmware-Update, mehrere Trigger
           # gequeued), feuerte die Warnung je Lauf erneut, statt nur einmal im
-          # Fenster (Beleg 18.07.2026, Dachterrasse: zwei Warnungen im Abstand
-          # von 10 s). Fix: exakt an den 5-Minuten-Takt-Trigger UND die exakte
+          # Fenster. Jetzt exakt an den 5-Minuten-Takt-Trigger UND die exakte
           # Minute 0/30 gebunden - pro Halbstunde genau ein möglicher Log-Lauf,
           # unabhängig davon, wie viele andere Trigger im selben Fenster feuern.
           # Die Berechnung mit Ersatzwerten läuft davon unberührt jeden
@@ -1478,20 +1486,19 @@ action:
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
-      # PEAK-SHAVING-TREPPE (ab V4.0.0, vereinfacht in V4.1.0)
+      # PEAK-SHAVING-TREPPE
       #
       # Bei JEDER Ueberschreitung der Schwelle wird der Ladestrom um eine feste
       # Stufe (peak_ampere) ANGEHOBEN, bis die Einspeisung unter der Schwelle
       # bleibt.
       #
-      # WARUM KEINE BEDARFSRECHNUNG (V4.0.0 hatte eine, sie war wirkungslos):
+      # WARUM KEINE BEDARFSRECHNUNG:
       # Der Wechselrichter deckelt die Einspeisung bereits auf die
       # Einspeisegrenze. Der gemessene Export liegt deshalb IMMER nur knapp
       # ueber der Schwelle - die abgeregelte Leistung entsteht gar nicht erst
       # und ist nirgends messbar. Auch ueber potential_export nicht: dort
       # kuerzt sich der Ladestrom heraus, die Rechnung ergibt strukturell
-      # ~aktueller_ladestrom + 2 A. Der Mindestschritt gewann dadurch in 100 %
-      # der Faelle (belegt 23.07.2026) - die Rechnung war reines Beiwerk.
+      # ~aktueller_ladestrom + 2 A - der Mindestschritt gewinnt damit immer.
       #
       # KEIN Absenken: Ein Rueckregeln wuerde bei jeder Wolke Modbus-Schreibzugriffe
       # auslosen und zappeln. Faellt die PV ab, laeuft der Hold-Timer aus und
@@ -1689,33 +1696,19 @@ action:
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
-      # PEAK-SHAVING HAT VORRANG (ab V4.1.0): Die Blockade endet, sobald die
-      # Einspeisung die Peak-Schwelle reisst - sonst regelt der Wechselrichter
-      # ab, waehrend die Batterie auf 0 A steht (belegt 23.07.2026: 7973 W
-      # Export waehrend der Blockade).
+      # PEAK-SHAVING HAT VORRANG: Die Blockade endet, sobald die Einspeisung die
+      # Peak-Schwelle reisst - sonst regelt der Wechselrichter ab, waehrend die
+      # Batterie auf 0 A steht.
+      # An den TRIGGER gekoppelt statt an real_export: Der Trigger ist ueber
+      # 'for: 30s' entprellt (kein Messausreisser) und wirkt sofort im selben Lauf.
+      # Der Hold-Timer allein waere zu langsam, er wird erst weiter unten gestartet;
+      # die Timer-Bedingung deckt dafuer den Rest der Peak-Phase ab.
       #
-      # Warum an den TRIGGER gekoppelt und nicht an real_export:
-      # 'export_peak_schwelle' ist ueber 'for: 00:00:30' entprellt - ein
-      # einzelner Messausreisser hebt die Blockade also nicht auf. Zugleich
-      # wirkt es SOFORT im selben Lauf; ein direkter real_export-Vergleich
-      # waere ungefiltert, der Hold-Timer allein dagegen zu langsam (er wird
-      # erst weiter unten im Lauf gestartet, ist hier also noch 'idle' -> die
-      # Blockade haette den Lauf noch gewonnen und erst der naechste, bis zu
-      # 5 Min spaeter, freigegeben).
-      # Der Austritt wird dadurch korrekt erkannt: blockade_aktiv ist bereits
-      # false, waehrend aktueller_modus noch 'blockade' ist -> Tagesmarker.
-      # Die Timer-Bedingung deckt den Rest der Peak-Phase ab (der Trigger
-      # feuert nur auf der Flanke) und den Fall, dass die Blockade nie lief -
-      # dann gibt es keinen Tagesmarker, der sie draussen haelt.
-      #
-      # 2h-Mindestdauer als reine START-Schwelle: nur beim ERSTEN Eintritt
-      # (Modus noch nicht 'blockade') muss der spaeteste Ladebeginn >= 2h
-      # entfernt sein. Laeuft die Blockade bereits, haelt sie bis zum reg.
-      # dynamischen Ausstieg (blockade_dyn_t == '' bzw. Deckel) durch -> der
-      # Ausstieg bleibt dynamisch, kein vorzeitiges Abbrechen 2h vor T.
-      # BMS komplett offline -> Blockade beenden: ohne Zellspannungen/Temperaturen
-      # soll nicht auf 0 A blockiert, sondern mit dem gedeckelten Notlauf-Strom
-      # weitergeladen werden (Prio 8 uebernimmt, temperatur_limit_ampere = notfall_ampere).
+      # 2h-Mindestdauer als reine START-Schwelle: nur beim ersten Eintritt muss der
+      # spaeteste Ladebeginn >= 2h entfernt sein, danach haelt die Blockade bis zum
+      # dynamischen Ausstieg durch.
+      # BMS komplett offline -> beenden: ohne Zellspannungen und Temperaturen wird
+      # nicht auf 0 A blockiert, sondern mit dem Notlauf-Strom weitergeladen.
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
            and not packs_offline_bestaetigt
@@ -2468,7 +2461,7 @@ action:
                 data:
                   value: "{{ var_float_normal }}"
 
-      - alias: "PEAK-SHAVING ENDE (Hold-Timer abgelaufen ODER durch WP-Sperre abgebrochen)"
+      - alias: "PEAK-SHAVING ENDE"
         conditions:
           - condition: trigger
             id: peak_shaving_ende
@@ -2506,45 +2499,19 @@ action:
       - alias: "Zieht den Peak-Shaving Timer auf"
         conditions:
           - condition: template
-            # Zusatzbedingung 'not wp_boost_startet_gleich':
-            # Ohne sie wurde der Timer gestartet und - weil der WP-Boost weiter unten
-            # im SELBEN Lauf die Anlaufphase startet und der Folge-Trigger die
-            # Automation erneut ausfuehrt - sofort wieder gecancelt. Das erzeugte die
-            # falsche Meldung 'Hold-Timer abgelaufen'.
+            # Der Timer wird bei jedem Lauf neu aufgezogen - solange Clipping droht,
+            # laeuft Peak-Shaving durch.
             #
-            # Das Neustarten bei jedem Lauf bleibt gewollt: Solange Clipping
-            # droht (und keine WP laeuft), wird der Hold-Timer immer wieder auf
-            # volle Dauer gesetzt - Peak-Shaving laeuft also durch.
+            # START ueber real_export, VERLAENGERUNG ueber potential_export: Wirkt das
+            # Peak-Shaving, puffert die Batterie und real_export faellt unter die
+            # Schwelle - der Erfolg wuerde die Massnahme sonst selbst beenden. Zum
+            # Starten taugt potential_export nicht, weil ihn schon eine normale
+            # Prio-8-Ladung ueber die Schwelle hebt.
             #
-            # START vs. VERLAENGERUNG (ab V4.2.0 getrennt):
-            # Bis V4.1.0 zaehlte fuer beides nur real_export. Das war ein
-            # Regelkreis-Fehler: Sobald das Peak-Shaving WIRKT, puffert die
-            # Batterie und real_export faellt unter die Schwelle - der Erfolg
-            # der Massnahme beendete also die Massnahme. Der Timer lief dann
-            # nach voller Nachlaufzeit ab, Prio 8 senkte den Strom, der Export
-            # sprang zurueck ueber die Schwelle und die Treppe begann von vorn
-            # (belegt 24.07.2026: Ende 15:32:45, Neustart 15:33:31).
-            #
-            # - START ueber real_export: Nur wenn wirklich zu viel ins Netz
-            #   geht. potential_export waere hier zu scharf - eine normale
-            #   Prio-8-Ladung treibt ihn hoch und wuerde Peak-Shaving ausloesen,
-            #   obwohl gar kein Clipping droht.
-            # - VERLAENGERUNG ueber potential_export (= Export OHNE Batterie-
-            #   ladung): Solange ohne die Batterie geclippt wuerde, bleibt das
-            #   Peak-Shaving aktiv. Die Nachlaufzeit startet damit erst, wenn
-            #   auch ohne Batterie kein Clipping mehr droht.
-            #
-            # Getragen wird beides vom 5-Minuten-Takt (12 Gelegenheiten je
-            # Nachlaufstunde); das Ende meldet der Timer selbst ueber den
-            # Trigger 'peak_shaving_ende'.
-            #
-            # BATTERIE-GUARD (ab V4.2.1): Dieselbe Bedingung wie in Prio 6.
-            # Ohne sie lief der Timer weiter, obwohl der Zweig gar nicht mehr
-            # greifen konnte (volle Batterie / heute_schon_voll nach dem
-            # Zellausgleich) - beim Ablauf meldete er dann faelschlich
-            # 'Peak-Shaving beendet, zurueck zum Normalbetrieb', ohne dass je
-            # eines lief (belegt 21.07.2026: Zellausgleich-Start 17:03:17,
-            # danach Phantom-Meldungen um 17:35:00 und 18:53:13).
+            # 'not wp_boost_startet_gleich' verhindert, dass der WP-Boost den eben
+            # gestarteten Timer im selben Lauf wieder cancelt.
+            # Batterie-Guard wie in Prio 6: sonst laeuft der Timer weiter, obwohl der
+            # Zweig bei voller Batterie nicht mehr greifen kann.
             value_template: >
               {{ (real_export > schwelle_peak_shaving
                   or (states(var_timer_peak) == 'active'
@@ -2568,7 +2535,7 @@ action:
             target:
               entity_id: !input helper_timer_peak
 
-  # WP-LAUFZEIT BEENDEN (ab V4.3.0)
+  # WP-LAUFZEIT BEENDEN
   #
   # Die Waermepumpen-Laufzeit sperrt Prio 8 - der Ueberschuss gehoert in dieser
   # Zeit der Waermepumpe. Beendet wird sie, sobald der Verdichter nachweislich
@@ -2587,8 +2554,7 @@ action:
   # Der Cancel erzeugt active->idle und damit den Trigger 'wp_boost_ende', der
   # die Zieltemperatur zuruecksetzt und die Waermepumpe stoppt. Die Laufzeit
   # muss deshalb lang genug sein, dass sie ihr Ziel VORHER erreicht - sonst
-  # bricht man sie mitten im Heizen ab (25.07.2026: Stopp bei 55 statt 59 C,
-  # weil der Timer nach 45 Min ablief).
+  # bricht man sie mitten im Heizen ab.
   #
   # Reihenfolge: Dieser Block liegt VOR der Prio-Kaskade. Nach dem Beenden
   # greift im selben Lauf zuerst Prio 6 (Peak-Shaving) - Prio 8 bleibt in
@@ -2605,9 +2571,8 @@ action:
       # Zieltemperatur und Hysterese SOFORT zuruecksetzen - vor dem Cancel.
       # Sonst entsteht eine Luecke: Der Cancel loest 'wp_boost_ende' aus, dessen
       # Reset-Zweig aber bis zu 30 s braucht (Retry mit 10-s-Delays). In dieser
-      # Luecke sah der Watchdog "beide Timer idle, Ziel noch auf PV-Wert" und
-      # feuerte einen Fehlalarm - am 26.07.2026 lief der Reset dadurch dreifach
-      # (14:37:55 Laufzeit-Ende, 14:38:17 Watchdog, 14:38:29 Boost-Ende).
+      # Luecke saehe der Watchdog "beide Timer idle, Ziel noch auf PV-Wert" und
+      # wuerde den Reset ein zweites Mal ausloesen.
       # Hier bewusst OHNE Retry-Schleife (wuerde die Prio-Kaskade um bis zu 30 s
       # verzoegern); uebernimmt die Waermepumpe den Wert nicht, greift der
       # Reset-Zweig von 'wp_boost_ende' mit seinem Retry-Baustein.
@@ -2646,10 +2611,10 @@ action:
             value_template: "{{ var_wp_boost_aktiv }}"
           # Trigger-Entkopplung: Die Export-Trigger für Peak-Shaving (6500 W)
           # und WP-Boost (6400 W) werden bei steigendem Export fast gleichzeitig
-          # wahr (beide 'for: 30s'). Ohne diese Bedingung liefen dann zwei
-          # Läufe in derselben Sekunde und hoben den Ladestrom doppelt an
-          # (belegt 23.07.2026, 15:49:45). Jeder Export-Trigger bedient jetzt
-          # nur noch seinen eigenen Zweig; der 5-Minuten-Takt bedient beide.
+          # wahr (beide 'for: 30s'). Ohne diese Bedingung liefen zwei Läufe in
+          # derselben Sekunde und hoben den Ladestrom doppelt an. Jeder
+          # Export-Trigger bedient jetzt nur noch seinen eigenen Zweig; der
+          # 5-Minuten-Takt bedient beide.
           - condition: template
             value_template: "{{ trigger.id != 'export_peak_schwelle' }}"
           - condition: template
@@ -2772,9 +2737,7 @@ action:
           # setzt Ziel und Hysterese inzwischen SOFORT (vor dem Cancel), und die
           # Automation laeuft im Modus 'queued' - ein gleichzeitig ausgeloester
           # Lauf wartet also, bis der Reset-Zweig samt Retry fertig ist, und
-          # findet danach korrekte Werte vor. Der Fehlalarm vom 26.07.2026
-          # (14:38:17) entstand nur, weil der Laufzeit-Block damals ausschliesslich
-          # den Timer cancelte und das Zuruecksetzen dem Reset-Zweig ueberliess.
+          # findet danach korrekte Werte vor.
           - condition: template
             value_template: >
               {{ var_wp_ziel_temp_pv != var_wp_ziel_temp_normal and
@@ -3041,37 +3004,20 @@ action:
           - condition: template
             value_template: "{{ aktueller_soc < 99 and not heute_schon_voll }}"
         sequence:
-          # KEIN Abbruch des WP-Laufzeit-Timers (bis V4.2.1 tat Peak-Shaving das):
-          # Der Abbruch setzte das Warmwasser-Ziel vorzeitig zurueck, die
-          # Waermepumpe hoerte auf zu heizen und erreichte ihre Zieltemperatur
-          # nicht. Die damalige Begruendung ("Einspeisung wieder ueber der
-          # Schwelle => die Waermepumpe nimmt keinen Ueberschuss mehr ab, ist
-          # also fertig") ist falsch: Am 25.07.2026 lief es genau umgekehrt -
-          # der Laufzeit-Timer lief um 14:35 regulaer ab, das Ziel ging von 59
-          # auf 50 C zurueck, die Waermepumpe stellte bei 55 C ab und erst die
-          # dadurch frei gewordenen ~2000 W trieben die Einspeisung ueber die
-          # Schwelle (4579 W -> 6601 W in 2,5 Min).
-          # Der Timer laeuft jetzt regulaer aus und setzt sich selbst zurueck.
-          # Folge: Prio 8 bleibt bis dahin gesperrt (einzige Wirkung von
-          # wp_laufzeit_aktiv), der Ladestrom bleibt also auf dem zuletzt
-          # gesetzten Peak-Wert stehen - konsistent zum "nie absenken"-Prinzip
-          # der Treppe.
+          # Der WP-Laufzeit-Timer wird hier NICHT abgebrochen: Das setzte das
+          # Warmwasser-Ziel vorzeitig zurueck, die Waermepumpe stoppte vor ihrer
+          # Zieltemperatur. Beendet wird die Laufzeit gezielt im Block
+          # "WP-LAUFZEIT BEENDEN"; bis dahin bleibt Prio 8 gesperrt und der Ladestrom
+          # steht auf dem zuletzt gesetzten Peak-Wert.
           #
-          # TREPPE: Nur anheben, solange die Einspeisung die Schwelle wirklich
-          # ueberschreitet - und nur, wenn die neue Stufe hoeher liegt als der
-          # aktuelle Sollwert. Liegt die Einspeisung darunter, bleibt der Strom
-          # unveraendert stehen (kein Absenken, kein Modbus-Zappeln); das Ende
-          # regelt allein der Hold-Timer.
+          # TREPPE: Nur anheben, solange die Einspeisung die Schwelle ueberschreitet
+          # und die neue Stufe hoeher liegt. Kein Absenken (kein Modbus-Zappeln) - das
+          # Ende regelt der Hold-Timer.
           #
-          # MINDESTABSTAND 30 s zwischen zwei Stufen (ab V4.3.0): Die beiden
-          # Export-Trigger (6500 W Peak / 6400 W WP-Boost) lauschen auf denselben
-          # Sensor und werden bei steigendem Export praktisch gleichzeitig wahr -
-          # am 25.07.2026 lagen die zwei Laeufe 34 ms auseinander und hoben den
-          # Strom in einem Zug von 0 auf 40 A. Die Trigger-Entkopplung aus V4.1.0
-          # griff nicht, weil sie nur den Timer-START filtert: Lief der Timer
-          # bereits, erhoehte Prio 6 in JEDEM Folgelauf. Der Zeitabstand wirkt
-          # unabhaengig davon, welcher der 17 Trigger den Lauf ausgeloest hat,
-          # und bremst die Treppe im 5-Minuten-Takt nicht.
+          # MINDESTABSTAND 30 s: Die beiden Export-Trigger lauschen auf denselben
+          # Sensor und werden fast gleichzeitig wahr; ohne Abstand hebt ein einziges
+          # Ereignis den Strom um zwei Stufen. Wirkt unabhaengig vom ausloesenden
+          # Trigger und bremst den 5-Minuten-Takt nicht.
           - if:
               - condition: template
                 value_template: >
