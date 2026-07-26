@@ -38,7 +38,7 @@ Bumping rules:
 - The working file always carries the *next*, not-yet-published version number.
 - Within one unpublished cycle, do not increment the same level twice (e.g. stay at 3.0.1, don't go to 3.0.2 for a second patch in the same cycle) — instead raise the *scheme level* if the accumulated changes warrant it (patch → minor if a real behavior change joins the cycle; → major on a breaking change).
 - Only bump again after being explicitly told a version was published — that starts a new cycle.
-- Keep historical version comments in the code when bumping, unless the bump is explicitly about trimming them.
+- Don't delete existing comments unasked when bumping — but don't add new history either (see "Code comments and input text").
 - **Never bump the version without being asked.**
 
 ## Release notes
@@ -52,6 +52,18 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 - `git diff` is the source of truth for what changed, not a prose description.
 - **Ask before creating a git commit**, even when the underlying code edit was already approved. Ask again, separately, before pushing.
 - Do not add new blueprint `input:` fields without asking first — instances are hand-configured per site, and a new field means manual reassignment on each one.
+
+## Code comments and input text
+
+**Comments explain why, not what.** The code already shows what happens; a comment earns its place by naming a constraint, a trade-off, or a trap that isn't visible from the code itself.
+
+- **No history in the code.** No dates, no incident reports, no measured values from a single event ("belegt 26.07.2026: Bedarf 3,1 > Verfügbar 3,0", "Fehlalarm um 14:38:17"). That belongs in the commit message and the release note. The code states what holds *today*; git states how it got there.
+- **A few lines, not a paragraph.** If the comment is longer than the code it explains, it's doing the wrong job. Prefer one sentence on the non-obvious reason over a full derivation.
+- **Version markers only where they carry meaning** (e.g. an input whose semantics changed and instances must be reconfigured). Not as a running changelog.
+
+**`description:` on a blueprint input is UI text** for whoever configures the instance: one or two sentences on what the value does and how to choose it. No internal mechanics, no version history, no derivation of the formula behind it.
+
+**`alias:` is a label, not a sentence** — it shows up in traces, so keep it scannable.
 
 ## Log message convention
 
