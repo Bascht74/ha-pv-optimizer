@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.4.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.4.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -783,12 +783,9 @@ trigger:
     from: "active"
     id: peak_shaving_ende
   - alias: "Trigger WP-Anlauf START: sofortige WP-Sperre"
-    # Ohne diesen Trigger würde die WP-Sperre erst beim nächsten 5-Min-Lauf
-    # greifen: wp_sperre_aktiv wird am Lauf-Anfang aus dem Timer-Zustand
-    # berechnet, der beim Boost-Start-Lauf noch idle ist (Timer wird erst
-    # später im selben Lauf gestartet). Dieser Trigger stößt direkt nach dem
-    # Timer-Start (idle->active) einen neuen Lauf an; dort ist der Timer active,
-    # wp_sperre_aktiv wird True, Prio 4 verriegelt sofort.
+    # Ohne diesen Trigger griffe die WP-Sperre erst beim nächsten 5-Min-Lauf:
+    # wp_sperre_aktiv wird am Lauf-Anfang berechnet, wo der Timer noch idle ist.
+    # Der Zustandswechsel idle->active stößt hier sofort einen neuen Lauf an.
     platform: state
     entity_id: !input helper_timer_wp_anlauf
     to: "active"
@@ -822,7 +819,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.4.1]"
+      bp_version: "[V4.4.2]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -850,26 +847,16 @@ action:
 
   # DEYE-RETRY
   #
-  # Die Deye-Modbus-Anbindung hat regelmaessig kurze Aussetzer (wenige
-  # Sekunden). Faellt ein Sensor waehrend eines Laufs aus, rechnet der
-  # Blueprint mit Fallback-Werten weiter - das kann Fehlentscheidungen
-  # ausloesen (z.B. SOC=0 -> falscher Blockade-Austritt).
+  # Die Modbus-Anbindung hat kurze Aussetzer (wenige Sekunden). Rechnet ein Lauf
+  # dann mit Fallback-Werten weiter, entstehen Fehlentscheidungen: SOC=0 fuehrt
+  # zu falschem Blockade-Austritt, der Ladestrom-Fallback (140 A) zu einem
+  # ueberfluessigen Schreibvorgang. Zwei Register stehen stellvertretend fuer
+  # die gesamte Anbindung - faellt eines aus, sind meist alle betroffen.
   #
-  # Geprueft werden var_battery_total_charge UND var_wr_max_charge
-  # stellvertretend fuer die GESAMTE Deye-Anbindung: Faellt einer aus, sind
-  # meist alle betroffen. var_wr_max_charge ist zusaetzlich noetig, weil sein
-  # Fallback (aktueller_ladestrom -> float(140)) sonst eine Aenderung
-  # vortaeuscht und einen ueberfluessigen Register-Schreibvorgang samt
-  # Falschmeldung ausloest.
-  # Der Delay wirkt auf ALLE Deye-Werte des Laufs (SOC, Netz-Export,
-  # PV-Leistung, Schatten-BMS-Zaehler) - Jinja rendert states() erst zur
-  # Laufzeit, liest also nach dem Warten frisch ein.
-  # -> Der Retry darf deshalb NICHT an einzelne Trigger oder Codepfade
-  #    gebunden werden. Jeder Lauf nutzt Deye-Werte.
-  #
-  # Kurze Aussetzer sind normal und werden STILL abgefangen (kein Logbuch-
-  # Eintrag - das erzeugte nur Rauschen). Geloggt wird nur der Problemfall:
-  # wenn der Wert auch nach dem Warten noch fehlt.
+  # Der Delay wirkt auf ALLE Deye-Werte des Laufs, weil Jinja states() erst zur
+  # Laufzeit rendert. Der Retry darf deshalb nicht an einzelne Trigger gebunden
+  # werden. Kurze Aussetzer werden still abgefangen; geloggt wird nur, wenn der
+  # Wert auch danach noch fehlt.
   - if:
       - condition: template
         value_template: >
@@ -896,16 +883,10 @@ action:
                  or states(var_wr_max_charge) in ['unavailable','unknown'] }}
         then:
           # Log-Entprellung ohne Helfer: Die Warnung soll nur einmal je halber
-          # Stunde erscheinen. Die alte Fensterprüfung (Minute 0-4 oder 30-34)
-          # war NICHT an einen bestimmten Lauf gebunden - liefen während eines
-          # anhaltenden Ausfalls mehrere Trigger fast gleichzeitig (z. B.
-          # Wechselrichter-Neustart bei einem Firmware-Update, mehrere Trigger
-          # gequeued), feuerte die Warnung je Lauf erneut, statt nur einmal im
-          # Fenster. Jetzt exakt an den 5-Minuten-Takt-Trigger UND die exakte
-          # Minute 0/30 gebunden - pro Halbstunde genau ein möglicher Log-Lauf,
-          # unabhängig davon, wie viele andere Trigger im selben Fenster feuern.
-          # Die Berechnung mit Ersatzwerten läuft davon unberührt jeden
-          # Durchlauf (der Retry oben ist bewusst nicht trigger-gebunden).
+          # Stunde erscheinen. An den 5-Minuten-Takt UND Minute 0/30 gebunden -
+          # eine reine Fensterprüfung (Minute 0-4) würde bei mehreren gleichzeitig
+          # gequeueten Läufen mehrfach feuern. Die Berechnung mit Ersatzwerten
+          # läuft davon unberührt jeden Durchlauf.
           - if:
               - condition: template
                 value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
@@ -1151,20 +1132,14 @@ action:
 
       # ENTPRELLUNG DES BMS-OFFLINE-NOTLAUFS
       #
-      # Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf
-      # 'unavailable'. Ohne Entprellung loeste das sofort den Notlauf-Strom und
-      # eine Warnung aus - unnoetig, denn der ESP ist nach wenigen Sekunden
-      # wieder da.
+      # Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf 'unavailable' -
+      # ohne Entprellung loeste das sofort Notlauf-Strom und Warnung aus.
+      # packs_offline_bestaetigt ist nur true, wenn alle vorhandenen BMS-Temp-
+      # Sensoren laenger als offline_debounce_s weg sind (gemessen ueber
+      # last_changed, das HA beim Wechsel auf 'unavailable' neu setzt).
       #
-      # packs_offline_bestaetigt ist nur true, wenn packs_online == 0 UND alle
-      # vorhandenen BMS-Temp-Sensoren laenger als offline_debounce_s (300s)
-      # 'unavailable' sind. Gemessen ueber last_changed: Beim Wechsel
-      # verfuegbar -> unavailable setzt HA last_changed neu; solange der Sensor
-      # weg BLEIBT, waechst (now() - last_changed) monoton.
-      #
-      # Trade-off: Waehrend der Entprellzeit wird ohne Temperaturschutz
-      # geladen - unkritisch, da die Ladeleistung hier nie hoch genug wird,
-      # dass Temperatur limitierend waere.
+      # Trade-off: Waehrend der Entprellzeit wird ohne Temperaturschutz geladen -
+      # unkritisch, da die Ladeleistung hier nie temperaturlimitierend wird.
       offline_debounce_s: 300
       # Hilfsausdruck: ist ein einzelner Sensor laenger als die Schwelle weg?
       # (leerer Input -> zaehlt NICHT als offline, wird uebersprungen)
@@ -1359,17 +1334,12 @@ action:
       rest_slots: "{{ slot_daten_dict.slots | default([], true) }}"
       # ==================================================================
       # PROGNOSE-UNSICHERHEITSFAKTOR (P50 / Blend der Restslots)
-      # Solcast liefert je Slot zwei Werte: pv_estimate (P50, mittlere
-      # Erwartung) und pv_estimate10 (P10, pessimistisch). Der Blueprint
-      # rechnet mit dem Mittel beider (Blend). Liegen P10 und P50 dicht
-      # beieinander, ist die Prognose sicher -> Quotient ~ 1,0. Klaffen sie
-      # auseinander (unsicheres Wetter), steigt der Quotient und der
-      # Ladestrom wird automatisch angehoben.
-      # Belegt an 5 Tagen (13.-17.07.): Korrelation zwischen Spreizung und
-      # Prognosefehler -0,92 - je groesser die Spreizung, desto weiter fiel
-      # der reale Ertrag hinter P50 zurueck.
-      # Fallback 1.0, wenn keine Prognosedaten vorliegen (dann greift ohnehin
-      # meist Fall B) - der manuelle Sicherheitsfaktor wirkt dann allein.
+      # Solcast liefert je Slot pv_estimate (P50, mittlere Erwartung) und
+      # pv_estimate10 (P10, pessimistisch); gerechnet wird mit dem Mittel beider.
+      # Liegen sie dicht beieinander, ist die Prognose sicher -> Quotient ~ 1,0.
+      # Klaffen sie auseinander, steigt der Quotient und der Ladestrom wird
+      # angehoben - die Spreizung korreliert stark mit dem Prognosefehler.
+      # Fallback 1.0 ohne Prognosedaten; dann wirkt der manuelle Faktor allein.
       # ==================================================================
       prognose_unsicherheit: >
         {% set p50 = slot_daten_dict.p50 | float(0) %}
@@ -1381,18 +1351,13 @@ action:
         {% endif %}
       # ==================================================================
       # LADESTROM-SIMULATION (statt linearer Verteilung über die Reststunden)
-      # Die alte Rechnung (benoetigt / verf_stunden) verteilte den Bedarf
-      # gleichmäßig über die Rest-Sonnenstunden und ignorierte, WIE VIEL
-      # Energie in den einzelnen Slots wirklich kommt. Bei ungleicher
-      # PV-Verteilung (z.B. früh viel, abends nichts) war der Strom dadurch
-      # zu niedrig, um die Spitzen abzugreifen -> Batterie wurde nicht voll,
-      # obwohl genug Gesamtenergie da war.
-      #
-      # Jetzt: Für einen Kandidaten-Strom X wird durchsimuliert, wie viel
-      # real ankäme: pro Slot min(Netto-Überschuss, X * U * Slot-Stunden).
-      # Gesucht ist das kleinste X, das den reinen Bedarf deckt; der
-      # Sicherheitsfaktor wird danach draufmultipliziert (liefert einen
-      # kleineren, schonenderen Wert als den Faktor mit hineinzusimulieren).
+      # Eine gleichmäßige Verteilung (benoetigt / verf_stunden) ignoriert, wie
+      # viel Energie in den einzelnen Slots wirklich ankommt - bei ungleicher
+      # PV-Verteilung wird der Strom zu niedrig und die Batterie nicht voll.
+      # Stattdessen wird je Kandidaten-Strom X simuliert, was real ankäme:
+      # pro Slot min(Netto-Überschuss, X * U * Slot-Stunden). Gesucht ist das
+      # kleinste X, das den reinen Bedarf deckt; der Sicherheitsfaktor kommt
+      # erst danach drauf - das ergibt einen schonenderen Wert als mitsimuliert.
       # Suche: grob in 5-A-Schritten, dann fein in 1-A-Schritten.
       # ==================================================================
       sim_x_grob: >
@@ -1445,13 +1410,10 @@ action:
       haus_aktuell_w: "{{ (json_profil[h_index_now] | float(0.2)) * 2000 }}"
       prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
 
-      # === Zeit-basierte Ziel-Ströme ===
-      # === Ziel-Strom Prio 8 ===
-      # Primär aus der Slot-Simulation (kleinster Strom, der den Bedarf real
-      # deckt) × Prognose-Unsicherheit (P50/Blend) × manuellem Sicherheitsfaktor.
-      # Fallback auf die alte lineare Rechnung, wenn keine Slot-Daten vorliegen
-      # (Solcast fehlt) — dann greift ohnehin meist Fall B, weil ohne Prognose
-      # kein Rest-Überschuss ausgewiesen wird.
+      # Ziel-Strom Prio 8: Slot-Simulation (kleinster Strom, der den Bedarf real
+      # deckt) × Prognose-Unsicherheit × manuellem Sicherheitsfaktor. Ohne
+      # Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin meist
+      # Fall B, weil ohne Prognose kein Rest-Überschuss ausgewiesen wird.
       amp_roh_13: >
         {% if (sim_ampere_min | int(0)) > 0 %}
           {{ (sim_ampere_min | int(0)) * (prognose_unsicherheit | float(1.0)) * faktor_ziel_puffer }}
@@ -1488,21 +1450,18 @@ action:
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # PEAK-SHAVING-TREPPE
       #
-      # Bei JEDER Ueberschreitung der Schwelle wird der Ladestrom um eine feste
-      # Stufe (peak_ampere) ANGEHOBEN, bis die Einspeisung unter der Schwelle
-      # bleibt.
+      # Bei jeder Ueberschreitung der Schwelle wird der Ladestrom um eine feste
+      # Stufe (peak_ampere) angehoben, bis die Einspeisung darunter bleibt.
       #
-      # WARUM KEINE BEDARFSRECHNUNG:
-      # Der Wechselrichter deckelt die Einspeisung bereits auf die
-      # Einspeisegrenze. Der gemessene Export liegt deshalb IMMER nur knapp
-      # ueber der Schwelle - die abgeregelte Leistung entsteht gar nicht erst
-      # und ist nirgends messbar. Auch ueber potential_export nicht: dort
-      # kuerzt sich der Ladestrom heraus, die Rechnung ergibt strukturell
-      # ~aktueller_ladestrom + 2 A - der Mindestschritt gewinnt damit immer.
+      # WARUM KEINE BEDARFSRECHNUNG: Der Wechselrichter deckelt die Einspeisung
+      # bereits auf die Einspeisegrenze - der gemessene Export liegt deshalb immer
+      # nur knapp ueber der Schwelle, die abgeregelte Leistung entsteht gar nicht
+      # erst. Auch potential_export hilft nicht: dort kuerzt sich der Ladestrom
+      # heraus, die Rechnung ergibt ~aktueller_ladestrom + 2 A.
       #
-      # KEIN Absenken: Ein Rueckregeln wuerde bei jeder Wolke Modbus-Schreibzugriffe
-      # auslosen und zappeln. Faellt die PV ab, laeuft der Hold-Timer aus und
-      # Prio 8 uebernimmt die Berechnung wieder.
+      # KEIN Absenken: Rueckregeln wuerde bei jeder Wolke Schreibzugriffe
+      # ausloesen. Faellt die PV ab, laeuft der Hold-Timer aus und Prio 8
+      # uebernimmt wieder.
       target_p3: "{{ [ (aktueller_ladestrom | float(0)) + (peak_ampere | float(20)), max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0) }}"
       # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
@@ -1513,18 +1472,14 @@ action:
       aktueller_modus: "{{ states(var_lade_modus) if var_lade_modus != '' else 'normal' }}"
       # ERSATZ-AUSLOESER BEI BMS-KOMPLETTAUSFALL
       #
-      # Fallen alle BMS-Packs aus, sind vmax1-3 'unavailable' -> float(0) und der
-      # normale, zellspannungsbasierte Start kann NIE ausloesen (0 >= 3.46 ist
-      # falsch). Ersatzweise wird dann die gemessene Batterie-GESAMTspannung
-      # herangezogen: erreicht sie die Zellausgleich-Float-Spannung, ist die
-      # Batterie voll genug zum Balancieren. SOC-unabhaengig (der SOC kaeme bei
-      # BMS-Ausfall ohnehin nur aus dem Schatten-BMS).
-      # Sicherheit: Der Ladestrom ist in dieser Lage ohnehin auf den Notlaufwert
-      # gedeckelt (temperatur_limit_ampere = notfall_ampere), das Balancing laeuft also
-      # sanft. Das Ende regelt - wie beim normalen Pfad - allein der Cooldown-
-      # Timer: Beim Start wird heute_schon_voll sofort gesetzt, damit faellt
-      # dieser Auslöser weg und die Float-Spannung wird nach Timerablauf
-      # zuverlaessig wieder gesenkt (kein Haengenbleiben auf Balancing-Spannung).
+      # Fallen alle BMS-Packs aus, sind vmax1-3 'unavailable' -> float(0), der
+      # zellspannungsbasierte Start kann also nie ausloesen. Ersatzweise zaehlt
+      # die gemessene Batterie-Gesamtspannung: Erreicht sie die Zellausgleich-
+      # Spannung, ist die Batterie voll genug. SOC-unabhaengig, weil der SOC dann
+      # ohnehin nur aus dem Schatten-BMS kaeme. Der Ladestrom ist hier auf den
+      # Notlaufwert gedeckelt, das Balancing laeuft also sanft. Das Ende regelt
+      # wie sonst der Cooldown-Timer: heute_schon_voll wird beim Start gesetzt,
+      # damit faellt dieser Ausloeser weg.
       batterie_spannung: "{{ states(var_wr_battery_voltage) | float(0) if var_wr_battery_voltage != '' else 0 }}"
       bms_ausfall_balancing: >
         {{ var_wr_battery_voltage != '' and packs_offline_bestaetigt
@@ -1549,22 +1504,12 @@ action:
 
       # wp_boost_startet_gleich
       #
-      # PROBLEM: wp_sperre_aktiv wird am LAUF-ANFANG berechnet, wenn der
-      # WP-Anlauf-Timer noch idle ist. Liegt der Export ueber BEIDEN Schwellen
-      # (Peak und WP-Boost), startete der Peak-Timer-Block den Timer - und der
-      # WP-Boost weiter unten im selben Lauf loeste dann einen Folge-Trigger
-      # aus, dessen zweiter Lauf den Timer sofort wieder cancelte. Das erzeugte
-      # einen Fehl-Trigger auf 'peak_shaving_ende' (active -> idle) und damit
-      # die falsche Meldung 'Hold-Timer abgelaufen'.
-      #
-      # LOESUNG: Hier wird exakt die WP-Boost-Bedingung nachgebildet. Der
-      # Peak-Timer wird gar nicht erst gestartet, wenn im selben Lauf ohnehin
-      # gleich ein WP-Boost feuert.
-      #
-      # GEWOLLT: Der Peak-Timer wird weiterhin bei JEDEM Lauf neu gestartet,
-      # solange Export > Schwelle - aber nur, wenn keine WP laeuft. Waehrend
-      # der WP-Anlaufphase ist Peak-Shaving komplett aus (Batterie auf 0A, der
-      # Ueberschuss geht an die WP).
+      # wp_sperre_aktiv wird am Lauf-Anfang berechnet, wenn der WP-Anlauf-Timer
+      # noch idle ist. Liegt der Export ueber beiden Schwellen, startete der
+      # Peak-Timer - und der WP-Boost cancelte ihn im selben Lauf wieder, was
+      # ein falsches 'Hold-Timer abgelaufen' erzeugte. Hier wird die
+      # WP-Boost-Bedingung nachgebildet, damit der Timer gar nicht erst
+      # startet. Waehrend der WP-Anlaufphase ist Peak-Shaving komplett aus.
       wp_boost_startet_gleich: >
         {{ var_wp_boost_aktiv
            and real_export > schwelle_wp_boost
@@ -1574,18 +1519,12 @@ action:
 
       # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 4)
       #
-      # wp_sperre_aktiv bleibt UNVERAENDERT und steuert weiterhin - unabhaengig
-      # von der Uhrzeit - die Peak-Shaving-Timer-Logik: Waehrend der
-      # WP-Anlaufphase soll Peak-Shaving IMMER unterbleiben, auch nachmittags.
+      # wp_sperre_aktiv steuert unveraendert die Peak-Shaving-Timer-Logik -
+      # waehrend der WP-Anlaufphase soll Peak-Shaving immer unterbleiben. Nur
+      # die harte 0A-Verriegelung in Prio 4 endet mit der Blockade: Startet die
+      # WP danach (nachmittags bei viel Sonne), darf die Batterie weiterladen.
       #
-      # Nur die harte 0A-Verriegelung in PRIO 4 ist auf das (dynamische)
-      # Blockade-Ende begrenzt: Startet die WP NACH Blockade-Ende (z.B.
-      # nachmittags bei viel Sonne), soll die Batterie normal weiterladen
-      # duerfen - sonst verliert man eine wertvolle Sonnenstunde.
-      #
-      # blockade_heute_beendet wird weiter unten im selben variables-Block
-      # definiert und waere hier eine Vorwaertsreferenz. Deshalb die Pruefung
-      # inline wiederholt (var_helper_blockade_beendet ist frueher gesetzt).
+      # blockade_heute_beendet ist hier noch nicht definiert - daher inline.
       wp_sperre_batterie_0a_aktiv: >
         {{ wp_sperre_aktiv and vor_blockade_ende
            and not (var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on') }}
@@ -1603,20 +1542,13 @@ action:
         {% else %}false{% endif %}
 
       # ================================================================
-      # DYNAMISCHES BLOCKADE-ENDE T (BRUTTO-Rechnung, konsistent mit Prio 8):
-      # Spätester Ladebeginn T (Halbstunden-Raster, nur VOLLSTÄNDIG in der
-      # Zukunft liegende Slots), sodass ab T noch gilt:
-      #   Verfuegbar (PV-Seite)  = Brutto-Ueberschuss ab T (nur Slots mit
-      #                            PV-Ueberschuss) MINUS puffer_kwh
-      #   Bedarf   (Batterieseite) = (freier Platz + Nachladebedarf ab T)
-      #                              x Sicherheitsfaktor
-      # Der Nachladebedarf (Defizit-Slots, in denen der Hausverbrauch die PV
-      # uebersteigt) steht damit auf der BATTERIESEITE (wie in Prio 8:
-      # benoetigt_kwh = freie + defizit), nicht als Netto-Abzug auf der
-      # PV-Seite. Der Sicherheitsfaktor wirkt auf den GESAMTEN Bedarf.
-      # Faktor = min(faktor_ziel_puffer x faktor_fallback x prognose_unsicherheit,
-      # 2,0). Liefert {'t', 'verf', 'bedarf', 'u_ab_t' (Brutto-Ueberschuss ab T),
-      # 'd_ab_t' (Nachladebedarf ab T), 'ueber_ges' (Brutto-Ueberschuss Resttag)}.
+      # DYNAMISCHES BLOCKADE-ENDE T (Brutto-Rechnung, konsistent mit Prio 8)
+      # Spätester Ladebeginn T (Halbstunden-Raster), sodass ab T noch gilt:
+      #   Verfügbar = Brutto-Überschuss ab T minus Puffer        (PV-Seite)
+      #   Bedarf    = (freier Platz + Nachladebedarf ab T) x Faktor (Batterie)
+      # Der Nachladebedarf steht bewusst auf der Batterieseite wie in Prio 8,
+      # nicht als Netto-Abzug auf der PV-Seite.
+      # Faktor = min(faktor_ziel_puffer x faktor_fallback x prognose_unsicherheit, 2,0).
       # ================================================================
       blockade_dyn_json: >
         {% set ns = namespace(alle=[]) %}
@@ -1698,17 +1630,14 @@ action:
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
       # PEAK-SHAVING HAT VORRANG: Die Blockade endet, sobald die Einspeisung die
       # Peak-Schwelle reisst - sonst regelt der Wechselrichter ab, waehrend die
-      # Batterie auf 0 A steht.
-      # An den TRIGGER gekoppelt statt an real_export: Der Trigger ist ueber
-      # 'for: 30s' entprellt (kein Messausreisser) und wirkt sofort im selben Lauf.
-      # Der Hold-Timer allein waere zu langsam, er wird erst weiter unten gestartet;
-      # die Timer-Bedingung deckt dafuer den Rest der Peak-Phase ab.
+      # Batterie auf 0 A steht. An den entprellten TRIGGER gekoppelt statt an
+      # real_export: kein Messausreisser, und es wirkt sofort im selben Lauf (der
+      # Hold-Timer startet erst weiter unten). Die Timer-Bedingung deckt den Rest
+      # der Peak-Phase ab.
       #
-      # 2h-Mindestdauer als reine START-Schwelle: nur beim ersten Eintritt muss der
-      # spaeteste Ladebeginn >= 2h entfernt sein, danach haelt die Blockade bis zum
-      # dynamischen Ausstieg durch.
-      # BMS komplett offline -> beenden: ohne Zellspannungen und Temperaturen wird
-      # nicht auf 0 A blockiert, sondern mit dem Notlauf-Strom weitergeladen.
+      # 2h-Mindestdauer nur als START-Schwelle; danach haelt die Blockade bis zum
+      # dynamischen Ausstieg durch. Bei komplett offline BMS wird nicht auf 0 A
+      # blockiert, sondern mit dem Notlauf-Strom weitergeladen.
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
            and not packs_offline_bestaetigt
@@ -1725,15 +1654,13 @@ action:
 
   # BLOCKADE-AUSTRITT ERKENNEN
   #
-  # Der gespeicherte Modus steht noch auf 'blockade', aber die Bedingung
-  # ist gefallen (kein T mehr / SOC / Zeit) -> Tagesmarker setzen.
+  # Der gespeicherte Modus steht noch auf 'blockade', die Bedingung ist aber
+  # gefallen (kein T mehr / SOC / Zeit) -> Tagesmarker setzen.
   #
-  # WICHTIG - Guard 'not blockade_heute_beendet': aktueller_modus ist der
-  # Stand des LETZTEN Laufs und wird erst weiter unten in der Prio-Kaskade
-  # neu gesetzt. Setzt kein Prio-Zweig den Modus um (z.B. weil sich der
-  # Ladestrom nicht genug aendert), bleibt er auf 'blockade' - ohne den
-  # Guard wuerde der Block dann bei JEDEM Lauf erneut feuern (beobachtet:
-  # 6-8x im 5-Min-Takt). Mit Guard feuert er genau einmal pro Tag.
+  # Guard 'not blockade_heute_beendet': aktueller_modus ist der Stand des LETZTEN
+  # Laufs. Setzt kein Prio-Zweig ihn um (etwa weil sich der Ladestrom nicht genug
+  # aendert), bliebe er auf 'blockade' und der Block feuerte bei jedem Lauf
+  # erneut. Mit Guard genau einmal pro Tag.
   - if:
       - condition: template
         value_template: >
@@ -1800,17 +1727,13 @@ action:
             id: maintenance
         sequence:
         # Haengt den heutigen Tag an die Liste an, wenn die Batterie voll wurde.
+        # Reihenfolge im Maintenance-Lauf (23:58): 1. hier die Liste aktualisieren,
+        # 2. 'Taegliches Aufraeumen' setzt batterie_heute_voll = off, 3. 'BMS
+        # Balancing Logic' wertet aus.
         #
-        # Ablauf im Maintenance-Lauf (23:58):
-        #   1. HIER: Liste aktualisieren (liest batterie_heute_voll)
-        #   2. danach: 'Taegliches Aufraeumen' setzt batterie_heute_voll = off
-        #   3. danach: 'BMS Balancing Logic' wertet die Liste aus
-        #
-        # Die Liste liegt in einem input_text (Input 'json_tracking_sensor').
-        # Ein input_text speichert IMMER als String - ein Sensor-State wuerde von
-        # HA in eine native Liste umgewandelt und beim Zuruecklesen als
-        # Python-Repr mit EINFACHEN Quotes geliefert, was kein gueltiges JSON ist
-        # und from_json zerstoert.
+        # Die Liste liegt in einem input_text, weil der immer als String speichert.
+        # Ein Sensor-State kaeme als Python-Repr mit einfachen Quotes zurueck -
+        # kein gueltiges JSON, from_json scheitert.
         - if:
             - condition: template
               value_template: "{{ var_json_tracking != '' }}"
@@ -1818,15 +1741,11 @@ action:
             - variables:
                   # ROBUSTES EINLESEN: String ODER native Liste
                   #
-                  # HA rendert Template-Ergebnisse mit 'native type conversion'. Ein
-                  # gespeicherter String, der wie eine Liste aussieht, wird via states()
-                  # u.U. bereits als ECHTE Liste zurueckgegeben - nicht als String. Ob das
-                  # passiert, ist nicht zuverlaessig vorhersagbar. BEIDE Faelle sind
-                  # gueltig und muessen abgedeckt werden: erst auf native Liste pruefen,
-                  # dann auf String.
-                  #
-                  # (Dieselbe Logik nutzt der Blueprint bei slot_daten_dict und
-                  #  blockade_dyn - dort war das Phaenomen schon bekannt.)
+                  # HA rendert Template-Ergebnisse mit 'native type conversion': Ein
+                  # gespeicherter String, der wie eine Liste aussieht, kann via states()
+                  # bereits als echte Liste zurueckkommen - nicht vorhersagbar. Beide
+                  # Faelle abdecken, erst native Liste, dann String. (Gleiches Muster
+                  #  bei slot_daten_dict und blockade_dyn.)
                 tracking_roh: "{{ states(var_json_tracking) }}"
                 tracking_liste: >
                   {% if tracking_roh is not string and tracking_roh is iterable %}
@@ -1949,17 +1868,13 @@ action:
                   message: "{{ bp_version }} Mitternachts-Check: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt, da sie noch auf dem Zellausgleich-Wert stand, obwohl der Nachlauf-Timer inaktiv ist (Timer vermutlich verloren)."
                   entity_id: !input helper_logbook_dummy
           # NACHT-MITTERNACHTS-CHECK: Der "Feierabend" (Sonnenuntergang) ist die
-          # EINZIGE Stelle, die den Ladestrom fuer die Nacht auf Max oeffnet.
-          # Faellt der einmalige Sonnenuntergangs-Trigger aus (Reload/Neustart
-          # nach Sonnenuntergang), bleibt das Register ueber Nacht gedrosselt
-          # (z.B. auf dem Zellausgleich-Wert 8 A) haengen. Hier als Sicherung
-          # nachziehen - nur wenn der Wert wirklich abweicht (sonst kein Log jede
-          # Nacht) UND weder Netz-Zwangsladung noch Zellausgleich (Cooldown-Timer)
-          # laufen (deren Ladestrom nicht ueberschreiben). Die uebrigen Prio-
-          # Zweige, die nachts ueberhaupt Strom setzen koennten, greifen hier
-          # nicht: Prio 3/7/8 sind is_day/zeit-gegated, Prio 6 (Peak-Shaving)
-          # braucht Netz-Export (nachts null). Der Modus bleibt auf dem oben
-          # gesetzten 'normal', die Tageslogik setzt morgens ohnehin neu.
+          # einzige Stelle, die den Ladestrom fuer die Nacht auf Max oeffnet.
+          # Faellt dieser einmalige Trigger aus (Reload/Neustart nach
+          # Sonnenuntergang), bliebe das Register ueber Nacht gedrosselt. Hier als
+          # Sicherung nachziehen - nur bei echter Abweichung (sonst jede Nacht ein
+          # Log) und nicht waehrend Netz-Zwangsladung oder Zellausgleich, deren
+          # Ladestrom nicht ueberschrieben werden darf. Die uebrigen Prio-Zweige
+          # greifen nachts ohnehin nicht.
           - if:
               - condition: template
                 value_template: >
@@ -2096,16 +2011,13 @@ action:
 
   - choose:
       # ============================================================
-      # SPEICHERVERLUST — SCHRITT 2 (Verbuchung): Läuft im regulären Takt.
-      # Die Prüfung ist fast immer sofort false (Kandidat = 0), kostet also
-      # nichts. Nur wenn abends ein Kandidat geparkt wurde UND die Batterie
-      # über Nacht bis auf/unter die Reserve (default_tou_soc) fällt, wird der
-      # potenzielle Verlust als ECHTER Verlust verbucht + geloggt und der
-      # Kandidat auf 0 gesetzt (verhindert Doppelverbuchung, solange SOC unter
-      # der Reserve bleibt). Kein "Verwerfen" nötig: Bleibt die Batterie über
-      # der Reserve, überschreibt der nächste Sonnenuntergang den Kandidaten
-      # ohnehin. Fängt den nächtlichen Tiefpunkt egal wann er eintritt (auch
-      # nach Sonnenaufgang, auch wenn kaum PV kommt und der SOC weiter fällt).
+      # SPEICHERVERLUST — SCHRITT 2 (Verbuchung): Läuft im regulären Takt, ist
+      # aber fast immer sofort false (Kandidat = 0). Nur wenn abends ein Kandidat
+      # geparkt wurde UND die Batterie über Nacht bis auf die Reserve fällt, wird
+      # er als echter Verlust verbucht und auf 0 gesetzt (keine Doppelverbuchung).
+      # Kein Verwerfen nötig: Bleibt die Batterie oben, überschreibt der nächste
+      # Sonnenuntergang den Kandidaten. Fängt den nächtlichen Tiefpunkt
+      # unabhängig davon, wann er eintritt.
       # ============================================================
       - alias: "Speicherverlust verbuchen (wenn Batterie unter Reserve fiel)"
         conditions:
@@ -2163,15 +2075,10 @@ action:
               letztes_100_datum: "{{ tage_liste | max if tage_liste | length > 0 else '2000-01-01' }}"
               # ALLE SECHS ToU-REGISTER PRUEFEN
               #
-              # Frueher wurde nur Programm 1 gelesen. Wurde z.B. nur Programm 3 extern
-              # geaendert (Deye-App, fehlgeschlagener Schreibvorgang), blieb das
-              # unbemerkt - Programm 1 stimmte ja mit dem Soll ueberein, also wurde
-              # nicht nachgesetzt. Die sechs Register konnten so dauerhaft
-              # auseinanderlaufen.
-              #
-              # Jetzt: min und max ueber alle sechs. Weicht irgendeines vom Soll ab,
-              # unterscheidet sich min oder max vom Zielwert -> es wird nachgesetzt
-              # (alle sechs werden ohnehin gemeinsam geschrieben).
+              # min und max ueber alle sechs: Weicht irgendeines vom Soll ab,
+              # unterscheidet sich min oder max vom Zielwert und es wird nachgesetzt
+              # (geschrieben werden ohnehin immer alle sechs). Nur Programm 1 zu
+              # lesen wuerde eine externe Aenderung an einem der anderen uebersehen.
               tou_werte: >
                 {{ [
                      states(var_wr_tou_1) | float(20),
@@ -2223,15 +2130,11 @@ action:
                 conditions:
                   # GUARD: 'tage_liste | length > 0'
                   #
-                  # Ohne Tracking-Daten wird KEINE Entscheidung getroffen.
-                  #
-                  # Grund: Faellt der Tracking-Speicher aus (leer/unavailable), ist
-                  # tage_liste leer und letztes_100_datum faellt auf den Fallback
-                  # '2000-01-01'. Die Bedingung '2000-01-01 < vor_9_tagen' waere dann
-                  # trivial wahr - der Blueprint wuerde die ToU-Programme hochsetzen,
-                  # obwohl die Batterie an praktisch jedem Vortag voll war. Ein
-                  # Fallback-Wert ist eben KEIN Messwert: 'keine Daten' ist etwas anderes
-                  # als 'nicht voll gewesen'.
+                  # Ohne Tracking-Daten wird KEINE Entscheidung getroffen: Faellt der
+                  # Speicher aus, ist tage_liste leer und letztes_100_datum faellt auf
+                  # '2000-01-01' - die Bedingung waere trivial wahr und die ToU-Programme
+                  # wuerden hochgesetzt, obwohl die Batterie taeglich voll war.
+                  # 'Keine Daten' ist etwas anderes als 'nicht voll gewesen'.
                   - condition: template
                     value_template: "{{ tage_liste | length > 0 }}"
                   - condition: template
@@ -2413,16 +2316,12 @@ action:
           - condition: trigger
             id: float_boost_ende
         sequence:
-          # SCHATTEN-BMS-TARE am Zellausgleich-ENDE: nur noch als NACHKALIBRIERUNG.
-          # Der harte 100%-Anker sitzt am START (Spannungs-Schwelle).
-          # Dieser Zweig greift NUR, wenn der Ladestand die ganze Phase über bei
-          # 100 % geblieben ist. Ist er zwischendurch gefallen, hat der Trigger
-          # 'soc_verlaesst_voll' bereits in jenem Moment kalibriert — dort war die
-          # Messung aussagekräftig, hier nicht mehr.
-          # Die frühere Spannungs-Prüfung ist entfallen: Am Timer-Ende bricht die
-          # Klemmenspannung ohne Ladestrom ein (belegt am 18.07.: 56 V -> 54,4 V
-          # drei Minuten vor Timer-Ende, obwohl SOC noch 99,6 % war). Der
-          # Ladestand selbst ist das robustere Kriterium.
+          # SCHATTEN-BMS-TARE am Zellausgleich-ENDE: nur noch als Nachkalibrierung,
+          # der harte 100%-Anker sitzt am START. Greift nur, wenn der Ladestand die
+          # ganze Phase über bei 100 % blieb - ist er zwischendurch gefallen, hat
+          # 'soc_verlaesst_voll' bereits kalibriert, als die Messung noch
+          # aussagekräftig war. Eine Spannungsprüfung taugt hier nicht: Am Timer-Ende
+          # bricht die Klemmenspannung ohne Ladestrom ein.
           - variables:
               ende_kalibrieren: >
                 {{ (schatten_raw_soc | float(-1)) > 100 and
@@ -2468,15 +2367,11 @@ action:
         sequence:
           # ABLAUF ODER ABBRUCH UNTERSCHEIDEN
           #
-          # Der Trigger 'peak_shaving_ende' lauscht auf den Zustandswechsel des
-          # Hold-Timers (active -> idle). Dieser Wechsel tritt bei ZWEI
-          # verschiedenen Ereignissen auf:
-          #   1. Der Timer ist wirklich ABGELAUFEN (kein Export mehr).
-          #   2. Der Timer wurde per timer.cancel ABGEBROCHEN - vom Zweig
-          #      'Loescht den Peak-Shaving Timer', sobald die WP-Sperre greift.
-          #
-          # Unterschieden wird ueber wp_sperre_aktiv (NICHT ueber den Export - der
-          # kann in beiden Faellen hoch oder niedrig sein).
+          # 'peak_shaving_ende' lauscht auf active -> idle. Das tritt bei zwei
+          # Ereignissen auf: Timer wirklich abgelaufen, oder per timer.cancel
+          # abgebrochen (Zweig 'Loescht den Peak-Shaving Timer' bei WP-Sperre).
+          # Unterschieden wird ueber wp_sperre_aktiv - der Export taugt nicht, er
+          # kann in beiden Faellen hoch oder niedrig sein.
           - choose:
               - alias: "Abbruch durch WP-Sperre"
                 conditions:
@@ -2502,16 +2397,14 @@ action:
             # Der Timer wird bei jedem Lauf neu aufgezogen - solange Clipping droht,
             # laeuft Peak-Shaving durch.
             #
-            # START ueber real_export, VERLAENGERUNG ueber potential_export: Wirkt das
-            # Peak-Shaving, puffert die Batterie und real_export faellt unter die
+            # START ueber real_export, VERLAENGERUNG ueber potential_export: Wirkt
+            # das Peak-Shaving, puffert die Batterie und real_export faellt unter die
             # Schwelle - der Erfolg wuerde die Massnahme sonst selbst beenden. Zum
-            # Starten taugt potential_export nicht, weil ihn schon eine normale
-            # Prio-8-Ladung ueber die Schwelle hebt.
+            # Starten taugt potential_export nicht, ihn hebt schon eine normale
+            # Prio-8-Ladung ueber die Schwelle.
             #
-            # 'not wp_boost_startet_gleich' verhindert, dass der WP-Boost den eben
-            # gestarteten Timer im selben Lauf wieder cancelt.
-            # Batterie-Guard wie in Prio 6: sonst laeuft der Timer weiter, obwohl der
-            # Zweig bei voller Batterie nicht mehr greifen kann.
+            # 'not wp_boost_startet_gleich': sonst cancelt der WP-Boost den eben
+            # gestarteten Timer. Batterie-Guard wie in Prio 6.
             value_template: >
               {{ (real_export > schwelle_peak_shaving
                   or (states(var_timer_peak) == 'active'
@@ -2537,29 +2430,18 @@ action:
 
   # WP-LAUFZEIT BEENDEN
   #
-  # Die Waermepumpen-Laufzeit sperrt Prio 8 - der Ueberschuss gehoert in dieser
-  # Zeit der Waermepumpe. Beendet wird sie, sobald der Verdichter nachweislich
-  # nicht mehr laeuft; dann ist der Ueberschuss wieder frei fuer die Batterie:
+  # Die Laufzeit sperrt Prio 8 - der Ueberschuss gehoert in dieser Zeit der
+  # Waermepumpe. Beendet wird sie, sobald der Verdichter nachweislich nicht mehr
+  # laeuft:
+  #   MIT Kompressor-Sensor: 10 s durchgehend 'off'. Bewusst der Rohzustand,
+  #     wp_kompressor_aktiv haelt nach dem Abschalten noch 11 Min 'true'.
+  #   OHNE Sensor: Die Einspeisung steigt wieder ueber die Peak-Schwelle - bei
+  #     laufendem Verdichter ausgeschlossen, er zieht mehrere kW.
+  # Waehrend der Anlaufphase wird nie beendet.
   #
-  #   MIT Kompressor-Sensor: Er meldet 10 s durchgehend 'off' (Trigger
-  #     'wp_kompressor_aus'). Bewusst der Rohzustand - wp_kompressor_aktiv
-  #     haelt nach dem Abschalten noch 11 Min 'true' (Prio-5-Nachlauf).
-  #   OHNE Sensor (Fallback): Die Einspeisung steigt wieder ueber die
-  #     Peak-Schwelle. Bei laufendem Verdichter ist das ausgeschlossen - er
-  #     zieht rund 2 kW und drueckt den Export sicher darunter.
-  #
-  # Waehrend der Anlaufphase wird NIE beendet (die Waermepumpe laeuft gerade
-  # erst an und zieht noch keine volle Leistung).
-  #
-  # Der Cancel erzeugt active->idle und damit den Trigger 'wp_boost_ende', der
-  # die Zieltemperatur zuruecksetzt und die Waermepumpe stoppt. Die Laufzeit
-  # muss deshalb lang genug sein, dass sie ihr Ziel VORHER erreicht - sonst
-  # bricht man sie mitten im Heizen ab.
-  #
-  # Reihenfolge: Dieser Block liegt VOR der Prio-Kaskade. Nach dem Beenden
-  # greift im selben Lauf zuerst Prio 6 (Peak-Shaving) - Prio 8 bleibt in
-  # diesem Durchgang ohnehin gesperrt, weil wp_laufzeit_aktiv am Laufanfang
-  # berechnet wurde.
+  # Der Cancel loest ueber 'wp_boost_ende' das Zuruecksetzen der Zieltemperatur
+  # aus und stoppt damit die Waermepumpe. Die Laufzeit muss also lang genug sein,
+  # dass sie ihr Ziel vorher erreicht.
   - if:
       - condition: template
         value_template: >
@@ -3004,20 +2886,14 @@ action:
           - condition: template
             value_template: "{{ aktueller_soc < 99 and not heute_schon_voll }}"
         sequence:
-          # Der WP-Laufzeit-Timer wird hier NICHT abgebrochen: Das setzte das
-          # Warmwasser-Ziel vorzeitig zurueck, die Waermepumpe stoppte vor ihrer
-          # Zieltemperatur. Beendet wird die Laufzeit gezielt im Block
-          # "WP-LAUFZEIT BEENDEN"; bis dahin bleibt Prio 8 gesperrt und der Ladestrom
-          # steht auf dem zuletzt gesetzten Peak-Wert.
+          # Der WP-Laufzeit-Timer wird hier NICHT abgebrochen - das beendet der
+          # Block "WP-LAUFZEIT BEENDEN" gezielt.
           #
-          # TREPPE: Nur anheben, solange die Einspeisung die Schwelle ueberschreitet
-          # und die neue Stufe hoeher liegt. Kein Absenken (kein Modbus-Zappeln) - das
-          # Ende regelt der Hold-Timer.
-          #
+          # Nur anheben, solange die Einspeisung die Schwelle ueberschreitet und
+          # die neue Stufe hoeher liegt; kein Absenken.
           # MINDESTABSTAND 30 s: Die beiden Export-Trigger lauschen auf denselben
-          # Sensor und werden fast gleichzeitig wahr; ohne Abstand hebt ein einziges
-          # Ereignis den Strom um zwei Stufen. Wirkt unabhaengig vom ausloesenden
-          # Trigger und bremst den 5-Minuten-Takt nicht.
+          # Sensor und werden fast gleichzeitig wahr - ohne Abstand hebt ein
+          # einziges Ereignis den Strom um zwei Stufen.
           - if:
               - condition: template
                 value_template: >
@@ -3103,12 +2979,9 @@ action:
                   - condition: template
                     value_template: "{{ aktueller_modus == 'fall_b_max' }}"
                 sequence:
-                  # Kein Rückregeln UND keine Logausgabe: Dass ohne Rückregeln
-                  # durchgeladen wird, ist bereits bei "Prio 3 (Fall B / Schleuse
-                  # auf)" dokumentiert. Früher wurde hier im 5-Min-Takt
-                  # "Prio 8 übersprungen" geloggt - reines Log-Rauschen bis zur
-                  # nächtlichen Rücksetzung. Der stop-Schritt bleibt im Trace
-                  # sichtbar, erzeugt aber keinen Logbuch-Eintrag.
+                  # Kein Rückregeln und keine Logausgabe - dass durchgeladen wird,
+                  # steht bereits in der Meldung von Prio 3. Der stop-Schritt bleibt
+                  # im Trace sichtbar.
                   - stop: "Fall-B-Modus (fall_b_max) aktiv – kein Rückregeln, keine Logausgabe."
             default:
               - variables:
