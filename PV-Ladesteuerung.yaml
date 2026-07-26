@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.4.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.5.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -819,7 +819,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.4.2]"
+      bp_version: "[V4.5.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -834,6 +834,10 @@ action:
       # koennen muss; liegt der spaeteste Ladebeginn naeher, wird gar nicht erst
       # blockiert (Whipsaw-Schutz gegen kurze Mikro-Blockaden).
       blockade_min_dauer_h: 2
+      # Restlaufzeit (Minuten), auf die die Waermepumpen-Laufzeit gekuerzt wird,
+      # sobald das Warmwasser seine Zieltemperatur erreicht hat. Kein sofortiges
+      # Ende, damit die Waermepumpe den Speicher noch fertig laden kann.
+      wp_nachlauf_min: 15
       var_battery_total_charge: !input battery_total_charge
       # Bewusst schon hier (nicht erst weiter unten): Der DEYE-RETRY direkt
       # darunter prueft dieses Register mit.
@@ -2442,6 +2446,9 @@ action:
   # Der Cancel loest ueber 'wp_boost_ende' das Zuruecksetzen der Zieltemperatur
   # aus und stoppt damit die Waermepumpe. Die Laufzeit muss also lang genug sein,
   # dass sie ihr Ziel vorher erreicht.
+  # Erreicht das Warmwasser sein Ziel, ohne dass eines der beiden Kriterien
+  # greift, kuerzt der Block "WP-LAUFZEIT KUERZEN" die Restzeit.
+
   - if:
       - condition: template
         value_template: >
@@ -2662,6 +2669,38 @@ action:
               message: >
                 {{ bp_version }} Wärmepumpen-Watchdog (Sicherheits-Reset): Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da beide Wärmepumpen-Timer inaktiv sind, das Ziel aber noch auf dem PV-Boost-Wert stand{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %} (Informativ: vermutlich hat die Wärmepumpe/ViCare den regulären Reset nicht übernommen oder ein Timer ging verloren, z. B. HA-Neustart).
               entity_id: !input helper_logbook_dummy
+
+  # WP-LAUFZEIT KUERZEN (Warmwasser am Ziel)
+  #
+  # Die Zieltemperatur ist erreicht - die Waermepumpe ist damit fertig, auch wenn
+  # weder der Verdichter-Sensor noch die Einspeisung das anzeigen (bewoelkter
+  # Nachmittag). Statt hart zu beenden wird die Restlaufzeit auf wp_nachlauf_min
+  # gekuerzt: Die Waermepumpe kann den Speicher noch fertig laden, danach gibt
+  # der ablaufende Timer Prio 8 frei und setzt ueber 'wp_boost_ende' die
+  # Zieltemperatur zurueck.
+  #
+  # Die Restzeit-Pruefung verhindert, dass der Timer bei jedem Lauf neu auf
+  # wp_nachlauf_min gesetzt wird und damit endlos weiterliefe.
+  - if:
+      - condition: template
+        value_template: >
+          {% set fin = state_attr(var_timer_wp_boost, 'finishes_at') %}
+          {{ states(var_timer_wp_boost) == 'active'
+             and states(var_timer_wp_anlauf) != 'active'
+             and ww_temp >= (var_wp_ziel_temp_pv | float(99))
+             and fin is not none
+             and (as_datetime(fin) - now()).total_seconds() > (wp_nachlauf_min | float(15)) * 60 }}
+    then:
+      - action: timer.start
+        target:
+          entity_id: "{{ var_timer_wp_boost }}"
+        data:
+          duration: "00:{{ '%02d' | format(wp_nachlauf_min | int(15)) }}:00"
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: "{{ bp_version }} Wärmepumpen-Laufzeit auf {{ wp_nachlauf_min | int(15) }} Minuten gekürzt, da das Warmwasser mit {{ ww_temp | round(1) }} °C die Zieltemperatur {{ var_wp_ziel_temp_pv }} °C erreicht hat. Die Wärmepumpe lädt den Speicher noch fertig; danach steht der Überschuss wieder der Batterie zur Verfügung."
+          entity_id: !input helper_logbook_dummy
 
   # ====================================================================
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM
