@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.7.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.8.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -703,11 +703,17 @@ trigger:
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_peak_shaving | float(6500)) }}
     for: "00:00:30"
     id: export_peak_schwelle
-  - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (sofort fangen)"
+  - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (2 Min entprellt)"
+    # Deutlich traeger als der Peak-Shaving-Trigger (30 s): Ein Boost bindet die
+    # Waermepumpe fuer die volle Laufzeit und zieht dabei mehrere kW - das lohnt
+    # nur bei tragfaehigem Ueberschuss. Eine Wolkenluecke hebt die Einspeisung
+    # fuer Sekunden ueber die Schwelle, haelt aber keine zwei Minuten durch.
+    # Beim Peak-Shaving sind 30 s richtig: Dort wird nur der Ladestrom
+    # angehoben, ein Fehlstart kostet also fast nichts.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
-    for: "00:00:30"
+    for: "00:02:00"
     id: export_wp_boost_schwelle
   - alias: "Trigger: WP-Kompressor aus (10 s entprellt)"
     # Nur wirksam, wenn der optionale Kompressor-Sensor belegt ist - bei leerem
@@ -825,7 +831,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.7.0]"
+      bp_version: "[V4.8.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -2878,34 +2884,26 @@ action:
                     data:
                       option: "fall_b_max"
 
-      - alias: "PRIO 4: WP-ANLAUFSPERRE (0A)"
+      # Waehrend der Anlaufphase wird der Ladestrom WEDER gesenkt NOCH erhoeht -
+      # der Zweig haelt nur den zuletzt gesetzten Wert. Ein Absenken auf 0 A
+      # kostete Ladung, ohne der Waermepumpe zu helfen: Bei 'Load First' bedient
+      # der Wechselrichter sie ohnehin zuerst, und was ihr fehlt, nimmt sie
+      # notfalls aus der Batterie - das ist immer noch guenstiger als Netzbezug.
+      # Der Zweig bleibt aber in der Kaskade, damit Prio 6/8 nicht dazwischenregeln.
+      - alias: "PRIO 4: WP-ANLAUFSPERRE (Ladestrom halten)"
         conditions:
           - condition: template
             value_template: "{{ wp_sperre_batterie_0a_aktiv }}"
         sequence:
           - if:
               - condition: template
-                value_template: "{{ (aktueller_ladestrom | round(0)) != (null_ampere | round(0)) }}"
+                value_template: "{{ var_lade_modus != '' and aktueller_modus != 'wp_sperre' }}"
             then:
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 4 (Wärmepumpen-Anlaufsperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der anlaufenden Wärmepumpe voll zur Verfügung steht (Steuerung ausgelöst über den Wärmepumpen-Warmwasser-Boost)."
-                  entity_id: !input helper_logbook_dummy
-              - action: number.set_value
+              - action: input_select.select_option
                 target:
-                  entity_id: "{{ var_wr_max_charge }}"
+                  entity_id: "{{ var_lade_modus }}"
                 data:
-                  value: "{{ null_ampere }}"
-              - if:
-                  - condition: template
-                    value_template: "{{ var_lade_modus != '' }}"
-                then:
-                  - action: input_select.select_option
-                    target:
-                      entity_id: "{{ var_lade_modus }}"
-                    data:
-                      option: "wp_sperre"
+                  option: "wp_sperre"
 
       - alias: "PRIO 5: WP-KOMPRESSOR SPERRE (0A)"
         conditions:
