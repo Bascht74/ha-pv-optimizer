@@ -25,6 +25,8 @@ There is no CI and no test framework. Before treating any change to `PV-Ladesteu
 7. **Neighboring logic unaffected:** compare match counts for nearby, unrelated conditions before/after the edit.
 8. **Value-range check on any formula that consumes a measurement.** A reference test with self-chosen inputs only proves the formula computes — not that those inputs ever occur. Ask: *what range does this sensor actually take at this site?* and verify it against a real log/CSV. A demand calculation once shipped mathematically correct but structurally inert: the inverter caps export at the feed-in limit, so the measured excess never reaches the values the test used. Same failure class as a fix that is syntactically valid but logically dead.
 9. **Guard consistency between a timer and the branch it gates.** If a branch has entry conditions (e.g. `aktueller_soc < 99 and not heute_schon_voll`), the block that starts/refreshes its timer needs the same ones — otherwise the timer describes a state the branch can no longer enter, and its expiry logs a phantom "beendet" message.
+10. **Effect-chain check before proposing a change.** A real measurement is not automatically the cause of the observed behaviour. Trace the chain to the end: does the deviation reach the decision, and is it large enough to flip it? Two proposals were built on measurements that were correct but inconsequential — a load profile off by 33 % that could not matter at 0.85 kWh remaining demand, and a 0 A write that only ever fired while the current was already 0.
+11. **Length check on every text you added.** Comment blocks max ~6 lines, input `description:` under 300 characters. Verify after writing, not at the next cleanup commit — the tidy-up of one release survived exactly four versions before the old style crept back in with the next new block.
 
 ## Versioning scheme (follow exactly — do not deviate without being told to)
 
@@ -46,6 +48,14 @@ Bumping rules:
 Every code change ships with an English, GitHub-style release note (`Fixed` / `Added` / `Changed` / `Removed` sections, no markdown headers) as a delta since the last *published* version — not just the current turn's changes. Only real changes belong in it; no separate "Notes" section, and no line explaining something that wasn't changed.
 
 **Give the reason, not the case history.** A release note and a commit message should say *what* changed and *why the mechanism needed changing* — in general terms. No dates, no measured values, no incident reports. Write the rule that now holds instead ("a brief cloud gap can lift the export over the threshold long enough to pass a 30 s debounce"). Two to four lines per change; the evidence lives in the conversation and in memory, not in the repository.
+
+## Analysing logs, traces and CSV exports
+
+- **Check the timezone before calling a timestamp odd.** Trace filenames are UTC, the server runs UTC+2, the logbook displays UTC+3. A blockade ending at "14:30" in the log is 13:30 on the server — exactly the configured limit, not a stray value.
+- **Confirm which run a trace belongs to.** At minute 0/30 two runs fire. The `update_json` run stops inside its own block and never reaches the priority cascade (~20 steps); the controlling run is `monitoring_5min` (~99 steps, ends in the cascade). Check `last_step` and the step count first.
+- **Derive the sign convention from the data, not from the name.** Battery power is negative while charging, grid power negative while exporting, so house load is `PV + battery + grid`. Verify any reconstruction against a case where the answer is known (PV must be ~0 at night).
+- **Only evaluate charge current where it is actually the limit.** If the measured current clusters tightly around one value (P50 ≈ P99), the setpoint limits. Wide scatter means PV limits, and the sample says nothing about the setpoint.
+- **Check the version tag in the log message** before judging behaviour — an instance may still run an older release than what is on `main`.
 
 ## Working conventions
 

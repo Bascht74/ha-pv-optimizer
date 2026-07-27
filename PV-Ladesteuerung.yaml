@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.8.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.8.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -155,7 +155,7 @@ blueprint:
         regler_offset_a:
           name: "Regelabweichung des Wechselrichters (A)"
           description: >-
-            Differenz zwischen gesetztem und tatsächlich fließendem Ladestrom. Der Wechselrichter regelt systematisch etwas darunter ein (typisch 2 A ≈ 100 W Eigenverbrauch). Der Blueprint schlägt diesen Wert auf, damit real ankommt, was berechnet wurde — beim Zellausgleich, beim Peak-Shaving und als Mindest-Zuschlag in der normalen Ladeberechnung. Messen: Ladestrom mit dem Sollwert vergleichen, wenn die Batterie über längere Zeit am Limit lädt.
+            Der Wechselrichter regelt systematisch etwas unter dem gesetzten Sollwert ein (typisch 2 A). Der Blueprint schlägt diesen Wert auf, damit real ankommt, was berechnet wurde. Ermitteln: Ladestrom mit dem Sollwert vergleichen, während die Batterie am Limit lädt.
           default: 2.0
           selector: {"number": {"min": 0, "max": 10, "step": 0.1, "unit_of_measurement": "A"}}
         notfall_ampere:
@@ -705,11 +705,9 @@ trigger:
     id: export_peak_schwelle
   - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (2 Min entprellt)"
     # Deutlich traeger als der Peak-Shaving-Trigger (30 s): Ein Boost bindet die
-    # Waermepumpe fuer die volle Laufzeit und zieht dabei mehrere kW - das lohnt
-    # nur bei tragfaehigem Ueberschuss. Eine Wolkenluecke hebt die Einspeisung
-    # fuer Sekunden ueber die Schwelle, haelt aber keine zwei Minuten durch.
-    # Beim Peak-Shaving sind 30 s richtig: Dort wird nur der Ladestrom
-    # angehoben, ein Fehlstart kostet also fast nichts.
+    # Waermepumpe fuer die volle Laufzeit - das lohnt nur bei tragfaehigem
+    # Ueberschuss, den eine kurze Wolkenluecke nicht liefert. Beim Peak-Shaving
+    # reichen 30 s: Dort wird nur der Ladestrom angehoben.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
@@ -831,7 +829,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.8.0]"
+      bp_version: "[V4.8.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -2701,15 +2699,10 @@ action:
 
   # WP-LAUFZEIT KUERZEN (Warmwasser am Ziel)
   #
-  # Die Zieltemperatur ist erreicht - die Waermepumpe ist damit fertig, auch wenn
-  # weder der Verdichter-Sensor noch die Einspeisung das anzeigen (bewoelkter
-  # Nachmittag). Statt hart zu beenden wird die Restlaufzeit auf wp_nachlauf_min
-  # gekuerzt: Die Waermepumpe kann den Speicher noch fertig laden, danach gibt
-  # der ablaufende Timer Prio 8 frei und setzt ueber 'wp_boost_ende' die
-  # Zieltemperatur zurueck.
-  #
-  # Die Restzeit-Pruefung verhindert, dass der Timer bei jedem Lauf neu auf
-  # wp_nachlauf_min gesetzt wird und damit endlos weiterliefe.
+  # Greift, wenn weder Verdichter-Sensor noch Einspeisung das Ende anzeigen
+  # (bewoelkter Nachmittag). Kein hartes Ende, damit der Speicher fertig laedt;
+  # der ablaufende Timer gibt danach Prio 8 frei und setzt das Ziel zurueck.
+  # Die Restzeit-Pruefung verhindert, dass der Timer endlos neu gesetzt wird.
   - if:
       - condition: template
         value_template: >
@@ -2884,12 +2877,10 @@ action:
                     data:
                       option: "fall_b_max"
 
-      # Waehrend der Anlaufphase wird der Ladestrom WEDER gesenkt NOCH erhoeht -
-      # der Zweig haelt nur den zuletzt gesetzten Wert. Ein Absenken auf 0 A
-      # kostete Ladung, ohne der Waermepumpe zu helfen: Bei 'Load First' bedient
-      # der Wechselrichter sie ohnehin zuerst, und was ihr fehlt, nimmt sie
-      # notfalls aus der Batterie - das ist immer noch guenstiger als Netzbezug.
-      # Der Zweig bleibt aber in der Kaskade, damit Prio 6/8 nicht dazwischenregeln.
+      # Der Zweig haelt nur den zuletzt gesetzten Wert und bleibt in der Kaskade,
+      # damit Prio 6/8 nicht dazwischenregeln. Ein Absenken auf 0 A braucht es
+      # nicht: Bei 'Load First' bedient der Wechselrichter die Waermepumpe
+      # ohnehin zuerst.
       - alias: "PRIO 4: WP-ANLAUFSPERRE (Ladestrom halten)"
         conditions:
           - condition: template
