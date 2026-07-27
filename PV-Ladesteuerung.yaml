@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.5.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.6.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -819,7 +819,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.5.0]"
+      bp_version: "[V4.6.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -838,6 +838,11 @@ action:
       # sobald das Warmwasser seine Zieltemperatur erreicht hat. Kein sofortiges
       # Ende, damit die Waermepumpe den Speicher noch fertig laden kann.
       wp_nachlauf_min: 15
+      # Mindest-Aufschlag (A) auf den berechneten Ladestrom. Der Wechselrichter
+      # regelt systematisch rund 2 A unter dem gesetzten Sollwert ein - ein rein
+      # prozentualer Sicherheitsfaktor gleicht das bei kleinen Stroemen nicht aus
+      # (bei 8 A fehlen sonst 30 %). Es gilt der groessere der beiden Zuschlaege.
+      mindest_aufschlag_a: 2.0
       var_battery_total_charge: !input battery_total_charge
       # Bewusst schon hier (nicht erst weiter unten): Der DEYE-RETRY direkt
       # darunter prueft dieses Register mit.
@@ -1418,12 +1423,13 @@ action:
       # deckt) × Prognose-Unsicherheit × manuellem Sicherheitsfaktor. Ohne
       # Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin meist
       # Fall B, weil ohne Prognose kein Rest-Überschuss ausgewiesen wird.
+      amp_basis_13: >
+        {{ ((sim_ampere_min | int(0)) * (prognose_unsicherheit | float(1.0)))
+           if (sim_ampere_min | int(0)) > 0
+           else (noetige_leistung_roh / nominale_spannung) }}
       amp_roh_13: >
-        {% if (sim_ampere_min | int(0)) > 0 %}
-          {{ (sim_ampere_min | int(0)) * (prognose_unsicherheit | float(1.0)) * faktor_ziel_puffer }}
-        {% else %}
-          {{ (noetige_leistung_roh * faktor_ziel_puffer) / nominale_spannung }}
-        {% endif %}
+        {{ [ (amp_basis_13 | float(0)) * faktor_ziel_puffer,
+             (amp_basis_13 | float(0)) + (mindest_aufschlag_a | float(2.0)) ] | max }}
       # Prio 8 Normalfall (×1,3), gedeckelt durch min/max
       ziel_p5_raw: "{{ [[amp_roh_13 | round(0), min_ampere] | max, max_ampere] | min }}"
       # Brutto-PV-Ueberschuss Resttag = Summe der Slots mit PV-Ueberschuss (nur
@@ -3046,7 +3052,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 8 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
-                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h × Sicherheitsfaktor {{ faktor_ziel_puffer }} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
+                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (mindest_aufschlag_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Mindest-Aufschlag {{ mindest_aufschlag_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (mindest_aufschlag_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Mindest-Aufschlag {{ mindest_aufschlag_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
