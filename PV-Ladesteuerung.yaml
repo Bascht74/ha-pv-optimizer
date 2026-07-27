@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.6.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.7.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -149,9 +149,15 @@ blueprint:
         min_ampere:
           name: "Minimaler Ladestrom (A)"
           description: >-
-            Der kleinste Strom, den der Blueprint setzt, wenn er die Ladung stark bremst (z. B. während des Top-Balancings). Nicht 0 wählen: Ein kleiner Reststrom hält die Zellspannung oben, damit der Balancer arbeiten kann.
+            Der kleinste Strom, der beim starken Bremsen (z. B. Zellausgleich) an der Batterie ankommen soll. Nicht 0 wählen: Ein kleiner Reststrom hält die Zellspannung oben, damit der Balancer arbeiten kann. Gesetzt wird dieser Wert plus der Regelabweichung, damit er real auch fließt.
           default: 7
           selector: {"number": {"min": 2, "max": 20, "step": 1, "unit_of_measurement": "A"}}
+        regler_offset_a:
+          name: "Regelabweichung des Wechselrichters (A)"
+          description: >-
+            Differenz zwischen gesetztem und tatsächlich fließendem Ladestrom. Der Wechselrichter regelt systematisch etwas darunter ein (typisch 2 A ≈ 100 W Eigenverbrauch). Der Blueprint schlägt diesen Wert auf, damit real ankommt, was berechnet wurde — beim Zellausgleich, beim Peak-Shaving und als Mindest-Zuschlag in der normalen Ladeberechnung. Messen: Ladestrom mit dem Sollwert vergleichen, wenn die Batterie über längere Zeit am Limit lädt.
+          default: 2.0
+          selector: {"number": {"min": 0, "max": 10, "step": 0.1, "unit_of_measurement": "A"}}
         notfall_ampere:
           name: "Max. Ladestrom bei BMS-Ausfall (A) — Obergrenze"
           description: >-
@@ -819,7 +825,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.6.1]"
+      bp_version: "[V4.7.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -838,11 +844,11 @@ action:
       # sobald das Warmwasser seine Zieltemperatur erreicht hat. Kein sofortiges
       # Ende, damit die Waermepumpe den Speicher noch fertig laden kann.
       wp_nachlauf_min: 15
-      # Mindest-Aufschlag (A) auf den berechneten Ladestrom. Der Wechselrichter
-      # regelt systematisch rund 2 A unter dem gesetzten Sollwert ein - ein rein
-      # prozentualer Sicherheitsfaktor gleicht das bei kleinen Stroemen nicht aus
-      # (bei 8 A fehlen sonst 30 %). Es gilt der groessere der beiden Zuschlaege.
-      mindest_aufschlag_a: 2.0
+      # Ab diesem Ladestand senkt Prio 8 den Ladestrom nicht mehr ab, sie hebt ihn
+      # nur noch an. Der Restbedarf ist dann so klein, dass eine Absenkung kaum
+      # noch Peak-Shaving-Puffer schafft, das Vollwerden aber sichtbar verzoegert.
+      # Ab 97 % (Prio-8-Bedingung) regelt sie ohnehin gar nicht mehr.
+      kein_absenken_ab_soc: 90
       var_battery_total_charge: !input battery_total_charge
       # Bewusst schon hier (nicht erst weiter unten): Der DEYE-RETRY direkt
       # darunter prueft dieses Register mit.
@@ -1068,6 +1074,7 @@ action:
       max_ampere: !input max_ampere
       null_ampere: 0
       min_ampere: !input min_ampere
+      regler_offset_a: !input regler_offset_a
       notfall_ampere: !input notfall_ampere
       peak_ampere: !input peak_ampere
       nominale_spannung: !input nominale_spannung
@@ -1429,7 +1436,7 @@ action:
            else (noetige_leistung_roh / nominale_spannung) }}
       amp_roh_13: >
         {{ [ (amp_basis_13 | float(0)) * faktor_ziel_puffer,
-             (amp_basis_13 | float(0)) + (mindest_aufschlag_a | float(2.0)) ] | max }}
+             (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) ] | max }}
       # Prio 8 Normalfall (×1,3), gedeckelt durch min/max
       # Immer AUFrunden: Der Wechselrichter regelt ohnehin unter dem Sollwert ein,
       # ein Abrunden wuerde die Abweichung noch vergroessern.
@@ -1458,7 +1465,9 @@ action:
 
       temp_log_addon: "{{ (' (Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
-      target_p1: "{{ [min_ampere, temperatur_limit_ampere] | min }}"
+      # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
+      # deshalb hier die Regelabweichung aufschlagen.
+      target_p1: "{{ [(min_ampere | float(8)) + (regler_offset_a | float(2.0)), temperatur_limit_ampere] | min | round(0, 'ceil') }}"
       target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # PEAK-SHAVING-TREPPE
       #
@@ -1474,7 +1483,13 @@ action:
       # KEIN Absenken: Rueckregeln wuerde bei jeder Wolke Schreibzugriffe
       # ausloesen. Faellt die PV ab, laeuft der Hold-Timer aus und Prio 8
       # uebernimmt wieder.
-      target_p3: "{{ [ (aktueller_ladestrom | float(0)) + (peak_ampere | float(20)), max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0, 'ceil') }}"
+      # Der Offset wirkt nur beim EINSTIEG: Steigt der Strom von einem kleinen
+      # Wert, fehlen sonst 2 A an der Batterie. Bei den Folgestufen steckt er
+      # bereits im aktuellen Sollwert - dort waere ein erneuter Aufschlag zu viel.
+      target_p3: >
+        {{ [ [ (aktueller_ladestrom | float(0)) + (peak_ampere | float(20)),
+               (peak_ampere | float(20)) + (regler_offset_a | float(2.0)) ] | max,
+             max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0, 'ceil') }}
       # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
 
@@ -3039,12 +3054,14 @@ action:
                   # Modus-basierter Bypass: Wenn ein ANDERER Block zuletzt gesetzt hat
                   # (Modus != 'normal'), darf Prio 8 einmalig sofort durchregeln.
                   fremder_modus: "{{ aktueller_modus not in ['normal'] }}"
+                  # Absenken nur unterhalb von kein_absenken_ab_soc - darueber
+                  # bleibt der zuletzt gesetzte Strom stehen. Anheben immer.
                   update_freigegeben: >
                     {{ fremder_modus or
                        (diff >= 10) or
                        (diff >= 5 and min_since >= 60) or
-                       (diff <= -30) or
-                       (diff <= -20 and min_since >= 60) }}
+                       (aktueller_soc < (kein_absenken_ab_soc | float(90)) and
+                        ((diff <= -30) or (diff <= -20 and min_since >= 60))) }}
               - if:
                   - condition: template
                     value_template: "{{ update_freigegeben }}"
@@ -3054,7 +3071,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 8 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
-                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (mindest_aufschlag_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Mindest-Aufschlag {{ mindest_aufschlag_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (mindest_aufschlag_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Mindest-Aufschlag {{ mindest_aufschlag_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
+                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Regelabweichung {{ regler_offset_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Regelabweichung {{ regler_offset_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
