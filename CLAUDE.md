@@ -23,8 +23,8 @@ There is no CI and no test framework. Before treating any change to `PV-Ladesteu
 5. **Version consistency.** The version tag appears in exactly two places: `blueprint.name` (line 2) and the `bp_version` variable near the top of `action:`. Both must match. Log messages interpolate `{{ bp_version }}`, so they never need separate updates.
 6. **Position/order:** a variable must be defined before its first use; confirm new blocks sit where intended.
 7. **Neighboring logic unaffected:** compare match counts for nearby, unrelated conditions before/after the edit.
-8. **Value-range check on any formula that consumes a measurement.** A reference test with self-chosen inputs only proves the formula computes — not that those inputs ever occur. Ask: *what range does this sensor actually take at this site?* and verify it against a real log/CSV. V4.0.0 shipped a demand calculation that was mathematically fine but structurally inert, because the inverter caps export at the feed-in limit and the measured excess is therefore always ~110 W — the test inputs (9000 W, 10500 W) could never occur. This is the same class of failure as the V3.1.0 anti-windup fix.
-9. **Guard consistency between a timer and the branch it gates.** If a branch has entry conditions (e.g. `aktueller_soc < 99 and not heute_schon_voll`), the block that starts/refreshes its timer needs the same ones — otherwise the timer describes a state the branch can no longer enter, and its expiry logs a phantom "beendet" message. Fixed in V4.2.1 after two such messages appeared in the 21.07 log.
+8. **Value-range check on any formula that consumes a measurement.** A reference test with self-chosen inputs only proves the formula computes — not that those inputs ever occur. Ask: *what range does this sensor actually take at this site?* and verify it against a real log/CSV. A demand calculation once shipped mathematically correct but structurally inert: the inverter caps export at the feed-in limit, so the measured excess never reaches the values the test used. Same failure class as a fix that is syntactically valid but logically dead.
+9. **Guard consistency between a timer and the branch it gates.** If a branch has entry conditions (e.g. `aktueller_soc < 99 and not heute_schon_voll`), the block that starts/refreshes its timer needs the same ones — otherwise the timer describes a state the branch can no longer enter, and its expiry logs a phantom "beendet" message.
 
 ## Versioning scheme (follow exactly — do not deviate without being told to)
 
@@ -45,6 +45,8 @@ Bumping rules:
 
 Every code change ships with an English, GitHub-style release note (`Fixed` / `Added` / `Changed` / `Removed` sections, no markdown headers) as a delta since the last *published* version — not just the current turn's changes. Only real changes belong in it; no separate "Notes" section, and no line explaining something that wasn't changed.
 
+**Give the reason, not the case history.** A release note and a commit message should say *what* changed and *why the mechanism needed changing* — in general terms. No dates, no measured values, no incident reports. Write the rule that now holds instead ("a brief cloud gap can lift the export over the threshold long enough to pass a 30 s debounce"). Two to four lines per change; the evidence lives in the conversation and in memory, not in the repository.
+
 ## Working conventions
 
 - Prefer targeted edits over rewriting large blocks from memory — the file is large enough that blind rewrites risk silent corruption elsewhere.
@@ -57,7 +59,7 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 
 **Comments explain why, not what.** The code already shows what happens; a comment earns its place by naming a constraint, a trade-off, or a trap that isn't visible from the code itself.
 
-- **No history in the code.** No dates, no incident reports, no measured values from a single event ("belegt 26.07.2026: Bedarf 3,1 > Verfügbar 3,0", "Fehlalarm um 14:38:17"). That belongs in the commit message and the release note. The code states what holds *today*; git states how it got there.
+- **No history anywhere in the repository.** No dates, no incident reports, no measured values from a single event ("belegt am …: Bedarf 3,1 > Verfügbar 3,0", "Fehlalarm um 14:38:17") — not in comments, and not in commit messages or release notes either. The code states what holds *today*, the commit states why the mechanism needed changing; the case that revealed it stays in the conversation.
 - **A few lines, not a paragraph.** If the comment is longer than the code it explains, it's doing the wrong job. Prefer one sentence on the non-obvious reason over a full derivation.
 - **Version markers only where they carry meaning** (e.g. an input whose semantics changed and instances must be reconfigured). Not as a running changelog.
 
@@ -67,7 +69,7 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 
 ## Log message convention
 
-Logbook messages follow one shape (established 20.07.2026):
+Logbook messages follow one shape:
 
 `{{ bp_version }} <Zweig-Name>: <Handlung>. <Entscheidung + kompakter Grund>. (<Details>)`
 
