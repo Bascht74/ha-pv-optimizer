@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.1.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.1.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.1.0]"
+      bp_version: "[V5.1.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1043,6 +1043,7 @@ action:
       var_solcast_heute: !input solcast_heute_sensor
       var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
+      var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
       var_wr_grid_charge_switch: !input wr_grid_charge_switch
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
@@ -1117,82 +1118,6 @@ action:
       puffer_kwh: !input puffer_kwh
       var_zeit_blockade: !input zeit_blockade_ende
 
-  # ====================================================================
-  # PFLICHTFELD-PRUEFUNG
-  # Nur Entitaets-Felder ohne Leer-Behandlung im Code: dort wird states('')
-  # zu 'unknown' und per float()-Default still zu einem Ersatzwert - die
-  # Regelung liefe mit erfundenen Zahlen weiter. Felder mit eigenem Fallback
-  # bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall (davor).
-  # ====================================================================
-  - variables:
-      pflichtfelder_fehlend: >
-        {% set pflicht = [
-             ('Ladezustand SOC (%)', var_battery_soc),
-             ('Batterie-Leistung (W)', var_battery_power),
-             ('Zähler: insgesamt entladen (kWh)', var_battery_total_discharge),
-             ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
-             ('Netz-Leistung (W)', var_grid_export),
-             ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
-             ('PV-Leistung geglättet (W)', var_pv_power),
-             ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
-             ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
-             ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
-             ('Solcast: verbleibende Leistung heute (kWh)', var_solcast_rest_sensor),
-             ('Solcast: aktuelle Leistung (W)', var_pv_forecast),
-             ('Solcast: Prognose nächste Stunde (kWh)', var_solcast_next_hour),
-             ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
-             ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
-             ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
-             ('Helfer: Winter-Zwangsladung aktiv', var_zwangsladung_aktiv),
-             ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
-             ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
-             ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
-             ('Timer: Peak-Shaving Hold', var_timer_peak),
-             ('Timer: Zwangsladung Cooldown', var_timer_cooldown),
-             ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
-             ('Timer: WP-Laufzeit', var_timer_wp_boost),
-             ('BMS 1: höchste Zellspannung (V)', var_vmax1),
-             ('BMS 2: höchste Zellspannung (V)', var_vmax2),
-             ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
-             ('BMS 2: höchste Zelltemperatur', var_bms2_temp_max),
-             ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
-             ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
-             ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
-             ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
-             ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
-             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6)
-           ] %}
-        {% set ns = namespace(fehlt=[]) %}
-        {% for bezeichnung, wert in pflicht %}
-          {% if (wert | default('', true) | string | trim) in ['', 'none', 'None'] %}
-            {% set ns.fehlt = ns.fehlt + [bezeichnung] %}
-          {% endif %}
-        {% endfor %}
-        {{ ns.fehlt | to_json }}
-
-  - variables:
-      pflicht_liste: "{{ pflichtfelder_fehlend if pflichtfelder_fehlend is iterable and pflichtfelder_fehlend is not string else (pflichtfelder_fehlend | from_json) }}"
-
-  - if:
-      - condition: template
-        value_template: "{{ pflicht_liste | length > 0 }}"
-    then:
-      # Wie bei der Deye-Warnung: hoechstens alle 30 Minuten melden, sonst
-      # schreibt jeder 5-Minuten-Lauf denselben Eintrag ins Logbuch.
-      - if:
-          - condition: template
-            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
-        then:
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: >-
-                {{ bp_version }} Start abgebrochen: {{ pflicht_liste | length }} Pflichtfeld{{ 'er sind' if pflicht_liste | length > 1 else ' ist' }} nicht zugewiesen
-                ({{ pflicht_liste[:8] | join(', ') }}{% if pflicht_liste | length > 8 %} und {{ pflicht_liste | length - 8 }} weitere{% endif %}).
-                Ohne diese Entitäten würde mit Ersatzwerten geregelt. Bitte im Blueprint zuweisen.
-                (Informativ: Meldung erscheint höchstens alle 30 Minuten).
-              entity_id: !input helper_logbook_dummy
-      - stop: "Pflichtfeld nicht zugewiesen - Regelung ausgesetzt."
 
   - variables:
       grid_export: "{{ (states(var_grid_export) | float(0)) * -1 }}"
@@ -2994,6 +2919,83 @@ action:
           name: "PV Optimizer"
           message: "{{ bp_version }} Wärmepumpen-Laufzeit auf {{ wp_nachlauf_min | int(15) }} Minuten gekürzt, da das Warmwasser mit {{ ww_temp | round(1) }} °C die Zieltemperatur {{ var_wp_ziel_temp_pv }} °C erreicht hat. Die Wärmepumpe lädt den Speicher noch fertig; danach steht der Überschuss wieder der Batterie zur Verfügung."
           entity_id: !input helper_logbook_dummy
+
+  # ====================================================================
+  # PFLICHTFELD-PRUEFUNG
+  # Nur Entitaets-Felder ohne Leer-Behandlung im Code: dort wird states('')
+  # zu 'unknown' und per float()-Default still zu einem Ersatzwert - die
+  # Regelung liefe mit erfundenen Zahlen weiter. Felder mit eigenem Fallback
+  # bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall (davor).
+  # ====================================================================
+  - variables:
+      pflichtfelder_fehlend: >
+        {% set pflicht = [
+             ('Ladezustand SOC (%)', var_battery_soc),
+             ('Batterie-Leistung (W)', var_battery_power),
+             ('Zähler: insgesamt entladen (kWh)', var_battery_total_discharge),
+             ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
+             ('Netz-Leistung (W)', var_grid_export),
+             ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
+             ('PV-Leistung geglättet (W)', var_pv_power),
+             ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
+             ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
+             ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
+             ('Solcast: verbleibende Leistung heute (kWh)', var_solcast_rest_sensor),
+             ('Solcast: aktuelle Leistung (W)', var_pv_forecast),
+             ('Solcast: Prognose nächste Stunde (kWh)', var_solcast_next_hour),
+             ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
+             ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
+             ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
+             ('Helfer: Winter-Zwangsladung aktiv', var_zwangsladung_aktiv),
+             ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
+             ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
+             ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
+             ('Timer: Peak-Shaving Hold', var_timer_peak),
+             ('Timer: Zwangsladung Cooldown', var_timer_cooldown),
+             ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
+             ('Timer: WP-Laufzeit', var_timer_wp_boost),
+             ('BMS 1: höchste Zellspannung (V)', var_vmax1),
+             ('BMS 2: höchste Zellspannung (V)', var_vmax2),
+             ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
+             ('BMS 2: höchste Zelltemperatur', var_bms2_temp_max),
+             ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
+             ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
+             ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
+             ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
+             ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
+             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6)
+           ] %}
+        {% set ns = namespace(fehlt=[]) %}
+        {% for bezeichnung, wert in pflicht %}
+          {% if (wert | default('', true) | string | trim) in ['', 'none', 'None'] %}
+            {% set ns.fehlt = ns.fehlt + [bezeichnung] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.fehlt | to_json }}
+
+  - variables:
+      pflicht_liste: "{{ pflichtfelder_fehlend if pflichtfelder_fehlend is iterable and pflichtfelder_fehlend is not string else (pflichtfelder_fehlend | from_json) }}"
+
+  - if:
+      - condition: template
+        value_template: "{{ pflicht_liste | length > 0 }}"
+    then:
+      # Wie bei der Deye-Warnung: hoechstens alle 30 Minuten melden, sonst
+      # schreibt jeder 5-Minuten-Lauf denselben Eintrag ins Logbuch.
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >-
+                {{ bp_version }} Start abgebrochen: {{ pflicht_liste | length }} Pflichtfeld{{ 'er sind' if pflicht_liste | length > 1 else ' ist' }} nicht zugewiesen
+                ({{ pflicht_liste[:8] | join(', ') }}{% if pflicht_liste | length > 8 %} und {{ pflicht_liste | length - 8 }} weitere{% endif %}).
+                Ohne diese Entitäten würde mit Ersatzwerten geregelt. Bitte im Blueprint zuweisen.
+                (Informativ: Meldung erscheint höchstens alle 30 Minuten).
+              entity_id: !input helper_logbook_dummy
+      - stop: "Pflichtfeld nicht zugewiesen - Regelung ausgesetzt."
 
   # ====================================================================
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM
