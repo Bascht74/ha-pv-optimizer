@@ -14,7 +14,9 @@ A single Home Assistant Blueprint (`PV-Ladesteuerung.yaml`) for PV, battery, and
 
 ## Validating changes
 
-There is no CI and no test framework. Before treating any change to `PV-Ladesteuerung.yaml` as done, check it against this list:
+There is no CI and no test framework. Before treating any change to `PV-Ladesteuerung.yaml` as done, check it against this list.
+
+**Write the release note first, then run the checks** (format under "Release notes" — note it is the one English artifact in a repo whose comments and log texts are German). Drafting it up front forces every change to be named before it is validated; a change that is hard to phrase is usually one that hasn't been thought through.
 
 1. **YAML must parse.**
 2. **Duplicate-key check with a custom loader.** `yaml.SafeLoader` silently overwrites duplicate mapping keys instead of raising — a plain `yaml.safe_load` will NOT catch this class of bug. Use a loader that raises on duplicate keys, and register a constructor for the `!input` tag first (otherwise it raises a false positive on every `!input` usage).
@@ -26,7 +28,8 @@ There is no CI and no test framework. Before treating any change to `PV-Ladesteu
 8. **Value-range check on any formula that consumes a measurement.** A reference test with self-chosen inputs only proves the formula computes — not that those inputs ever occur. Ask: *what range does this sensor actually take at this site?* and verify it against a real log/CSV. A demand calculation once shipped mathematically correct but structurally inert: the inverter caps export at the feed-in limit, so the measured excess never reaches the values the test used. Same failure class as a fix that is syntactically valid but logically dead.
 9. **Guard consistency between a timer and the branch it gates.** If a branch has entry conditions (e.g. `aktueller_soc < 99 and not heute_schon_voll`), the block that starts/refreshes its timer needs the same ones — otherwise the timer describes a state the branch can no longer enter, and its expiry logs a phantom "beendet" message.
 10. **Effect-chain check before proposing a change.** A real measurement is not automatically the cause of the observed behaviour. Trace the chain to the end: does the deviation reach the decision, and is it large enough to flip it? Two proposals were built on measurements that were correct but inconsequential — a load profile off by 33 % that could not matter at 0.85 kWh remaining demand, and a 0 A write that only ever fired while the current was already 0.
-11. **Length check on every text you added.** Comment blocks max ~6 lines, input `description:` under 300 characters. Verify after writing, not at the next cleanup commit — the tidy-up of one release survived exactly four versions before the old style crept back in with the next new block.
+11. **Prove the new mechanism actually fires.** A guard that never triggers is not a safety net, it is dead code with a comment. Enumerate the parameter range and count how often the new branch adds a case the existing logic didn't already cover — if the answer is zero across the realistic range, say so and either drop it or declare it explicitly as a guard against a future parameter change. A claim like "this closes a gap" needs the count that shows the gap existed.
+12. **Length check on every text you added.** Comment blocks max ~6 lines, input `description:` under 300 characters. Verify after writing, not at the next cleanup commit — the tidy-up of one release survived exactly four versions before the old style crept back in with the next new block.
 
 ## Versioning scheme (follow exactly — do not deviate without being told to)
 
@@ -62,8 +65,9 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 - Prefer targeted edits over rewriting large blocks from memory — the file is large enough that blind rewrites risk silent corruption elsewhere.
 - Check every runtime-behavior change against real data (a Home Assistant trace, logbook export, or CSV) where possible, not just syntax validity — this project has a documented case of a syntactically valid fix that was logically inert.
 - `git diff` is the source of truth for what changed, not a prose description.
-- **Ask before creating a git commit**, even when the underlying code edit was already approved. Ask again, separately, before pushing.
+- **Ask before creating a git commit**, even when the underlying code edit was already approved. Approving a commit approves the push with it — push to `origin/main` straight after, without asking again and without announcing it as a separate step. Only skip the push when explicitly told to.
 - Do not add new blueprint `input:` fields without asking first — instances are hand-configured per site, and a new field means manual reassignment on each one.
+- **Every entity input carries `default: ""`**, including the ones that are mandatory in practice. Omitting `default` makes Home Assistant render the field differently and breaks instance loading outright instead of reporting what is missing. Mandatory fields are enforced at runtime by the startup check, which names them and stops the run.
 
 ## Code comments and input text
 

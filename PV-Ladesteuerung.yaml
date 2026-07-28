@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.9.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.0.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -8,7 +8,7 @@ blueprint:
 
   input:
     sec_battery_sensors:
-      name: "1) Batterie & BMS (Pflicht)"
+      name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
       collapsed: true
@@ -74,7 +74,7 @@ blueprint:
           default: 350
           selector: {"number": {"min": 50, "max": 350, "step": 1, "unit_of_measurement": "A"}}
     sec_battery_control:
-      name: "2) Wechselrichter-Steuerung (Pflicht)"
+      name: "2 – Wechselrichter-Steuerung (Pflicht)"
       description: >-
         Die Stellglieder, über die der Blueprint tatsächlich eingreift. Das sind schreibbare Entitäten (number/switch), keine Sensoren.
       collapsed: true
@@ -172,7 +172,7 @@ blueprint:
           default: 50
           selector: {"number": {"min": 10, "max": 140, "step": 1, "unit_of_measurement": "A"}}
     sec_net_pv:
-      name: "3) Netz & PV-Leistung (Pflicht)"
+      name: "3 – Netz & PV-Leistung (Pflicht)"
       description: >-
         Messwerte für Netzbezug/-einspeisung und die aktuelle PV-Erzeugung.
       collapsed: true
@@ -196,6 +196,12 @@ blueprint:
             Sensor mit der aktuellen PV-Erzeugung. Am besten einen geglätteten Wert nehmen (z. B. gleitender Mittelwert über 5 Minuten) — sonst reagiert die Steuerung zu nervös auf einzelne Wolken.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "power"}}
+        pv_erzeugung_heute_sensor:
+          name: "PV-Erzeugung heute (kWh)"
+          description: >-
+            Tageszähler der tatsächlich erzeugten PV-Energie in kWh. Der Blueprint vergleicht ihn ab der Mittagszeit mit der Prognose für den bereits abgelaufenen Teil des Tages und rechnet die Restprognose entsprechend herunter, wenn die Anlage systematisch unter der Vorhersage bleibt.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         hausverbrauch_utility_sensor:
           name: "Hausverbrauch halbstündlich (kWh)"
           description: >-
@@ -203,7 +209,7 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_solcast:
-      name: "4) Solcast-Prognose (Pflicht)"
+      name: "4 – Solcast-Prognose (Pflicht)"
       description: >-
         Die PV-Vorhersage. Sie ist die Grundlage für die vorausschauende Ladeplanung — ohne sie kann der Blueprint nicht entscheiden, ob er mit dem Laden warten kann.
       collapsed: true
@@ -233,7 +239,7 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_helpers:
-      name: "5) Helfer-Entitäten (Pflicht)"
+      name: "5 – Helfer-Entitäten (Pflicht)"
       description: >-
         Diese Helfer speichern den Zustand zwischen zwei Läufen. Sie müssen einmalig angelegt werden (siehe mitgeliefertes Package). Der Blueprint schreibt hier hinein — es sind keine Sensoren.
       collapsed: true
@@ -349,7 +355,7 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_peak_shaving:
-      name: "6) Peak-Shaving (Netz-Überschuss puffern)"
+      name: "6 – Peak-Shaving (Netz-Überschuss puffern)"
       description: >-
         Wenn viel ins Netz eingespeist wird, kann die Batterie den Überschuss zwischenpuffern, statt ihn zu verschenken. Praktisch bei Einspeise-Begrenzung oder geringer Einspeisevergütung.
       collapsed: true
@@ -375,7 +381,7 @@ blueprint:
           default: "01:00:00"
           selector: {"time": {}}
     sec_waermepumpe:
-      name: "7) Wärmepumpe / PV-Boost (Optional)"
+      name: "7 – Wärmepumpe / PV-Boost (Optional)"
       description: >-
         Optional: Bei PV-Überschuss kann die Wärmepumpe den Warmwasserspeicher vorrangig aufheizen. Die Batterie tritt dafür zurück. Wer keine Wärmepumpe hat, lässt den Schalter unten einfach aus.
       collapsed: true
@@ -465,7 +471,7 @@ blueprint:
           default: "01:00:00"
           selector: {"time": {}}
     sec_float_voltage:
-      name: "8) Zellausgleich / Top-Balancing (Feintuning)"
+      name: "8 – Zellausgleich / Top-Balancing (Feintuning)"
       description: >-
         Damit die Zellen im Gleichgewicht bleiben, muss die Batterie regelmäßig voll werden. Diese Werte steuern, wann und wie lange der Blueprint dafür sorgt.
       collapsed: true
@@ -509,7 +515,7 @@ blueprint:
           default: 30
           selector: {"number": {"min": 10, "max": 60, "step": 1, "unit_of_measurement": "%"}}
     sec_temperature:
-      name: "9) Temperatur-Limits & C-Raten (Feintuning)"
+      name: "9 – Temperatur-Limits & C-Raten (Feintuning)"
       description: >-
         Lithium-Zellen dürfen bei Kälte nur langsam (oder gar nicht) geladen werden. Der Blueprint begrenzt den Ladestrom deshalb temperaturabhängig. Die Voreinstellungen sind konservativ und passen für die meisten LiFePO4-Systeme.
       collapsed: true
@@ -599,7 +605,7 @@ blueprint:
           default: 0.0
           selector: {"number": {"min": 0.0, "max": 0.5, "step": 0.01, "mode": "slider"}}
     sec_tuning:
-      name: "10) Lade-Strategie & Zeitsteuerung (Feintuning)"
+      name: "10 – Lade-Strategie & Zeitsteuerung (Feintuning)"
       description: >-
         Hier stellst du ein, wie vorausschauend der Blueprint plant. Die Voreinstellungen sind ein guter Startpunkt — meist muss hier nichts angepasst werden.
       collapsed: true
@@ -611,13 +617,13 @@ blueprint:
             zuverlässiger voll, später = mehr Platz für die Mittagsspitze.
           default: "13:30:00"
           selector: {"time": {}}
-        faktor_ziel_puffer:
-          name: "Sicherheitsfaktor für Ungeplantes"
+        ladevorlauf_stunden:
+          name: "Ladevorlauf"
           description: >-
-            Sicherheitsaufschlag auf den berechneten Ladestrom (typisch 1,1–1,2). Deckt ab, was die Prognose nicht wissen kann — plötzliche Gewitter,
-            ungeplante Verbraucher. Höher = Batterie wird zügiger voll, aber weniger Überschuss bleibt für Peak-Shaving.
-          default: 1.2
-          selector: {"number": {"min": 1.0, "max": 2.0, "step": 0.1}}
+            Wie lange vor dem letzten PV-Überschuss die Batterie voll sein soll. Der Ladestrom wird so gewählt, dass dieser Vorlauf bleibt — als Reserve
+            für Gewitter oder ungeplante Verbraucher und als Zeitfenster für den Zellausgleich. Höher = zügiger voll, aber weniger Überschuss für Peak-Shaving.
+          default: "01:30:00"
+          selector: {"time": {}}
         faktor_fallback:
           name: "Ladefaktor Eskalation"
           description: >-
@@ -645,11 +651,11 @@ blueprint:
           default: 1.0
           selector: {"number": {"min": 0.1, "max": 5.0, "step": 0.1, "unit_of_measurement": "kWh"}}
         min_reststunden:
-          name: "Eskalation: Mindest-Restladezeit (h)"
+          name: "Eskalation: Mindest-Restladezeit"
           description: >-
-            Mindest-Restladezeit in Stunden. Ist weniger Sonnenzeit übrig als hier eingestellt, verzichtet der Blueprint auf die Eskalation — der volle Ladestrom würde in der kurzen Zeit ohnehin nichts mehr bringen.
-          default: 1.0
-          selector: {"number": {"min": 0.0, "max": 4.0, "step": 0.25, "unit_of_measurement": "h"}}
+            Ist weniger Sonnenzeit übrig als hier eingestellt, verzichtet der Blueprint auf die Eskalation — der volle Ladestrom würde in der kurzen Zeit ohnehin nichts mehr bringen.
+          default: "01:00:00"
+          selector: {"time": {}}
         duration_cooldown:
           name: "Sperrzeit nach Zwangsladung"
           description: >-
@@ -827,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.9.0]"
+      bp_version: "[V5.0.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -838,6 +844,13 @@ action:
       # von 20 kWh nur 5 %) und bremst damit abends am staerksten - gerade dann,
       # wenn nur wenig Ueberschuss uebrig und die Prognose am sichersten ist.
       puffer_anteil: 0.10
+      # Ab welchem Anteil des Ladefensters der Realitaets-Check greift. Frueher
+      # bestimmt eine einzelne Wolkenluecke den Quotienten, spaeter bleibt zu
+      # wenig Ladezeit, um noch nachzusteuern.
+      trend_ab_zeitanteil: 0.50
+      # Untergrenze des Korrekturfaktors: bremst einen Ausreisser nach unten,
+      # der die Restprognose sonst so stutzt, dass Fall B dauerhaft feuert.
+      trend_min_faktor: 0.50
       # Mindestdauer (Stunden), die die Morgen-Blockade beim START noch laufen
       # koennen muss; liegt der spaeteste Ladebeginn naeher, wird gar nicht erst
       # blockiert (Whipsaw-Schutz gegen kurze Mikro-Blockaden).
@@ -877,8 +890,8 @@ action:
   - if:
       - condition: template
         value_template: >
-          {{ states(var_battery_total_charge) in ['unavailable','unknown']
-             or states(var_wr_max_charge) in ['unavailable','unknown'] }}
+          {{ (var_battery_total_charge != '' and states(var_battery_total_charge) in ['unavailable','unknown'])
+             or (var_wr_max_charge != '' and states(var_wr_max_charge) in ['unavailable','unknown']) }}
     then:
       # Stiller Retry 1: keine Meldung, nur warten und danach neu lesen.
       - delay: "00:00:10"
@@ -886,8 +899,8 @@ action:
       - if:
           - condition: template
             value_template: >
-              {{ states(var_battery_total_charge) in ['unavailable','unknown']
-                 or states(var_wr_max_charge) in ['unavailable','unknown'] }}
+              {{ (var_battery_total_charge != '' and states(var_battery_total_charge) in ['unavailable','unknown'])
+                 or (var_wr_max_charge != '' and states(var_wr_max_charge) in ['unavailable','unknown']) }}
         then:
           # Stiller Retry 2 (zusammen max. 20 s Wartezeit).
           - delay: "00:00:10"
@@ -896,8 +909,8 @@ action:
       - if:
           - condition: template
             value_template: >
-              {{ states(var_battery_total_charge) in ['unavailable','unknown']
-                 or states(var_wr_max_charge) in ['unavailable','unknown'] }}
+              {{ (var_battery_total_charge != '' and states(var_battery_total_charge) in ['unavailable','unknown'])
+                 or (var_wr_max_charge != '' and states(var_wr_max_charge) in ['unavailable','unknown']) }}
         then:
           # Log-Entprellung ohne Helfer: Die Warnung soll nur einmal je halber
           # Stunde erscheinen. An den 5-Minuten-Takt UND Minute 0/30 gebunden -
@@ -1024,6 +1037,7 @@ action:
       var_wr_grid_charge_switch: !input wr_grid_charge_switch
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
+      var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
       var_pv_forecast: !input solcast_current_sensor
       var_solcast_next_hour: !input solcast_next_hour_sensor
 
@@ -1068,7 +1082,7 @@ action:
       crate_40_deg: !input crate_40_deg
       crate_45_deg: !input crate_45_deg
 
-      faktor_ziel_puffer: !input faktor_ziel_puffer
+      var_ladevorlauf: !input ladevorlauf_stunden
       faktor_fallback: !input faktor_fallback
       fallback_max_soc: !input fallback_max_soc
       fallback_min_kwh: !input fallback_min_kwh
@@ -1093,6 +1107,83 @@ action:
       var_wp_hysterese_normal: !input wp_hysterese_normal
       puffer_kwh: !input puffer_kwh
       var_zeit_blockade: !input zeit_blockade_ende
+
+  # ====================================================================
+  # PFLICHTFELD-PRUEFUNG
+  # Nur Entitaets-Felder ohne Leer-Behandlung im Code: dort wird states('')
+  # zu 'unknown' und per float()-Default still zu einem Ersatzwert - die
+  # Regelung liefe mit erfundenen Zahlen weiter. Felder mit eigenem Fallback
+  # bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall (davor).
+  # ====================================================================
+  - variables:
+      pflichtfelder_fehlend: >
+        {% set pflicht = [
+             ('Ladezustand SOC (%)', var_battery_soc),
+             ('Batterie-Leistung (W)', var_battery_power),
+             ('Zähler: insgesamt entladen (kWh)', var_battery_total_discharge),
+             ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
+             ('Netz-Leistung (W)', var_grid_export),
+             ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
+             ('PV-Leistung geglättet (W)', var_pv_power),
+             ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
+             ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
+             ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
+             ('Solcast: verbleibende Leistung heute (kWh)', var_solcast_rest_sensor),
+             ('Solcast: aktuelle Leistung (W)', var_pv_forecast),
+             ('Solcast: Prognose nächste Stunde (kWh)', var_solcast_next_hour),
+             ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
+             ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
+             ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
+             ('Helfer: Winter-Zwangsladung aktiv', var_zwangsladung_aktiv),
+             ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
+             ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
+             ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
+             ('Timer: Peak-Shaving Hold', var_timer_peak),
+             ('Timer: Zwangsladung Cooldown', var_timer_cooldown),
+             ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
+             ('Timer: WP-Laufzeit', var_timer_wp_boost),
+             ('BMS 1: höchste Zellspannung (V)', var_vmax1),
+             ('BMS 2: höchste Zellspannung (V)', var_vmax2),
+             ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
+             ('BMS 2: höchste Zelltemperatur', var_bms2_temp_max),
+             ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
+             ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
+             ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
+             ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
+             ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
+             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6)
+           ] %}
+        {% set ns = namespace(fehlt=[]) %}
+        {% for bezeichnung, wert in pflicht %}
+          {% if (wert | default('', true) | string | trim) in ['', 'none', 'None'] %}
+            {% set ns.fehlt = ns.fehlt + [bezeichnung] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.fehlt | to_json }}
+
+  - variables:
+      pflicht_liste: "{{ pflichtfelder_fehlend if pflichtfelder_fehlend is iterable and pflichtfelder_fehlend is not string else (pflichtfelder_fehlend | from_json) }}"
+
+  - if:
+      - condition: template
+        value_template: "{{ pflicht_liste | length > 0 }}"
+    then:
+      # Wie bei der Deye-Warnung: hoechstens alle 30 Minuten melden, sonst
+      # schreibt jeder 5-Minuten-Lauf denselben Eintrag ins Logbuch.
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >-
+                {{ bp_version }} Start abgebrochen: {{ pflicht_liste | length }} Pflichtfeld{{ 'er sind' if pflicht_liste | length > 1 else ' ist' }} nicht zugewiesen
+                ({{ pflicht_liste[:8] | join(', ') }}{% if pflicht_liste | length > 8 %} und {{ pflicht_liste | length - 8 }} weitere{% endif %}).
+                Ohne diese Entitäten würde mit Ersatzwerten geregelt. Bitte im Blueprint zuweisen.
+                (Informativ: Meldung erscheint höchstens alle 30 Minuten).
+              entity_id: !input helper_logbook_dummy
+      - stop: "Pflichtfeld nicht zugewiesen - Regelung ausgesetzt."
 
   - variables:
       grid_export: "{{ (states(var_grid_export) | float(0)) * -1 }}"
@@ -1121,7 +1212,24 @@ action:
       crate_45_deg: "{{ crate_45_deg | float(0.00) }}"
 
       puffer_kwh: "{{ puffer_kwh | float(1.0) }}"
-      faktor_ziel_puffer: "{{ faktor_ziel_puffer | float(1.3) }}"
+      # Dauer-Felder kommen als "HH:MM:SS" aus dem time-Selector; gerechnet
+      # wird mit Stunden. Ein Nicht-Zeit-Wert faellt auf den Default zurueck.
+      var_ladevorlauf: >
+        {% set p = (var_ladevorlauf | string).split(':') %}
+        {% if p | length >= 2 %}
+          {{ (p[0] | int(0)) + (p[1] | int(0)) / 60
+             + ((p[2] | int(0)) / 3600 if p | length > 2 else 0) }}
+        {% else %}
+          1.5
+        {% endif %}
+      min_reststunden: >
+        {% set p = (min_reststunden | string).split(':') %}
+        {% if p | length >= 2 %}
+          {{ (p[0] | int(0)) + (p[1] | int(0)) / 60
+             + ((p[2] | int(0)) / 3600 if p | length > 2 else 0) }}
+        {% else %}
+          1.0
+        {% endif %}
       faktor_fallback: "{{ faktor_fallback | float(1.2) }}"
       max_ampere: "{{ max_ampere | float(140) }}"
       min_ampere: "{{ min_ampere | float(7) }}"
@@ -1282,11 +1390,112 @@ action:
       real_export: "{{ grid_export }}"
 
   # ====================================================================
+  # ABSCHLAG AUF DIE PROGNOSE (Prognose-Unsicherheit + Realitaets-Check)
+  # Beide Groessen sagen dasselbe aus - der Ertrag wird unter dem geplanten
+  # Blend liegen - und gehoeren deshalb auf die Ertragsseite, nicht als
+  # Aufschlag auf den Ladestrom. Sie laufen gegenlaeufig (breites P10/P50-Band
+  # heisst tiefer Blend und damit kleiner Realitaets-Abschlag), weshalb der
+  # groessere Abschlag gewinnt statt beide zu multiplizieren.
+  # ====================================================================
+  - variables:
+      trend_daten: >
+        {% set ns = namespace(blend_bisher=0.0, erste=none, letzte=none, p50_rest=0.0, blend_rest=0.0) %}
+        {% set jetzt = now() %}
+        {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
+        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
+          {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
+            {% set s_start = as_datetime(slot.period_start) | as_local %}
+            {% if s_start.date() == jetzt.date() %}
+              {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
+              {# Fenster = die Slots, in denen die PV ueber dem Hausverbrauch
+                 liegt, in denen also ueberhaupt geladen wuerde. Das schneidet
+                 Morgen- und Abendrand physikalisch ab; ein Kriterium ueber den
+                 blossen Ertrag wuerde die Daemmerungsslots mitnehmen und die
+                 Fenstermitte um Stunden verschieben. #}
+              {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
+              {% if blend > (json_profil[h_index] | float(0.2)) %}
+                {% if ns.erste is none %}{% set ns.erste = s_start %}{% endif %}
+                {% set ns.letzte = s_start %}
+              {% endif %}
+              {% if s_start < slot_start %}
+                {% set ns.blend_bisher = ns.blend_bisher + blend %}
+              {% else %}
+                {# P50 und Blend der RESTslots getrennt, anteilig beim laufenden
+                   Slot - Grundlage der Prognose-Unsicherheit. Muss hier stehen
+                   und nicht in slot_daten: dort wird der Abschlag schon
+                   angewendet, der aus diesen Summen erst entsteht. #}
+                {% if s_start == slot_start %}
+                  {% set anteil = (slot_start + timedelta(minutes=30) - jetzt).total_seconds() / 1800 %}
+                {% else %}
+                  {% set anteil = 1.0 %}
+                {% endif %}
+                {% set ns.p50_rest = ns.p50_rest + (slot.pv_estimate * 0.5 * anteil) %}
+                {% set ns.blend_rest = ns.blend_rest + (blend * anteil) %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+        {# Fensterende = Start des letzten Ertragsslots + dessen 30 Minuten. #}
+        {% set ns2 = namespace(anteil=0.0, von='', bis='') %}
+        {% if ns.erste is not none and ns.letzte is not none %}
+          {% set ende = ns.letzte + timedelta(minutes=30) %}
+          {% set spanne = (ende - ns.erste).total_seconds() %}
+          {% if spanne > 0 %}
+            {% set ns2.anteil = (jetzt - ns.erste).total_seconds() / spanne %}
+          {% endif %}
+          {% set ns2.von = ns.erste.strftime('%H:%M') %}
+          {% set ns2.bis = ende.strftime('%H:%M') %}
+        {% endif %}
+        {{ {'blend_bisher': ns.blend_bisher | round(3),
+            'zeit_anteil': ns2.anteil | round(3),
+            'p50_rest': ns.p50_rest | round(3), 'blend_rest': ns.blend_rest | round(3),
+            'von': ns2.von, 'bis': ns2.bis} | to_json }}
+
+  - variables:
+      trend_dict: "{{ trend_daten if trend_daten is mapping else (trend_daten | from_json) }}"
+
+  - variables:
+      trend_blend_bisher: "{{ trend_dict.blend_bisher | float(0) }}"
+      trend_zeit_anteil: "{{ trend_dict.zeit_anteil | float(0) }}"
+      trend_real_bisher: "{{ states(var_pv_erzeugung_heute) | float(0) }}"
+      trend_fenster_von: "{{ trend_dict.von | default('', true) }}"
+      trend_fenster_bis: "{{ trend_dict.bis | default('', true) }}"
+      trend_aktiv: >
+        {{ (trend_dict.zeit_anteil | float(0)) >= (trend_ab_zeitanteil | float(0.5))
+           and (trend_dict.blend_bisher | float(0)) > 0.5 }}
+      # Deckel nach oben 1,0: mehr Sonne als erwartet wird mitgenommen, aber
+      # nicht eingeplant - zu spaet geladen kostet mehr als zu frueh geladen.
+      trend_faktor: >
+        {% if trend_aktiv %}
+          {{ [[ trend_real_bisher / trend_blend_bisher, trend_min_faktor | float(0.5) ] | max, 1.0 ] | min }}
+        {% else %}
+          1.0
+        {% endif %}
+      # P50 / Blend der Restslots. Liegen P10 und P50 dicht beieinander, ist die
+      # Prognose sicher (~1,0); klaffen sie auseinander, steigt der Quotient.
+      prognose_unsicherheit: >
+        {% set p50 = trend_dict.p50_rest | float(0) %}
+        {% set bl = trend_dict.blend_rest | float(0) %}
+        {% if bl > 0.05 and p50 > 0 %}
+          {{ [[ (p50 / bl), 1.0 ] | max, 2.0 ] | min }}
+        {% else %}
+          1.0
+        {% endif %}
+      # Wirksamer Abschlag auf die erwartete PV: der GROESSERE der beiden, nicht
+      # ihr Produkt - sie messen ueberlappend dasselbe und multipliziert
+      # untertreiben sie den Ertrag deutlich (gegen die Messwoche geprueft).
+      # Untergrenze trend_min_faktor entspricht dem alten Unsicherheits-Deckel
+      # von 2,0 auf der Batterieseite.
+      pv_abschlag: >
+        {{ [[ [ 1 / (prognose_unsicherheit | float(1.0)), trend_faktor | float(1.0) ] | min,
+               trend_min_faktor | float(0.5) ] | max, 1.0 ] | min }}
+
+  # ====================================================================
   # NEU: ZEITANTEILIGE HALBSTUNDEN-SCHLEIFE (Ladezeit + Defizit)
   # ====================================================================
   - variables:
       slot_daten: >
-        {% set ns = namespace(alle=[], p50_summe=0.0, blend_summe=0.0) %}
+        {% set ns = namespace(alle=[]) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -1300,15 +1509,12 @@ action:
               {% endif %}
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
               {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
-              {# Fuer den Prognose-Unsicherheitsfaktor: P50 und Blend der
-                 Restslots getrennt aufsummieren. Liegen P10 und P50 dicht
-                 beieinander, ist P50/Blend ~ 1 (sichere Prognose); klaffen sie
-                 auseinander, steigt der Quotient (unsichere Prognose). #}
-              {% set ns.p50_summe = ns.p50_summe + (slot.pv_estimate * 0.5 * anteil) %}
-              {% set ns.blend_summe = ns.blend_summe + (blend * anteil) %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
-              {% set netto = (blend - haus_kwh) * anteil %}
+              {# Der Abschlag trifft die erwartete PV, nicht spaeter den
+                 Ladestrom: ein Aufschlag auf die Ampere wirkt auch in Slots,
+                 in denen die PV limitiert und mehr Strom nichts bringt. #}
+              {% set netto = (blend * (pv_abschlag | float(1.0)) - haus_kwh) * anteil %}
               {# Alle Slots chronologisch sammeln [netto, stunden]; erst danach
                  aggregieren, damit "aufholbarer Nachladebedarf" bestimmt werden
                  kann (siehe unten). #}
@@ -1337,7 +1543,7 @@ action:
             {% set ns3.defizit = ns3.defizit + (n | abs) %}
           {% endif %}
         {% endfor %}
-        {{ {'stunden': ns3.stunden | round(3), 'defizit': ns3.defizit | round(3), 'slots': ns3.netto_liste, 'p50': ns.p50_summe | round(3), 'blend': ns.blend_summe | round(3)} | to_json }}
+        {{ {'stunden': ns3.stunden | round(3), 'defizit': ns3.defizit | round(3), 'slots': ns3.netto_liste} | to_json }}
 
   - variables:
       # HA konvertiert das to_json-Ergebnis von slot_daten u.U. selbst zurück in ein Dict
@@ -1349,22 +1555,35 @@ action:
       benoetigt_kwh: "{{ freie_kwh + defizit_kwh }}"
       rest_slots: "{{ slot_daten_dict.slots | default([], true) }}"
       # ==================================================================
-      # PROGNOSE-UNSICHERHEITSFAKTOR (P50 / Blend der Restslots)
-      # Solcast liefert je Slot pv_estimate (P50, mittlere Erwartung) und
-      # pv_estimate10 (P10, pessimistisch); gerechnet wird mit dem Mittel beider.
-      # Liegen sie dicht beieinander, ist die Prognose sicher -> Quotient ~ 1,0.
-      # Klaffen sie auseinander, steigt der Quotient und der Ladestrom wird
-      # angehoben - die Spreizung korreliert stark mit dem Prognosefehler.
-      # Fallback 1.0 ohne Prognosedaten; dann wirkt der manuelle Faktor allein.
+      # LADEVORLAUF: Die Simulation rechnet nur bis var_ladevorlauf Stunden
+      # VOR dem letzten Überschuss-Slot. Der nötige Strom ergibt sich damit
+      # von selbst - ein fester Faktor könnte das nicht leisten, weil derselbe
+      # Vorlauf je nach Bedarf und Slot-Verteilung einen anderen Faktor
+      # bräuchte. Mindestens ein halber Slot bleibt stehen, sonst gäbe es
+      # nichts mehr zu simulieren.
       # ==================================================================
-      prognose_unsicherheit: >
-        {% set p50 = slot_daten_dict.p50 | float(0) %}
-        {% set bl = slot_daten_dict.blend | float(0) %}
-        {% if bl > 0.05 and p50 > 0 %}
-          {{ [[ (p50 / bl), 1.0 ] | max, 2.0 ] | min }}
-        {% else %}
-          1.0
-        {% endif %}
+      sim_slots_gekuerzt: >
+        {% set ns = namespace(ges=0.0) %}
+        {% for s in rest_slots %}{% set ns.ges = ns.ges + (s[1] | float(0)) %}{% endfor %}
+        {% set ziel = [ ns.ges - (var_ladevorlauf | float(1.0)), 0.5 ] | max %}
+        {% set ns2 = namespace(t=0.0, liste=[]) %}
+        {% for s in rest_slots %}
+          {% set h = s[1] | float(0) %}
+          {% if ns2.t < ziel and h > 0 %}
+            {% set nutz = [ h, ziel - ns2.t ] | min %}
+            {% set ns2.liste = ns2.liste + [[ ((s[0] | float(0)) * nutz / h) | round(4), nutz | round(4) ]] %}
+          {% endif %}
+          {% set ns2.t = ns2.t + h %}
+        {% endfor %}
+        {{ ns2.liste }}
+      # Der Vorlauf ist ein Wunsch, keine Bedingung: Reicht die gekürzte
+      # Energie für den Bedarf nicht, wird ohne Vorlauf gerechnet. Sonst fände
+      # die Simulation kein X und Prio 8 fiele auf die Zeitverteilung zurück,
+      # die NIEDRIGER liegt - der Vorlauf würde den Ladestrom also senken.
+      sim_slots: >
+        {% set ns = namespace(summe=0.0) %}
+        {% for s in sim_slots_gekuerzt %}{% set ns.summe = ns.summe + (s[0] | float(0)) %}{% endfor %}
+        {{ sim_slots_gekuerzt if ns.summe >= benoetigt_kwh else rest_slots }}
       # ==================================================================
       # LADESTROM-SIMULATION (statt linearer Verteilung über die Reststunden)
       # Eine gleichmäßige Verteilung (benoetigt / verf_stunden) ignoriert, wie
@@ -1372,17 +1591,17 @@ action:
       # PV-Verteilung wird der Strom zu niedrig und die Batterie nicht voll.
       # Stattdessen wird je Kandidaten-Strom X simuliert, was real ankäme:
       # pro Slot min(Netto-Überschuss, X * U * Slot-Stunden). Gesucht ist das
-      # kleinste X, das den reinen Bedarf deckt; der Sicherheitsfaktor kommt
-      # erst danach drauf - das ergibt einen schonenderen Wert als mitsimuliert.
+      # kleinste X, das den Bedarf innerhalb des um den Ladevorlauf gekürzten
+      # Fensters deckt; die Regelabweichung kommt erst danach drauf.
       # Suche: grob in 5-A-Schritten, dann fein in 1-A-Schritten.
       # ==================================================================
       sim_x_grob: >
         {% set ns = namespace(gefunden=0) %}
-        {% if rest_slots | length > 0 and benoetigt_kwh > 0 %}
+        {% if sim_slots | length > 0 and benoetigt_kwh > 0 %}
           {% for x in range(5, (max_ampere | int(140)) + 1, 5) %}
             {% if ns.gefunden == 0 %}
               {% set ns2 = namespace(summe=0.0) %}
-              {% for s in rest_slots %}
+              {% for s in sim_slots %}
                 {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
                 {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
               {% endfor %}
@@ -1400,7 +1619,7 @@ action:
           {% for x in range([grob - 4, 1] | max, grob + 1) %}
             {% if ns.gefunden == 0 %}
               {% set ns2 = namespace(summe=0.0) %}
-              {% for s in rest_slots %}
+              {% for s in sim_slots %}
                 {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
                 {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
               {% endfor %}
@@ -1427,19 +1646,22 @@ action:
       prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
 
       # Ziel-Strom Prio 8: Slot-Simulation (kleinster Strom, der den Bedarf real
-      # deckt) × Prognose-Unsicherheit × manuellem Sicherheitsfaktor. Ohne
-      # Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin meist
-      # Fall B, weil ohne Prognose kein Rest-Überschuss ausgewiesen wird.
+      # deckt), danach nur noch der manuelle Sicherheitsfaktor. Prognose-
+      # Unsicherheit und Realitaets-Check stecken bereits in den Slots.
+      # Ohne Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin
+      # meist Fall B, weil ohne Prognose kein Rest-Überschuss ausgewiesen wird.
       amp_basis_13: >
-        {{ ((sim_ampere_min | int(0)) * (prognose_unsicherheit | float(1.0)))
+        {{ (sim_ampere_min | int(0))
            if (sim_ampere_min | int(0)) > 0
            else (noetige_leistung_roh / nominale_spannung) }}
+      # Sicherheitsfaktor und Regelabweichung ADDIEREN sich, sie konkurrieren
+      # nicht: Der Offset gleicht nur aus, dass der Wechselrichter unter dem
+      # Sollwert einregelt - er ist keine Reserve. Als groesserer von beiden
+      # verschluckte er den Sicherheitsaufschlag bis etwa 40 A vollstaendig.
       amp_roh_13: >
-        {{ [ (amp_basis_13 | float(0)) * faktor_ziel_puffer,
-             (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) ] | max }}
-      # Prio 8 Normalfall (×1,3), gedeckelt durch min/max
-      # Immer AUFrunden: Der Wechselrichter regelt ohnehin unter dem Sollwert ein,
-      # ein Abrunden wuerde die Abweichung noch vergroessern.
+        {{ (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) }}
+      # Gedeckelt durch min/max. Immer AUFrunden: Der Wechselrichter regelt
+      # ohnehin unter dem Sollwert ein, Abrunden vergroesserte die Abweichung.
       ziel_p5_raw: "{{ [[amp_roh_13 | round(0, 'ceil'), min_ampere] | max, max_ampere] | min }}"
       # Brutto-PV-Ueberschuss Resttag = Summe der Slots mit PV-Ueberschuss (nur
       # positive Netto-Slots aus slot_daten). Gegenstueck zum Nachladebedarf,
@@ -1458,11 +1680,29 @@ action:
       # faktor_fallback. Der Faktor wirkt auf den GESAMTEN Bedarf (freie +
       # defizit). NUR wenn noch genug Restladezeit da ist (min_reststunden) UND
       # der Bedarf ueber der Bagatellgrenze liegt (fallback_min_kwh).
+      # Macht explizit, was der Vergleich oben bei faktor_fallback >= 1,0
+      # bereits impliziert: deckt der Rest-Ueberschuss den Bedarf nicht, findet
+      # die Simulation in Prio 8 kein X und fiele auf die niedrigere
+      # Zeitverteilung zurueck. Liefert die Begruendung fuers Log und traegt,
+      # falls faktor_fallback je unter 1,0 gesetzt wird.
+      prognose_deckt_bedarf_nicht: "{{ brutto_ueberschuss_rest < benoetigt_kwh }}"
       fall_b_aktiv: >
-        {{ ((brutto_ueberschuss_rest - puffer_fall_b) < (benoetigt_kwh * (faktor_fallback | float(1.2)))) and
+        {{ (((brutto_ueberschuss_rest - puffer_fall_b) < (benoetigt_kwh * (faktor_fallback | float(1.2))))
+            or prognose_deckt_bedarf_nicht) and
            verf_stunden >= (min_reststunden | float(1.0)) and
            benoetigt_kwh > (fallback_min_kwh | float(1.0)) }}
 
+      trend_log_addon: >-
+        {%- if (pv_abschlag | float(1.0)) < 1.0 -%}
+        {{ ' Erwartete PV je Zeitfenster auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' % gekürzt' ~
+           (' (kleinerer Wert aus Realitäts-Check ' ~ ((trend_faktor | float(1.0)) * 100) | round(0) | int ~ ' % und Prognose-Unsicherheit ' ~
+             (100 / (prognose_unsicherheit | float(1.0))) | round(0) | int ~ ' %; Realitäts-Check = bis jetzt ' ~ trend_real_bisher | round(1) ~
+             ' kWh erzeugt gegenüber prognostizierten ' ~ trend_blend_bisher | round(1) ~ ' kWh, Ladefenster ' ~ trend_fenster_von ~ '–' ~
+             trend_fenster_bis ~ ', davon ' ~ (trend_zeit_anteil * 100) | round(0) | int ~ ' % vergangen)'
+            if trend_aktiv else
+            ' (Prognose-Unsicherheit ' ~ (prognose_unsicherheit | float(1.0)) | round(2) ~
+             '; Realitäts-Check noch ohne belastbaren Wert, Ladefenster erst zu ' ~ (trend_zeit_anteil * 100) | round(0) | int ~ ' % vergangen)') ~ '.' }}
+        {%- endif -%}
       temp_log_addon: "{{ (' (Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
@@ -1575,7 +1815,7 @@ action:
       #   Bedarf    = (freier Platz + Nachladebedarf ab T) x Faktor (Batterie)
       # Der Nachladebedarf steht bewusst auf der Batterieseite wie in Prio 8,
       # nicht als Netto-Abzug auf der PV-Seite.
-      # Faktor = min(faktor_ziel_puffer x faktor_fallback x prognose_unsicherheit, 2,0).
+      # Faktor = min(faktor_fallback x prognose_unsicherheit, 2,0).
       # ================================================================
       blockade_dyn_json: >
         {% set ns = namespace(alle=[]) %}
@@ -1608,13 +1848,15 @@ action:
         {% for i in range(ns.alle | length) %}
           {% if i < nsl.last_pos %}{% set nsl.d_aufholbar = nsl.d_aufholbar + ns.alle[i][3] %}{% endif %}
         {% endfor %}
-        {# Faktor auf den GESAMTEN Bedarf (freier Platz + Nachladebedarf).
-           Basis faktor_ziel_puffer x faktor_fallback (0,13 ueber Fall B bei
-           1,1 x 1,3), mit prognose_unsicherheit skaliert (1,0..2,0), Deckel 2,0.
-           An unsicheren Tagen steigt die Huerde -> Blockade lueftet frueher /
-           setzt gar nicht erst ein. Asymmetrie: lieber zu frueh aus der Blockade
-           (kostet nur Peak-Shaving-Fenster) als zu spaet (Batterie nicht voll). #}
-        {% set ziel_faktor = [ faktor_ziel_puffer * faktor_fallback * (prognose_unsicherheit | float(1.0)), 2.0 ] | min %}
+        {# Faktor auf den GESAMTEN Bedarf (freier Platz + Nachladebedarf):
+           faktor_fallback, mit prognose_unsicherheit skaliert (1,0..2,0),
+           Deckel 2,0. An unsicheren Tagen steigt die Huerde -> Blockade lueftet
+           frueher / setzt gar nicht erst ein. Asymmetrie: lieber zu frueh aus
+           der Blockade (kostet nur Peak-Shaving-Fenster) als zu spaet.
+           Der Ladevorlauf wirkt hier bewusst NICHT mit - er regelt allein den
+           Ladestrom in Prio 8; sonst wuerde ein groesserer Vorlauf zugleich das
+           Peak-Shaving-Fenster verkuerzen. #}
+        {% set ziel_faktor = [ faktor_fallback * (prognose_unsicherheit | float(1.0)), 2.0 ] | min %}
         {% set ns2 = namespace(best='', pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
         {% for i in range(ns.alle | length) %}
           {% if ns.alle[i][1] %}
@@ -1648,9 +1890,8 @@ action:
       blockade_dyn_d_ab_t: "{{ blockade_dyn.d_ab_t | default(0) | float(0) }}"
       # BLOCKADE-LOGIK (dynamisches Ende):
       # Existiert ein T (spaetester Ladebeginn, ab dem noch genug Netto-Energie
-      # kommt): blockieren. Das Ziel ist bewusst streng gerechnet - Produkt aus
-      # faktor_ziel_puffer und faktor_fallback -, damit die Blockade lieber zu
-      # frueh als zu spaet endet. T wandert bei sinkender Prognose von selbst
+      # kommt): blockieren. Das Ziel ist bewusst streng gerechnet, damit die
+      # Blockade lieber zu frueh als zu spaet endet. T wandert bei sinkender Prognose von selbst
       # nach vorn. Kein T mehr -> direkte Freigabe an die Kaskade (Prio 8).
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
@@ -2855,8 +3096,8 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh)).{{ solcast_log_addon }}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da {% if prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(1) }} kWh < Bedarf {{ benoetigt_kwh | round(1) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(1) }} kWh{% endif %}
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not prognose_deckt_bedarf_nicht %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh{% if not prognose_deckt_bedarf_nicht %} − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -2984,7 +3225,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Sicherheitsfaktor {{ faktor_ziel_puffer }} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
                     Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh).
                     Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
                   entity_id: !input helper_logbook_dummy
@@ -3056,7 +3297,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 8 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
-                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ rest_slots | length }} Prognose-Zeitfenster {{ sim_ampere_min }} A × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }} = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Regelabweichung {{ regler_offset_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon {% if (amp_basis_13 | float(0)) * faktor_ziel_puffer >= (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) %}× Sicherheitsfaktor {{ faktor_ziel_puffer }}{% else %}+ Regelabweichung {{ regler_offset_a }} A{% endif %} = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ temp_log_addon }}
+                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ sim_slots | length }} von {{ rest_slots | length }} Prognose-Zeitfenstern {{ amp_basis_13 | round(1) }} A{% if (sim_slots | length) < (rest_slots | length) %} (voll {{ var_ladevorlauf }} h vor dem letzten PV-Überschuss){% else %} (Ladevorlauf {{ var_ladevorlauf }} h nicht erreichbar, volles Restfenster gerechnet){% endif %}, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ trend_log_addon }}{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
