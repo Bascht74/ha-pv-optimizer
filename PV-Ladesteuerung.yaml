@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.8.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V4.9.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -477,12 +477,6 @@ blueprint:
             werden sichtbar.
           default: 3.4
           selector: {"number": {"min": 3.3, "max": 3.6, "step": 0.01, "unit_of_measurement": "V"}}
-        top_balancing_soc:
-          name: "Start: Mindest-SOC (%)"
-          description: >-
-            Mindest-Ladezustand in Prozent, der zusätzlich erreicht sein muss, damit das Balancing startet. Wirkt als Plausibilitätsprüfung: Verhindert Fehlauslösungen, wenn eine einzelne schwache Zelle schon bei halbvoller Batterie hochläuft.
-          default: 97
-          selector: {"number": {"min": 70, "max": 100, "step": 1, "unit_of_measurement": "%"}}
         duration_top_balancing:
           name: "Dauer des Zellausgleichs"
           description: >-
@@ -696,12 +690,16 @@ trigger:
     # Ohne diesen Trigger wurde der Netz-Export nur beim 5-Min-Raster geprüft;
     # kurze Export-Spitzen zwischen den Rastern lösten kein Peak-Shaving aus.
     # Polung: Roh-Sensor ist negativ bei Einspeisung -> * -1 ergibt positiven
-    # Export, Vergleich mit der positiven Schwelle. 30 s Entprellung gegen
-    # Sekunden-Zappler; der 30-Min-Hold-Timer hält danach ohnehin durch.
+    # Export, Vergleich mit der positiven Schwelle.
+    #
+    # Gleiche Entprellung wie beim WP-Boost-Trigger: Waere sie kuerzer, wuerde
+    # Peak-Shaving zuerst greifen, den Export unter die Boost-Schwelle druecken
+    # und den Boost damit verhindern. Die Waermepumpe soll aber Vorrang haben.
+    # Zwei Minuten Clipping sind hinnehmbar.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_peak_shaving | float(6500)) }}
-    for: "00:00:30"
+    for: "00:02:00"
     id: export_peak_schwelle
   - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (2 Min entprellt)"
     # Deutlich traeger als der Peak-Shaving-Trigger (30 s): Ein Boost bindet die
@@ -829,7 +827,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V4.8.1]"
+      bp_version: "[V4.9.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1085,7 +1083,6 @@ action:
       default_tou_soc: !input default_tou_soc
       escalation_tou_soc: !input escalation_tou_soc
       grid_ampere_zwangsladung: !input grid_ampere_zwangsladung
-      top_balancing_soc: !input top_balancing_soc
       top_balancing_voltage: !input top_balancing_voltage
       var_float_normal: !input float_voltage_normal
       var_float_balancing: !input float_voltage_balancing
@@ -1139,7 +1136,6 @@ action:
           {{ state_attr(var_schatten_bms, 'raw_drift_soc') | float(-1) }}
         {% endif %}
       nominale_spannung: "{{ nominale_spannung | float(51.2) }}"
-      top_balancing_soc: "{{ top_balancing_soc | float(97) }}"
       top_balancing_voltage: "{{ top_balancing_voltage | float(3.4) }}"
 
       vor_blockade_ende: >
@@ -2009,11 +2005,11 @@ action:
               - action: persistent_notification.create
                 data:
                   title: "⚠️ PV Optimizer Warnung"
-                  message: "{{ bp_version }} Hinweis: Batterie wurde heute nicht voll, obwohl die Steuerung aktiv war. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} % < Ziel-Ladestand {{ top_balancing_soc }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
+                  message: "{{ bp_version }} Hinweis: Batterie wurde heute nicht voll — der Zellausgleich hat nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Diagnose: Batterie wurde heute nicht voll, obwohl die Steuerung aktiv war. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} % < Ziel-Ladestand {{ top_balancing_soc }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
+                  message: "{{ bp_version }} Diagnose: Batterie wurde heute nicht voll — der Zellausgleich hat nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
                   entity_id: !input helper_logbook_dummy
 
           - if:
