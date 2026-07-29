@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.1.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.2.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.1.1]"
+      bp_version: "[V5.2.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1795,17 +1795,30 @@ action:
             {% endif %}
           {% endfor %}
         {% endif %}
+        {# Ladefenster und Ladevorlauf wie in Prio 8: Zeitfenster unterhalb der
+           Tages-Anteilsgrenze liefern zu wenig, um den Ladestrom zu bedienen, und
+           die Vorlaufzeit am Ende steht nicht zur Verfuegung. Beides muss hier
+           genauso abgezogen werden - sonst blockiert die Morgen-Blockade auf
+           Grundlage von Energie, mit der Prio 8 nachmittags gar nicht rechnet. #}
+        {% set grenze = (tages_netto_pmax | float(0)) * (fenster_mindest_anteil | float(0.15)) * 0.5 %}
+        {% set nsf = namespace(last=-1) %}
+        {% for i in range(ns.alle | length) %}
+          {% if ns.alle[i][2] >= grenze %}{% set nsf.last = i %}{% endif %}
+        {% endfor %}
+        {% set vorlauf_slots = (((var_ladevorlauf | float(1.0)) / 0.5) | round(0, 'ceil')) | int %}
+        {% set ende = (nsf.last + 1 - vorlauf_slots) if nsf.last >= 0 else (ns.alle | length) %}
+        {% set nutzbar = ns.alle[:ende] if ende > 0 else [] %}
         {# Nachladebedarf nur zaehlen, solange er durch NACHFOLGENDEN PV-Ueberschuss
            aufgeholt werden kann: letzten Ueberschuss-Slot bestimmen, Defizite danach
            (= Abend, PV faellt unter Hausverbrauch) verwerfen -- die Batterie kann
            sie nicht mehr aufnehmen (nicht > 100 %). #}
         {% set nsl = namespace(last_pos=-1, u_ges=0.0, d_aufholbar=0.0) %}
-        {% for i in range(ns.alle | length) %}
-          {% set nsl.u_ges = nsl.u_ges + ns.alle[i][2] %}
-          {% if ns.alle[i][2] > 0 %}{% set nsl.last_pos = i %}{% endif %}
+        {% for i in range(nutzbar | length) %}
+          {% set nsl.u_ges = nsl.u_ges + nutzbar[i][2] %}
+          {% if nutzbar[i][2] > 0 %}{% set nsl.last_pos = i %}{% endif %}
         {% endfor %}
-        {% for i in range(ns.alle | length) %}
-          {% if i < nsl.last_pos %}{% set nsl.d_aufholbar = nsl.d_aufholbar + ns.alle[i][3] %}{% endif %}
+        {% for i in range(nutzbar | length) %}
+          {% if i < nsl.last_pos %}{% set nsl.d_aufholbar = nsl.d_aufholbar + nutzbar[i][3] %}{% endif %}
         {% endfor %}
         {# Faktor auf den GESAMTEN Bedarf (freier Platz + Nachladebedarf):
            faktor_fallback, mit prognose_unsicherheit skaliert (1,0..2,0),
@@ -1817,8 +1830,8 @@ action:
            Peak-Shaving-Fenster verkuerzen. #}
         {% set ziel_faktor = [ faktor_fallback * (prognose_unsicherheit | float(1.0)), 2.0 ] | min %}
         {% set ns2 = namespace(best='', pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
-        {% for i in range(ns.alle | length) %}
-          {% if ns.alle[i][1] %}
+        {% for i in range(nutzbar | length) %}
+          {% if nutzbar[i][1] %}
             {# u_ab / d_ab = Brutto-Ueberschuss bzw. aufholbarer Nachladebedarf ab
                diesem Kandidaten T bis Tagesende (Gesamt minus Summe der Slots davor). #}
             {% set u_ab = nsl.u_ges - ns2.pu %}
@@ -1828,15 +1841,15 @@ action:
             {% set verf = u_ab - p_ab %}
             {% set bedarf = ziel_faktor * (freie_kwh + d_ab) %}
             {% if verf >= bedarf %}
-              {% set ns2.best = ns.alle[i][0] %}
+              {% set ns2.best = nutzbar[i][0] %}
               {% set ns2.verf = verf %}
               {% set ns2.bedarf = bedarf %}
               {% set ns2.u_ab_t = u_ab %}
               {% set ns2.d_ab_t = d_ab %}
             {% endif %}
           {% endif %}
-          {% set ns2.pu = ns2.pu + ns.alle[i][2] %}
-          {% set ns2.pd = ns2.pd + (ns.alle[i][3] if i < nsl.last_pos else 0) %}
+          {% set ns2.pu = ns2.pu + nutzbar[i][2] %}
+          {% set ns2.pd = ns2.pd + (nutzbar[i][3] if i < nsl.last_pos else 0) %}
         {% endfor %}
         {{ {'t': ns2.best, 'ueber_ges': nsl.u_ges | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
       # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
