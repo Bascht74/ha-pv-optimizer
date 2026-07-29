@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.2.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.3.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.2.0]"
+      bp_version: "[V5.3.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1685,9 +1685,15 @@ action:
       # Der Offset wirkt nur beim EINSTIEG: Steigt der Strom von einem kleinen
       # Wert, fehlen sonst 2 A an der Batterie. Bei den Folgestufen steckt er
       # bereits im aktuellen Sollwert - dort waere ein erneuter Aufschlag zu viel.
+      # Peak-Shaving hebt den Ladestrom stufenweise an, darf dabei aber nie unter
+      # dem liegen, was Prio 8 ohnehin laden wuerde: Beide wollen Ueberschuss in
+      # die Batterie bringen, und der hoehere Wert erfuellt beide Zwecke. Ohne
+      # ziel_p5_raw haette Peak-Shaving (Prio 6) einen bereits hoeher geplanten
+      # Ladestrom auf seine Stufe heruntergezogen, weil es in der Kaskade vorn steht.
       target_p3: >
         {{ [ [ (aktueller_ladestrom | float(0)) + (peak_ampere | float(20)),
-               (peak_ampere | float(20)) + (regler_offset_a | float(2.0)) ] | max,
+               (peak_ampere | float(20)) + (regler_offset_a | float(2.0)),
+               ziel_p5_raw | float(0) ] | max,
              max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0, 'ceil') }}
       # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
@@ -1757,6 +1763,21 @@ action:
 
       wp_laufzeit_aktiv: >
         {{ states(var_timer_wp_boost) == 'active' }}
+      # Restlaufzeit des Warmwasser-Boosts in Stunden (0, wenn er nicht laeuft).
+      wp_restlaufzeit_h: >
+        {% set fin = state_attr(var_timer_wp_boost, 'finishes_at') %}
+        {% if states(var_timer_wp_boost) == 'active' and fin is not none %}
+          {{ [ (as_datetime(fin) - now()).total_seconds() / 3600, 0 ] | max }}
+        {% else %}
+          0
+        {% endif %}
+      # Der Boost darf Prio 8 nur sperren, solange danach noch genug Ladezeit
+      # bleibt. Laeuft er laenger, als ueber den Ladevorlauf hinaus ueberhaupt
+      # Zeit da ist, frisst er den Vorlauf auf - dann regelt Prio 8 weiter und
+      # die Waermepumpe teilt sich den Ueberschuss mit der Batterie.
+      wp_laufzeit_sperrt: >
+        {{ wp_laufzeit_aktiv and
+           (verf_stunden - (var_ladevorlauf | float(1.0))) > (wp_restlaufzeit_h | float(0)) }}
 
       wp_kompressor_aktiv: >
         {% if var_wp_kompressor != '' and states[var_wp_kompressor] is defined and states[var_wp_kompressor] is not none %}
@@ -1800,6 +1821,13 @@ action:
            die Vorlaufzeit am Ende steht nicht zur Verfuegung. Beides muss hier
            genauso abgezogen werden - sonst blockiert die Morgen-Blockade auf
            Grundlage von Energie, mit der Prio 8 nachmittags gar nicht rechnet. #}
+        {# Abschlag auf die Prognose. Solange der Realitaets-Check noch keinen
+           belastbaren Wert hat (Vormittag), tritt faktor_fallback an seine
+           Stelle: 1/1,2 = 0,83 liegt nahe am gemessenen Bias, und ein zu frueh
+           beendetes Blockieren kostet nur Peak-Shaving-Fenster, ein zu spaetes
+           dagegen Ladung. Sobald der Check greift, zaehlt der gemessene Wert. #}
+        {% set b_abschlag = (trend_faktor | float(1.0)) if trend_aktiv
+                            else (1 / (faktor_fallback | float(1.2))) %}
         {% set grenze = (tages_netto_pmax | float(0)) * (fenster_mindest_anteil | float(0.15)) * 0.5 %}
         {% set nsf = namespace(last=-1) %}
         {% for i in range(ns.alle | length) %}
@@ -1834,7 +1862,7 @@ action:
           {% if nutzbar[i][1] %}
             {# u_ab / d_ab = Brutto-Ueberschuss bzw. aufholbarer Nachladebedarf ab
                diesem Kandidaten T bis Tagesende (Gesamt minus Summe der Slots davor). #}
-            {% set u_ab = nsl.u_ges - ns2.pu %}
+            {% set u_ab = (nsl.u_ges - ns2.pu) * b_abschlag %}
             {% set d_ab = nsl.d_aufholbar - ns2.pd %}
             {# Puffer anteilig zum Ueberschuss AB T, gedeckelt durch puffer_kwh #}
             {% set p_ab = [ u_ab * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}
@@ -2857,12 +2885,16 @@ action:
             value_template: "{{ var_wp_boost_aktiv }}"
           - condition: template
             value_template: "{{ states(var_timer_wp_boost) == 'idle' and states(var_timer_wp_anlauf) == 'idle' }}"
-          # KEINE Karenzzeit noetig: Der Watchdog prueft weiter unten selbst, ob
-          # das Ziel noch auf dem PV-Wert steht. Der Block "WP-LAUFZEIT BEENDEN"
-          # setzt Ziel und Hysterese inzwischen SOFORT (vor dem Cancel), und die
-          # Automation laeuft im Modus 'queued' - ein gleichzeitig ausgeloester
-          # Lauf wartet also, bis der Reset-Zweig samt Retry fertig ist, und
-          # findet danach korrekte Werte vor.
+          # Karenzzeit nach dem Timer-Wechsel: Die regulaeren Reset-Zweige setzen
+          # das Ziel zwar sofort, aber die Waermepumpe uebernimmt es verzoegert -
+          # im selben Lauf steht im State noch der PV-Wert. Ohne die Karenz meldet
+          # der Watchdog direkt nach jedem regulaeren Ende einen Sicherheits-Reset,
+          # der keiner ist. Fuer den eigentlichen Zweck (Wert steht Stunden spaeter
+          # noch falsch, Timer nach Neustart verloren) sind zwei Minuten belanglos.
+          - condition: template
+            value_template: >
+              {{ (now() - states[var_timer_wp_boost].last_changed).total_seconds() > 120 and
+                 (now() - states[var_timer_wp_anlauf].last_changed).total_seconds() > 120 }}
           - condition: template
             value_template: >
               {{ var_wp_ziel_temp_pv != var_wp_ziel_temp_normal and
@@ -3275,7 +3307,7 @@ action:
                   message: >
                     {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
-                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh).
+                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh (Prognose bereits um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh).
                     Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
@@ -3302,7 +3334,7 @@ action:
           # gezielt (siehe Block "WP-LAUFZEIT BEENDEN"), nicht ueber diese
           # Bedingung.
           - condition: template
-            value_template: "{{ not wp_laufzeit_aktiv }}"
+            value_template: "{{ not wp_laufzeit_sperrt }}"
           # Abend-Sperre: unter der Mindest-Restladezeit nicht mehr nachregeln.
           # Der letzte Tageswert bleibt stehen, bis der Sonnenuntergang-Trigger
           # das Register ohnehin für die Nacht auf Max öffnet.
