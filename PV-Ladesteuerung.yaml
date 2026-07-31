@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.4.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.5.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.4.0]"
+      bp_version: "[V5.5.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1829,7 +1829,7 @@ action:
 
       # ================================================================
       # DYNAMISCHES BLOCKADE-ENDE T (Brutto-Rechnung, konsistent mit Prio 8)
-      # Spätester Ladebeginn T (Halbstunden-Raster), sodass ab T noch gilt:
+      # Spaetester Ladebeginn T (Halbstunden-Raster), sodass ab T noch gilt:
       #   Verfügbar = Brutto-Überschuss ab T minus Puffer        (PV-Seite)
       #   Bedarf    = (freier Platz + Nachladebedarf ab T) x Faktor (Batterie)
       # Der Nachladebedarf steht bewusst auf der Batterieseite wie in Prio 8,
@@ -3344,7 +3344,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Spätester Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
+                    {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
                     Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh (Prognose bereits um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh).
                     Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
@@ -3400,13 +3400,15 @@ action:
                   # Modus-basierter Bypass: Wenn ein ANDERER Block zuletzt gesetzt hat
                   # (Modus != 'normal'), darf Prio 8 einmalig sofort durchregeln.
                   fremder_modus: "{{ aktueller_modus not in ['normal'] }}"
-                  # Anheben ab 5 A ohne Wartezeit: Der Zielstrom waechst ueber den
-                  # Nachmittag langsam, eine Wartezeit liess ihn nie ankommen, und
-                  # zu niedrig geladen kostet Ladung, die spaeter fehlt. Absenken
-                  # bleibt traege und unterhalb von kein_absenken_ab_soc.
+                  # Anheben: ab 10 A sofort, ab 5 A nach einer Stunde Ruhe. Ohne die
+                  # Wartezeit folgt der Sollwert dem ueber den Nachmittag steigenden
+                  # Zielstrom in Schritten von wenigen Ampere - drei Registerschreiben
+                  # in 50 Minuten, ohne dass die Batterie davon schneller voll wird.
+                  # Absenken bleibt traeger und nur unterhalb von kein_absenken_ab_soc.
                   update_freigegeben: >
                     {{ fremder_modus or
-                       (diff >= 5) or
+                       (diff >= 10) or
+                       (diff >= 5 and min_since >= 60) or
                        (aktueller_soc < (kein_absenken_ab_soc | float(90)) and
                         ((diff <= -30) or (diff <= -20 and min_since >= 60))) }}
               - if:
