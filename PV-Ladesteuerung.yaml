@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.5.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.6.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.5.1]"
+      bp_version: "[V5.6.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -2002,7 +2002,7 @@ action:
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom-Obergrenze sicherheitshalber auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, solange Zellspannungen und Temperaturen nicht überwacht werden können. Das ist nur ein Deckel — die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A."
+          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom-Obergrenze sicherheitshalber auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, solange Zellspannungen und Temperaturen nicht überwacht werden können. {% if (aktueller_ladestrom | float(0)) > (temperatur_limit_ampere | float(0)) %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Das ist nur ein Deckel — die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %}"
       # Logbuch-Eintrag, gedrosselt auf max. eine Meldung je halber Stunde -
       # gleiches Muster wie die Deye-Ausfallwarnung: exakt an den 5-Minuten-Takt
       # UND Minute 0/30 gebunden, damit gleichzeitig gequeuete Trigger die
@@ -2014,7 +2014,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} BMS offline: Ladestrom-Obergrenze auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. Die Obergrenze ist kein Sollwert: Die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A. (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
+              message: "{{ bp_version }} BMS offline: Ladestrom-Obergrenze auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. {% if (aktueller_ladestrom | float(0)) > (temperatur_limit_ampere | float(0)) %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Die Obergrenze ist kein Sollwert: Die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %} (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
               entity_id: !input helper_logbook_dummy
     else:
       - action: persistent_notification.dismiss
@@ -3085,6 +3085,29 @@ action:
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM
   # ====================================================================
   - choose:
+      # Sicherheits-Obergrenze durchsetzen: temperatur_limit_ampere deckelt zwar
+      # jeden Zielwert, geschrieben wird er aber nur, wenn ein Zweig ohnehin
+      # regelt. Oberhalb von kein_absenken_ab_soc regelt Prio 8 nicht mehr, und
+      # die Absenk-Hysterese verlangt 20 A Differenz - ein kleiner Ueberhang
+      # bliebe sonst dauerhaft stehen, ohne Zellspannungs- und Temperaturschutz.
+      - alias: "PRIO 0: SICHERHEITS-OBERGRENZE DURCHSETZEN"
+        conditions:
+          - condition: template
+            value_template: >
+              {{ (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999))
+                 and ((aktueller_ladestrom | float(0)) - (temperatur_limit_ampere | float(0))) > 1 }}
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: "{{ var_wr_max_charge }}"
+            data:
+              value: "{{ temperatur_limit_ampere | round(0) }}"
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ bp_version }} Sicherheits-Obergrenze: Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da er über der Obergrenze lag.{{ temp_log_addon }}"
+              entity_id: !input helper_logbook_dummy
+
       - alias: "PRIO 1: ZELLAUSGLEICH (TOP-BALANCING)"
         conditions:
           - condition: template
@@ -3216,14 +3239,16 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(1) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(1) }} kWh bis {{ fallb_vorlauf_text }} vor dem letzten PV-Überschuss — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber dann bliebe kein Vorlauf mehr{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(1) }} kWh < Bedarf {{ benoetigt_kwh | round(1) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(1) }} kWh{% endif %}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(1) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(1) }} kWh bis {{ fallb_vorlauf_text }} vor dem letzten PV-Überschuss — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber dann bliebe kein Vorlauf mehr{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(1) }} kWh < Bedarf {{ benoetigt_kwh | round(1) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(1) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(1) }} kWh{% endif %}
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
+              # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
+              # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
-                  value: "{{ max_ampere }}"
+                  value: "{{ target_p0 }}"
               - if:
                   - condition: template
                     value_template: "{{ var_lade_modus != '' }}"
