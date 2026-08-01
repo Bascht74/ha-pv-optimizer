@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.5.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.5.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.5.0]"
+      bp_version: "[V5.5.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -3243,9 +3243,15 @@ action:
           - condition: template
             value_template: "{{ wp_sperre_batterie_0a_aktiv }}"
         sequence:
+          # 'blockade' nicht ueberschreiben: Die Austrittserkennung in den
+          # Root-Actions haengt am gespeicherten Modus und setzt darueber den
+          # Tagesmarker. Anders als beim Peak-Shaving faellt 'blockade_aktiv'
+          # hier nicht mit ab, der Austritt bliebe also dauerhaft aus.
           - if:
               - condition: template
-                value_template: "{{ var_lade_modus != '' and aktueller_modus != 'wp_sperre' }}"
+                value_template: >
+                  {{ var_lade_modus != '' and aktueller_modus != 'wp_sperre'
+                     and aktueller_modus != 'blockade' }}
             then:
               - action: input_select.select_option
                 target:
@@ -3272,9 +3278,10 @@ action:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ null_ampere }}"
+              # 'blockade' stehen lassen, Begruendung siehe Prio 4.
               - if:
                   - condition: template
-                    value_template: "{{ var_lade_modus != '' }}"
+                    value_template: "{{ var_lade_modus != '' and aktueller_modus != 'blockade' }}"
                 then:
                   - action: input_select.select_option
                     target:
