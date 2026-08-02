@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.6.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.6.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.6.0]"
+      bp_version: "[V5.6.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -2909,7 +2909,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ bp_version }} Wärmepumpen-Warmwasser-Boost (PV) beendet: Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da der Laufzeit-Timer abgelaufen ist{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %}.
+                {{ bp_version }} Wärmepumpen-Warmwasser-Boost (PV) beendet: Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da die Laufzeit beendet ist{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %}.
               entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: WATCHDOG (Sicherheits-Reset auf Normalwerte)"
@@ -3443,9 +3443,15 @@ action:
                        (diff >= 5 and min_since >= 60) or
                        (aktueller_soc < (kein_absenken_ab_soc | float(90)) and
                         ((diff <= -30) or (diff <= -20 and min_since >= 60))) }}
+              # Nur schreiben, wenn sich der Sollwert wirklich aendert: Der
+              # Modus-Bypass gibt auch dann frei, wenn Ziel und Ist gleich sind -
+              # das ergaebe einen wirkungslosen Registerschreibvorgang und eine
+              # Meldung ueber eine Anpassung von 0 A.
               - if:
                   - condition: template
-                    value_template: "{{ update_freigegeben }}"
+                    value_template: >
+                      {{ update_freigegeben
+                         and (target_p5 | round(0)) != (aktueller_ladestrom | round(0)) }}
                 then:
                   - action: logbook.log
                     data:
@@ -3459,12 +3465,15 @@ action:
                       entity_id: "{{ var_wr_max_charge }}"
                     data:
                       value: "{{ target_p5 }}"
-                  - if:
-                      - condition: template
-                        value_template: "{{ var_lade_modus != '' and aktueller_modus != 'normal' }}"
-                    then:
-                      - action: input_select.select_option
-                        target:
-                          entity_id: "{{ var_lade_modus }}"
-                        data:
-                          option: "normal"
+              # Ausserhalb des Schreib-Zweigs: Der Modus muss auch dann nachziehen,
+              # wenn nichts zu schreiben war - sonst bliebe der fremde Modus stehen
+              # und sein Bypass bei jedem Lauf erneut scharf.
+              - if:
+                  - condition: template
+                    value_template: "{{ var_lade_modus != '' and aktueller_modus != 'normal' }}"
+                then:
+                  - action: input_select.select_option
+                    target:
+                      entity_id: "{{ var_lade_modus }}"
+                    data:
+                      option: "normal"
