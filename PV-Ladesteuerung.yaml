@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.6.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.7.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.6.1]"
+      bp_version: "[V5.7.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1941,6 +1941,11 @@ action:
       # real_export: kein Messausreisser, und es wirkt sofort im selben Lauf (der
       # Hold-Timer startet erst weiter unten). Die Timer-Bedingung deckt den Rest
       # der Peak-Phase ab.
+      # Nur weichen, wenn Peak-Shaving auch anlaufen kann: Waehrend der
+      # WP-Anlaufsperre wird der Hold-Timer geloescht statt gestartet. Die
+      # Blockade gaebe ihren Tagesmarker sonst fuer nichts auf - und mit nur
+      # 100 W zwischen Boost- und Peak-Schwelle faellt beides regelmaessig
+      # zusammen.
       #
       # 2h-Mindestdauer nur als START-Schwelle; danach haelt die Blockade bis zum
       # dynamischen Ausstieg durch. Bei komplett offline BMS wird nicht auf 0 A
@@ -1948,7 +1953,9 @@ action:
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
            and not packs_offline_bestaetigt
-           and states(var_timer_peak) != 'active' and trigger.id != 'export_peak_schwelle'
+           and states(var_timer_peak) != 'active'
+           and (trigger.id != 'export_peak_schwelle'
+                or wp_sperre_aktiv or wp_boost_startet_gleich)
            and now().month not in winter_monate
            and blockade_dyn_t != ''
            and (aktueller_modus == 'blockade'
@@ -3376,10 +3383,10 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr, da genügend Sonne vorhanden: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Blockade-Ende {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind) × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}, Faktor max 2.0.
-                    Verfügbar = Brutto-Überschuss ab Blockade-Ende {{ blockade_dyn_u_ab_t | round(1) }} kWh (Prognose bereits um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh).
-                    Informativ: Gesamt-Überschuss Resttag {{ blockade_dyn_ueber_ges | round(1) }} kWh).
+                    {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(1) }} kWh < Verfügbar {{ blockade_dyn_verf | round(1) }} kWh
+                    (Bedarf = {% if blockade_dyn_d_ab_t > 0.05 %}(freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% else %}freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% endif %} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}{% if ((faktor_fallback | float(1.2)) * (prognose_unsicherheit | float(1.0))) >= 2.0 %}, Faktor gedeckelt auf 2.0{% endif %} = {{ blockade_dyn_bedarf | round(1) }} kWh.
+                    Verfügbar = Brutto-Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(1) }} kWh (Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag als Kehrwert des Eskalationsfaktors, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh) = {{ blockade_dyn_verf | round(1) }} kWh.
+                    Informativ: Prognose bis Ladebeginn: {{ ((blockade_dyn_ueber_ges * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2)))) - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung & Lastspitzen-Kappung).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3436,9 +3443,13 @@ action:
                   # Wartezeit folgt der Sollwert dem ueber den Nachmittag steigenden
                   # Zielstrom in Schritten von wenigen Ampere - drei Registerschreiben
                   # in 50 Minuten, ohne dass die Batterie davon schneller voll wird.
-                  # Absenken bleibt traeger und nur unterhalb von kein_absenken_ab_soc.
+                  # Absenken bleibt traeger und nur unterhalb von kein_absenken_ab_soc
+                  # - auch fuer den Bypass: Sonst senkt Prio 8 nach jedem
+                  # Peak-Shaving auch bei fast voller Batterie zurueck und
+                  # verzoegert genau das Vollwerden, das die Schwelle schuetzen soll.
                   update_freigegeben: >
-                    {{ fremder_modus or
+                    {{ (fremder_modus and (diff >= 0
+                        or aktueller_soc < (kein_absenken_ab_soc | float(90)))) or
                        (diff >= 10) or
                        (diff >= 5 and min_since >= 60) or
                        (aktueller_soc < (kein_absenken_ab_soc | float(90)) and
