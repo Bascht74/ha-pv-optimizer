@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.7.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.7.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.7.1]"
+      bp_version: "[V5.7.2]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1165,18 +1165,25 @@ action:
           1.5
         {% endif %}
       # Ladevorlaeufe fuer Logmeldungen: aus den Stunden wieder lesbare Dauern.
-      # fallb_vorlauf_text ist der um fallb_vorlauf_abzug verkuerzte Wert,
-      # mit dem Fall B prueft.
       ladevorlauf_text: >-
         {%- set h = (var_ladevorlauf | float(1.0)) -%}
         {%- set st = h | int -%}
         {%- set mi = ((h - st) * 60) | round(0) | int -%}
         {{ (st ~ ' h') if mi == 0 else ((st ~ ' h ' ~ mi ~ ' min') if st > 0 else (mi ~ ' min')) }}
-      fallb_vorlauf_text: >-
+      # Fall B prueft mit dem um fallb_vorlauf_abzug verkuerzten Vorlauf. Wird
+      # der dabei 0 (kurzer Ladevorlauf), trennt die beiden Vergleichswerte
+      # nicht mehr der Vorlauf, sondern allein das Ladefenster - die Meldung
+      # muss dann eine andere Groesse und einen anderen Grund nennen.
+      fallb_vorlauf_satz: >-
         {%- set h = [ (var_ladevorlauf | float(1.0)) - (fallb_vorlauf_abzug | float(0.5)), 0 ] | max -%}
         {%- set st = h | int -%}
         {%- set mi = ((h - st) * 60) | round(0) | int -%}
-        {{ (st ~ ' h') if mi == 0 else ((st ~ ' h ' ~ mi ~ ' min') if st > 0 else (mi ~ ' min')) }}
+        {%- if h < 0.01 -%}im Ladefenster
+        {%- else -%}bis {{ (st ~ ' h') if mi == 0 else ((st ~ ' h ' ~ mi ~ ' min') if st > 0 else (mi ~ ' min')) }} vor dem letzten PV-Überschuss{%- endif -%}
+      fallb_vorlauf_grund: >-
+        {%- if ([ (var_ladevorlauf | float(1.0)) - (fallb_vorlauf_abzug | float(0.5)), 0 ] | max) < 0.01 -%}
+        die späten Zeitfenster liefern zu wenig für den Ladestrom
+        {%- else -%}dann bliebe kein Vorlauf mehr{%- endif -%}
       min_reststunden: >
         {% set p = (min_reststunden | string).split(':') %}
         {% if p | length >= 2 %}
@@ -3269,7 +3276,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh bis {{ fallb_vorlauf_text }} vor dem letzten PV-Überschuss — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber dann bliebe kein Vorlauf mehr{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
