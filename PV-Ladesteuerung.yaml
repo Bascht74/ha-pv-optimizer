@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.7.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.8.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.7.2]"
+      bp_version: "[V5.8.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -844,6 +844,13 @@ action:
       # von 20 kWh nur 5 %) und bremst damit abends am staerksten - gerade dann,
       # wenn nur wenig Ueberschuss uebrig und die Prognose am sichersten ist.
       puffer_anteil: 0.10
+      # Gewicht von P50 im Blend, der Rest entfaellt auf P10:
+      # blend = p50 * anteil + p10 * (1 - anteil). 0.50 = Mittelwert beider,
+      # 0.333 = zwei Drittel P10, 0.25 = drei Viertel P10. Kleiner heisst
+      # vorsichtiger geplant. Der Wert ist die EINZIGE Stelle, an der die
+      # Prognose-Unsicherheit in die Planung eingeht - ein zusaetzlicher
+      # Abschlag darauf zaehlte den P10-Abstand ein zweites Mal.
+      blend_p50_anteil: 0.333
       # Ab welchem Anteil des Ladefensters der Realitaets-Check greift. Frueher
       # bestimmt eine einzelne Wolkenluecke den Quotienten, spaeter bleibt zu
       # wenig Ladezeit, um noch nachzusteuern.
@@ -1269,6 +1276,9 @@ action:
           {{ default_arr }}
         {% endif %}
 
+      # HINWEIS: Diese Variable wird derzeit nirgends gelesen (reine Diagnose).
+      # Sie traegt die Blend-Formel trotzdem mit, damit bei einer Aenderung der
+      # Gewichtung keine zweite Definition zurueckbleibt.
       solcast_rest_blended: >
         {% set ns = namespace(val=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -1278,7 +1288,7 @@ action:
 
             {% if s_start >= current_period and s_start.date() == now().date() %}
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
-              {% set blend = ((stunde.pv_estimate + stunde.pv_estimate10) / 2) * 0.5 %}
+              {% set blend = (stunde.pv_estimate * (blend_p50_anteil | float(0.333)) + stunde.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
@@ -1352,12 +1362,12 @@ action:
       real_export: "{{ grid_export }}"
 
   # ====================================================================
-  # ABSCHLAG AUF DIE PROGNOSE (Prognose-Unsicherheit + Realitaets-Check)
-  # Beide Groessen sagen dasselbe aus - der Ertrag wird unter dem geplanten
-  # Blend liegen - und gehoeren deshalb auf die Ertragsseite, nicht als
-  # Aufschlag auf den Ladestrom. Sie laufen gegenlaeufig (breites P10/P50-Band
-  # heisst tiefer Blend und damit kleiner Realitaets-Abschlag), weshalb der
-  # groessere Abschlag gewinnt statt beide zu multiplizieren.
+  # ABSCHLAG AUF DIE PROGNOSE (Realitaets-Check)
+  # Die Prognose-Unsicherheit steckt bereits im Blend: blend_p50_anteil
+  # gewichtet P10 hoeher als P50. Ein zusaetzlicher Faktor aus demselben
+  # P10/P50-Abstand wuerde ihn ein zweites Mal abziehen - der Abstand ginge
+  # dann quadratisch ein. Hier bleibt deshalb nur der Realitaets-Check: der
+  # gemessene Tagesertrag gegen den Blend der abgelaufenen Zeitfenster.
   # ====================================================================
   - variables:
       trend_daten: >
@@ -1368,7 +1378,7 @@ action:
           {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start.date() == jetzt.date() %}
-              {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
+              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.333)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
               {# Fenster = die Slots, in denen die PV ueber dem Hausverbrauch
                  liegt, in denen also ueberhaupt geladen wuerde. Das schneidet
                  Morgen- und Abendrand physikalisch ab; ein Kriterium ueber den
@@ -1440,8 +1450,10 @@ action:
         {% else %}
           1.0
         {% endif %}
-      # P50 / Blend der Restslots. Liegen P10 und P50 dicht beieinander, ist die
-      # Prognose sicher (~1,0); klaffen sie auseinander, steigt der Quotient.
+      # P50 / Blend der Restslots - reine DIAGNOSEGROESSE fuer die Logtexte.
+      # Sie regelt nichts mehr: Die Unsicherheit wirkt ueber blend_p50_anteil
+      # direkt im Blend. Achtung beim Lesen alter Logs: Der Wert haengt an der
+      # gewaehlten Gewichtung, bei 1/3 faellt er hoeher aus als bei 1/2.
       prognose_unsicherheit: >
         {% set p50 = trend_dict.p50_rest | float(0) %}
         {% set bl = trend_dict.blend_rest | float(0) %}
@@ -1450,14 +1462,11 @@ action:
         {% else %}
           1.0
         {% endif %}
-      # Wirksamer Abschlag auf die erwartete PV: der GROESSERE der beiden, nicht
-      # ihr Produkt - sie messen ueberlappend dasselbe und multipliziert
-      # untertreiben sie den Ertrag deutlich (gegen die Messwoche geprueft).
-      # Untergrenze trend_min_faktor entspricht dem alten Unsicherheits-Deckel
-      # von 2,0 auf der Batterieseite.
+      # Wirksamer Abschlag auf die erwartete PV: nur noch der Realitaets-Check.
+      # Solange er keinen belastbaren Wert hat, bleibt es bei 1,0 - der Blend
+      # traegt die Vorsicht dann allein.
       pv_abschlag: >
-        {{ [[ [ 1 / (prognose_unsicherheit | float(1.0)), trend_faktor | float(1.0) ] | min,
-               trend_min_faktor | float(0.5) ] | max, 1.0 ] | min }}
+        {{ [[ trend_faktor | float(1.0), trend_min_faktor | float(0.5) ] | max, 1.0 ] | min }}
 
   # ====================================================================
   # NEU: ZEITANTEILIGE HALBSTUNDEN-SCHLEIFE (Ladezeit + Defizit)
@@ -1477,7 +1486,7 @@ action:
                 {% set anteil = 1.0 %}
               {% endif %}
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
-              {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
+              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.333)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {# Der Abschlag trifft die erwartete PV, nicht spaeter den
@@ -1532,9 +1541,13 @@ action:
         {% if pmax <= 0 %}
           {{ rest_slots }}
         {% else %}
+          {# Die Slots in rest_slots tragen pv_abschlag bereits, tages_netto_pmax
+             kommt dagegen aus dem unrabattierten Blend. Ohne denselben Faktor auf
+             der Grenze haenge die Fensterlaenge an der Hoehe des Abschlags statt
+             allein an der Form der Prognose. #}
           {% set ns = namespace(last=-1) %}
           {% for s in rest_slots %}
-            {% set grenze = pmax * (fenster_mindest_anteil | float(0.15)) * (s[1] | float(0)) %}
+            {% set grenze = pmax * (fenster_mindest_anteil | float(0.15)) * (s[1] | float(0)) * (pv_abschlag | float(1.0)) %}
             {% if (s[0] | float(0)) >= grenze %}
               {% set ns.last = loop.index0 %}
             {% endif %}
@@ -1711,17 +1724,22 @@ action:
         {% endif %}
         {{ 2 if (d | abs) < 0.1 else 1 }}
 
+      # Erscheint IMMER: Ohne den Unsicherheits-Abschlag greift der
+      # Realitaets-Check an vielen Tagen gar nicht, und dann nennte keine
+      # Meldung mehr, worauf die erwartete PV ueberhaupt beruht.
       trend_log_addon: >-
-        {%- if (pv_abschlag | float(1.0)) < 1.0 -%}
-        {{ ' Erwartete PV je Zeitfenster auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' % gekürzt' ~
-           (' (kleinerer Wert aus Realitäts-Check ' ~ ((trend_faktor | float(1.0)) * 100) | round(0) | int ~ ' % und Prognose-Unsicherheit ' ~
-             (100 / (prognose_unsicherheit | float(1.0))) | round(0) | int ~ ' %; Realitäts-Check = bis jetzt ' ~ trend_real_bisher | round(1) ~
-             ' kWh erzeugt gegenüber prognostizierten ' ~ trend_blend_bisher | round(1) ~ ' kWh, Ladefenster ' ~ trend_fenster_von ~ '–' ~
-             trend_fenster_bis ~ ', davon ' ~ (trend_zeit_anteil * 100) | round(0) | int ~ ' % vergangen)'
+        {{ ' Erwartete PV je Zeitfenster: ' ~ ((1 - (blend_p50_anteil | float(0.333))) * 100) | round(0) | int ~
+           ' % P10 + ' ~ ((blend_p50_anteil | float(0.333)) * 100) | round(0) | int ~ ' % P50' ~
+           ((' (Realitäts-Check ' ~
+             (('kürzt auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' %')
+              if (pv_abschlag | float(1.0)) < 1.0 else 'ohne Kürzung') ~
+             ': bis jetzt ' ~ trend_real_bisher | round(1) ~ ' kWh erzeugt gegenüber prognostizierten ' ~
+             trend_blend_bisher | round(1) ~ ' kWh, Ladefenster ' ~ trend_fenster_von ~ '–' ~ trend_fenster_bis ~
+             ', davon ' ~ (trend_zeit_anteil * 100) | round(0) | int ~ ' % vergangen)')
             if trend_aktiv else
-            ' (Prognose-Unsicherheit ' ~ (prognose_unsicherheit | float(1.0)) | round(2) ~
-             '; Realitäts-Check noch ohne belastbaren Wert, Ladefenster erst zu ' ~ (trend_zeit_anteil * 100) | round(0) | int ~ ' % vergangen)') ~ '.' }}
-        {%- endif -%}
+            (' (Realitäts-Check noch ohne belastbaren Wert, Ladefenster ' ~ trend_fenster_von ~ '–' ~ trend_fenster_bis ~
+             (' hat noch nicht begonnen' if (trend_zeit_anteil | float(0)) <= 0
+              else ' erst zu ' ~ (trend_zeit_anteil * 100) | round(0) | int ~ ' % vergangen') ~ ')')) ~ '.' }}
       temp_log_addon: "{{ (' (Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
@@ -1864,7 +1882,7 @@ action:
           {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start > now() and s_start.date() == now().date() %}
-              {% set blend = ((slot.pv_estimate + slot.pv_estimate10) / 2) * 0.5 %}
+              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.333)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
@@ -1908,15 +1926,17 @@ action:
         {% for i in range(nutzbar | length) %}
           {% if i < nsl.last_pos %}{% set nsl.d_aufholbar = nsl.d_aufholbar + nutzbar[i][3] %}{% endif %}
         {% endfor %}
-        {# Faktor auf den GESAMTEN Bedarf (freier Platz + Nachladebedarf):
-           faktor_fallback, mit prognose_unsicherheit skaliert (1,0..2,0),
-           Deckel 2,0. An unsicheren Tagen steigt die Huerde -> Blockade lueftet
-           frueher / setzt gar nicht erst ein. Asymmetrie: lieber zu frueh aus
-           der Blockade (kostet nur Peak-Shaving-Fenster) als zu spaet.
+        {# Faktor auf den GESAMTEN Bedarf (freier Platz + Nachladebedarf).
+           Nur noch faktor_fallback: Die Prognose-Unsicherheit steckt bereits
+           in der PV-Seite (blend_p50_anteil gewichtet P10 hoeher). Sie hier
+           ein zweites Mal aufzuschlagen wuerde beide Seiten gleichsinnig
+           verschaerfen - genau die Doppelzaehlung, die auf der PV-Seite
+           beseitigt wurde. Asymmetrie bleibt: lieber zu frueh aus der Blockade
+           (kostet nur Peak-Shaving-Fenster) als zu spaet.
            Der Ladevorlauf wirkt hier bewusst NICHT mit - er regelt allein den
            Ladestrom in Prio 8; sonst wuerde ein groesserer Vorlauf zugleich das
            Peak-Shaving-Fenster verkuerzen. #}
-        {% set ziel_faktor = [ faktor_fallback * (prognose_unsicherheit | float(1.0)), 2.0 ] | min %}
+        {% set ziel_faktor = faktor_fallback | float(1.2) %}
         {% set ns2 = namespace(best='', pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
         {% for i in range(nutzbar | length) %}
           {% if nutzbar[i][1] %}
@@ -3276,16 +3296,23 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da{% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
               # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wr_max_charge }}"
-                data:
-                  value: "{{ target_p0 }}"
+              # Nur schreiben, wenn sich der Wert aendert - nach der Nacht steht
+              # der Sollwert bereits auf Maximum. Die Meldung selbst kommt trotzdem:
+              # Sie ist die eigentliche Information, denn der Modus wechselt.
+              - if:
+                  - condition: template
+                    value_template: "{{ (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) }}"
+                then:
+                  - action: number.set_value
+                    target:
+                      entity_id: "{{ var_wr_max_charge }}"
+                    data:
+                      value: "{{ target_p0 }}"
               - if:
                   - condition: template
                     value_template: "{{ var_lade_modus != '' }}"
@@ -3414,7 +3441,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
-                    (Bedarf = {% if blockade_dyn_d_ab_t > 0.05 %}(freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% else %}freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% endif %} × Eskalationsfaktor {{ faktor_fallback }} × Prognose-Unsicherheit {{ prognose_unsicherheit | round(2) }}{% if ((faktor_fallback | float(1.2)) * (prognose_unsicherheit | float(1.0))) >= 2.0 %}, Faktor gedeckelt auf 2.0{% endif %} = {{ blockade_dyn_bedarf | round(1) }} kWh.
+                    (Bedarf = {% if blockade_dyn_d_ab_t > 0.05 %}(freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% else %}freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% endif %} × Eskalationsfaktor {{ faktor_fallback }} = {{ blockade_dyn_bedarf | round(1) }} kWh.
                     Verfügbar = Brutto-Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(1) }} kWh (Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag als Kehrwert des Eskalationsfaktors, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh) = {{ blockade_dyn_verf | round(1) }} kWh.
                     Informativ: Prognose bis Ladebeginn: {{ ((blockade_dyn_ueber_ges * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2)))) - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung & Lastspitzen-Kappung).
                   entity_id: !input helper_logbook_dummy
