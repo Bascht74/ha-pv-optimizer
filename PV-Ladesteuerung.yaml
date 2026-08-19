@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.8.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.8.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.8.0]"
+      bp_version: "[V5.8.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -3146,11 +3146,19 @@ action:
       # fliesst kein Ladestrom - ein Deckel schuetzt dort nichts, wuerde aber
       # den Nachtwert ueberschreiben und das Log fuellen. Zum Sonnenaufgang
       # greift er lange vor dem ersten nennenswerten Ertrag.
+      #
+      # ENTPRELLT: temperatur_limit_ampere faellt schon beim ersten fehlenden
+      # Messwert auf den Notlauf-Strom, denn packs_online kennt keine Wartezeit.
+      # Ein Sensor-Aussetzer von Sekunden wuerde den Ladestrom sonst fuer
+      # Stunden drosseln. Eingegriffen wird deshalb nur, wenn die Begrenzung
+      # aus einer GEMESSENEN Temperatur stammt (packs_online > 0) oder der
+      # Ausfall ueber offline_debounce_s bestaetigt ist.
       - alias: "PRIO 0: SICHERHEITS-OBERGRENZE DURCHSETZEN"
         conditions:
           - condition: template
             value_template: >
               {{ is_day
+                 and (packs_online | int(0) > 0 or packs_offline_bestaetigt)
                  and (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999))
                  and ((aktueller_ladestrom | float(0)) - (temperatur_limit_ampere | float(0))) > 1 }}
         sequence:
@@ -3296,7 +3304,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da{% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
@@ -3322,6 +3330,28 @@ action:
                       entity_id: "{{ var_lade_modus }}"
                     data:
                       option: "fall_b_max"
+          # WIEDERAUFNAHME: Faellt der Ladestrom waehrend Fall B unter das Ziel -
+          # etwa weil Prio 0 bei einem BMS-Ausfall gedrosselt hat -, hebt ihn
+          # sonst niemand wieder an: Prio 8 ist im Modus fall_b_max stillgelegt,
+          # und der Block oben schreibt nur beim Moduswechsel. Gegen Ping-Pong
+          # mit Prio 0 schuetzt target_p0 selbst, denn es traegt den Deckel:
+          # solange die Begrenzung gilt, ist target_p0 gleich dem Ist-Wert.
+          - if:
+              - condition: template
+                value_template: >
+                  {{ aktueller_modus == 'fall_b_max'
+                     and ((target_p0 | float(0)) - (aktueller_ladestrom | float(0))) > 1 }}
+            then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält.{{ temp_log_addon }}"
+                  entity_id: !input helper_logbook_dummy
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wr_max_charge }}"
+                data:
+                  value: "{{ target_p0 }}"
 
       # Der Zweig haelt nur den zuletzt gesetzten Wert und bleibt in der Kaskade,
       # damit Prio 6/8 nicht dazwischenregeln. Ein Absenken auf 0 A braucht es
