@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.8.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.8.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.8.1]"
+      bp_version: "[V5.8.2]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -850,7 +850,7 @@ action:
       # vorsichtiger geplant. Der Wert ist die EINZIGE Stelle, an der die
       # Prognose-Unsicherheit in die Planung eingeht - ein zusaetzlicher
       # Abschlag darauf zaehlte den P10-Abstand ein zweites Mal.
-      blend_p50_anteil: 0.333
+      blend_p50_anteil: 0.5
       # Ab welchem Anteil des Ladefensters der Realitaets-Check greift. Frueher
       # bestimmt eine einzelne Wolkenluecke den Quotienten, spaeter bleibt zu
       # wenig Ladezeit, um noch nachzusteuern.
@@ -1288,7 +1288,7 @@ action:
 
             {% if s_start >= current_period and s_start.date() == now().date() %}
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
-              {% set blend = (stunde.pv_estimate * (blend_p50_anteil | float(0.333)) + stunde.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
+              {% set blend = (stunde.pv_estimate * (blend_p50_anteil | float(0.5)) + stunde.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
@@ -1378,7 +1378,7 @@ action:
           {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start.date() == jetzt.date() %}
-              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.333)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
+              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {# Fenster = die Slots, in denen die PV ueber dem Hausverbrauch
                  liegt, in denen also ueberhaupt geladen wuerde. Das schneidet
                  Morgen- und Abendrand physikalisch ab; ein Kriterium ueber den
@@ -1486,7 +1486,7 @@ action:
                 {% set anteil = 1.0 %}
               {% endif %}
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
-              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.333)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
+              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {# Der Abschlag trifft die erwartete PV, nicht spaeter den
@@ -1728,8 +1728,8 @@ action:
       # Realitaets-Check an vielen Tagen gar nicht, und dann nennte keine
       # Meldung mehr, worauf die erwartete PV ueberhaupt beruht.
       trend_log_addon: >-
-        {{ ' Erwartete PV je Zeitfenster: ' ~ ((1 - (blend_p50_anteil | float(0.333))) * 100) | round(0) | int ~
-           ' % P10 + ' ~ ((blend_p50_anteil | float(0.333)) * 100) | round(0) | int ~ ' % P50' ~
+        {{ ' Erwartete PV je Zeitfenster: ' ~ ((1 - (blend_p50_anteil | float(0.5))) * 100) | round(0) | int ~
+           ' % P10 + ' ~ ((blend_p50_anteil | float(0.5)) * 100) | round(0) | int ~ ' % P50' ~
            ((' (Realitäts-Check ' ~
              (('kürzt auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' %')
               if (pv_abschlag | float(1.0)) < 1.0 else 'ohne Kürzung') ~
@@ -1882,7 +1882,7 @@ action:
           {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start > now() and s_start.date() == now().date() %}
-              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.333)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.333)))) * 0.5 %}
+              {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
