@@ -1,0 +1,40 @@
+name: Release
+
+# Von Hand ausloesen (Actions -> Release -> Run workflow, Branch main).
+# Liest die Version aus blueprint.name, nimmt die passende Sektion aus
+# CHANGELOG.md als Release-Notes und legt Tag und GitHub-Release an.
+# Bricht ab, wenn die Tests rot sind, der Tag schon existiert oder die
+# Sektion fehlt - so kann kein Release ohne Changelog-Eintrag entstehen.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+      - name: Version und Release-Notes aus dem Repository lesen
+        id: v
+        run: |
+          version=$(sed -n '2p' PV-Ladesteuerung.yaml | grep -o 'V[0-9]*\.[0-9]*\.[0-9]*')
+          test -n "$version" || { echo "Keine Version in blueprint.name"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
+            echo "Tag $version existiert bereits"; exit 1
+          fi
+          awk -v v="## $version" '$0 == v {f=1; next} /^## / {f=0} f' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          test -s notes.md || { echo "CHANGELOG.md hat keine Sektion $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release $version:"; cat notes.md
+      - name: Tag und Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.v.outputs.version }}" --target "$GITHUB_SHA" --title "${{ steps.v.outputs.version }}" --notes-file notes.md

@@ -55,6 +55,7 @@ Bumping rules:
 - The working file always carries the *next*, not-yet-published version number.
 - Within one unpublished cycle, do not increment the same level twice (e.g. stay at 3.0.1, don't go to 3.0.2 for a second patch in the same cycle) — instead raise the *scheme level* if the accumulated changes warrant it (patch → minor if a real behavior change joins the cycle; → major on a breaking change).
 - Only bump again after being explicitly told a version was published — that starts a new cycle.
+- **Publishing** = running the `Release` workflow (`.github/workflows/release.yml`, `workflow_dispatch` on `main`, triggerable through the GitHub API). It runs the tests, reads the version from `blueprint.name`, takes that version's section from `CHANGELOG.md` as the notes, and creates tag and GitHub release. It refuses when the tag exists or the section is missing. Tags cannot be pushed from a session (the credential gets 403 on `refs/tags/*`), so never try; use the workflow.
 - Don't delete existing comments unasked when bumping — but don't add new history either (see "Code comments and input text").
 - **Never bump the version without being asked.**
 

@@ -1,6 +1,6 @@
 <!--
-Dieses Repository hat keine CI. Alles, was hier steht, ist Handarbeit —
-und genau deshalb steht es hier. Abschnitte, die nicht zutreffen, ersatzlos löschen.
+Die GitHub Action prüft nur, was sich mechanisch prüfen lässt. Der Rest ist
+Handarbeit — und genau deshalb steht er hier. Abschnitte, die nicht zutreffen, ersatzlos löschen.
 -->
 
 ## Release note
