@@ -285,8 +285,9 @@ class Harness:
             int=ha_int,
             round=ha_round,
             from_json=json.loads,
-            # HA serialisiert datetime-Objekte (z. B. period_start im Solcast-Attribut) als ISO-String.
-            to_json=lambda v, **kw: json.dumps(v, default=lambda o: o.isoformat() if hasattr(o, "isoformat") else str(o), **kw),
+            # Wie HA: datetime-Objekte (period_start im Solcast-Attribut) sind NICHT
+            # serialisierbar - to_json wirft dann "Type is not JSON serializable".
+            to_json=lambda v, **kw: json.dumps(v, **kw),
             as_datetime=ha_as_datetime,
             as_local=ha_as_local,
             as_timestamp=ha_as_timestamp,

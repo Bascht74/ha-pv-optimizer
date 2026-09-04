@@ -3,6 +3,15 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V5.10.2
+
+Fixed
+- The diagnostic recording writes again. The Solcast forecast attribute carries
+  its slot starts as datetime objects, which the template JSON encoder rejects;
+  the whole line was lost with a render error. Slot starts are now written as
+  ISO strings, and the test harness rejects datetime objects the same way Home
+  Assistant does, so the case is covered.
+
 ## V5.10.1
 
 Fixed

@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.10.1]"
+      bp_version: "[V5.10.2]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1533,6 +1533,13 @@ action:
           entity_id: notify.pv_optimizer_aufzeichnung
         data:
           message: >-
+            {# to_json kann keine datetime-Objekte: period_start der Solcast-Slots als ISO-String. #}
+            {% set fc = namespace(liste=[]) %}
+            {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+              {% set fc.liste = fc.liste + [{'period_start': as_datetime(s.period_start).isoformat(),
+                   'pv_estimate': s.pv_estimate, 'pv_estimate10': s.pv_estimate10,
+                   'pv_estimate90': s.get('pv_estimate90')}] %}
+            {% endfor %}
             {% set ents = [
                  ('battery_soc_sensor', var_battery_soc, {}),
                  ('battery_power_sensor', var_battery_power, {}),
@@ -1557,7 +1564,7 @@ action:
                  ('pv_power_sensor', var_pv_power, {}),
                  ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
                  ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
-                 ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': state_attr(var_solcast_heute, 'detailedForecast')}),
+                 ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
                  ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
                  ('solcast_current_sensor', var_pv_forecast, {}),
                  ('solcast_next_hour_sensor', var_solcast_next_hour, {'estimate10': state_attr(var_solcast_next_hour, 'estimate10')}),

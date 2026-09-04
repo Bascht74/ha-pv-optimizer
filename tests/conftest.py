@@ -75,7 +75,7 @@ def prognose(tag: dt.date, kw_je_slot: list[float], start: dt.time, p10_anteil: 
         idx = (i - (start.hour * 2 + start.minute // 30))
         kw = kw_je_slot[idx] if 0 <= idx < len(kw_je_slot) else 0.0
         slots.append({
-            "period_start": t.isoformat(),
+            "period_start": t,  # datetime, wie die Solcast-Integration es liefert
             "pv_estimate": round(kw, 4),
             "pv_estimate10": round(kw * p10_anteil, 4),
             "pv_estimate90": round(kw * 1.2, 4),
@@ -120,14 +120,14 @@ def szenario(
     vor_1h = jetzt - dt.timedelta(hours=1)
     profil = [profil_kwh] * 48 if isinstance(profil_kwh, (int, float)) else list(profil_kwh)
     forecast = forecast if forecast is not None else prognose_real(jetzt.date())
+    start = lambda s: s["period_start"] if isinstance(s["period_start"], dt.datetime) else dt.datetime.fromisoformat(s["period_start"])  # noqa: E731
     aktueller_slot = next((s for s in forecast
-                           if dt.datetime.fromisoformat(s["period_start"]) <= jetzt
-                           < dt.datetime.fromisoformat(s["period_start"]) + dt.timedelta(minutes=30)), None)
+                           if start(s) <= jetzt < start(s) + dt.timedelta(minutes=30)), None)
     pv_jetzt_w = (aktueller_slot["pv_estimate"] * 1000) if aktueller_slot else 0.0
     naechste_h_kwh = sum(s["pv_estimate"] * 0.5 for s in forecast
-                         if jetzt <= dt.datetime.fromisoformat(s["period_start"]) < jetzt + dt.timedelta(hours=1))
+                         if jetzt <= start(s) < jetzt + dt.timedelta(hours=1))
     rest_kwh = sum(s["pv_estimate"] * 0.5 for s in forecast
-                   if dt.datetime.fromisoformat(s["period_start"]) >= jetzt)
+                   if start(s) >= jetzt)
 
     def z(name: str, state, attributes: dict | None = None, last_changed: dt.datetime | None = None) -> Zustand:
         return Zustand(e(name), str(state), attributes or {}, last_changed or vor_1h)
