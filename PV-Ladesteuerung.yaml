@@ -1503,6 +1503,146 @@ action:
         {% if pack3_online %}{% set vals = vals + [states(var_bms3_temp_max) | float(99)] %}{% endif %}
         {{ vals | max if vals | length > 0 else 99 }}
 
+  # DIAGNOSE-AUFZEICHNUNG (optional): existiert notify.pv_optimizer_aufzeichnung
+  # (File-Integration, Einrichtung im Package-Kopf), haengt jeder Halbstundenlauf
+  # eine JSON-Zeile mit allen Eingangswerten an - vor allem die Prognose, mit der
+  # dieser Lauf gerechnet hat; Solcast aendert die Kurve im Tagesverlauf. Fester
+  # Name statt Input-Feld: Wer die Entitaet nicht anlegt, verliert nichts.
+  # minute % 30 < 5 statt in [0, 30]: die Warteschlange kann den Lauf verzoegern.
+  - if:
+      - condition: trigger
+        id: monitoring_5min
+      - condition: template
+        value_template: "{{ now().minute % 30 < 5 and states.notify.pv_optimizer_aufzeichnung is not none }}"
+    then:
+      - variables:
+          # Inputs, die sonst nur direkt als !input oder umgerechnet vorliegen.
+          aufz_wr_grid_charge_current: !input wr_grid_charge_current
+          aufz_logbook_dummy: !input helper_logbook_dummy
+          aufz_wp_hysterese_number: !input wp_hysterese_number
+          aufz_wp_boost_button: !input wp_boost_button
+          aufz_duration_peak_hold: !input duration_peak_hold
+          aufz_duration_wp_laufzeit: !input duration_wp_laufzeit
+          aufz_duration_top_balancing: !input duration_top_balancing
+          aufz_duration_cooldown: !input duration_cooldown
+          aufz_ladevorlauf_stunden: !input ladevorlauf_stunden
+          aufz_min_reststunden: !input min_reststunden
+      - action: notify.send_message
+        target:
+          entity_id: notify.pv_optimizer_aufzeichnung
+        data:
+          message: >-
+            {% set ents = [
+                 ('battery_soc_sensor', var_battery_soc, {}),
+                 ('battery_power_sensor', var_battery_power, {}),
+                 ('vmax1_sensor', var_vmax1, {}),
+                 ('vmax2_sensor', var_vmax2, {}),
+                 ('vmax3_sensor', var_vmax3, {}),
+                 ('battery_total_charge', var_battery_total_charge, {}),
+                 ('battery_total_discharge', var_battery_total_discharge, {}),
+                 ('wr_max_charge_current', var_wr_max_charge, {}),
+                 ('wr_float_voltage_sensor', var_wr_float_voltage, {}),
+                 ('wr_battery_voltage_sensor', var_wr_battery_voltage, {}),
+                 ('wr_grid_charge_switch', var_wr_grid_charge_switch, {}),
+                 ('wr_grid_charge_current', aufz_wr_grid_charge_current, {}),
+                 ('wr_tou_1', var_wr_tou_1, {}),
+                 ('wr_tou_2', var_wr_tou_2, {}),
+                 ('wr_tou_3', var_wr_tou_3, {}),
+                 ('wr_tou_4', var_wr_tou_4, {}),
+                 ('wr_tou_5', var_wr_tou_5, {}),
+                 ('wr_tou_6', var_wr_tou_6, {}),
+                 ('grid_export_sensor', var_grid_export, {}),
+                 ('grid_export_kwh_heute', var_grid_export_kwh, {}),
+                 ('pv_power_sensor', var_pv_power, {}),
+                 ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
+                 ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
+                 ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': state_attr(var_solcast_heute, 'detailedForecast')}),
+                 ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
+                 ('solcast_current_sensor', var_pv_forecast, {}),
+                 ('solcast_next_hour_sensor', var_solcast_next_hour, {'estimate10': state_attr(var_solcast_next_hour, 'estimate10')}),
+                 ('helper_lade_modus', var_lade_modus, {}),
+                 ('helper_logbook_dummy', aufz_logbook_dummy, {}),
+                 ('helper_batterie_heute_voll', var_batterie_heute_voll, {}),
+                 ('json_tracking_sensor', var_json_tracking, {}),
+                 ('helper_blockade_beendet', var_helper_blockade_beendet, {}),
+                 ('helper_max_soc_heute', var_max_soc_heute, {}),
+                 ('speicherverlust_gesamt', var_speicherverlust, {}),
+                 ('helper_offener_verlust', var_offener_verlust, {}),
+                 ('helper_zwangsladung_aktiv', var_zwangsladung_aktiv, {}),
+                 ('helper_timer_peak', var_timer_peak, {}),
+                 ('helper_timer_cooldown', var_timer_cooldown, {}),
+                 ('helper_timer_wp_anlauf', var_timer_wp_anlauf, {}),
+                 ('helper_timer_wp_boost', var_timer_wp_boost, {'finishes_at': state_attr(var_timer_wp_boost, 'finishes_at')}),
+                 ('schatten_bms_sensor', var_schatten_bms, {'raw_drift_soc': state_attr(var_schatten_bms, 'raw_drift_soc')}),
+                 ('helper_tare_charge', var_helper_tare_charge, {}),
+                 ('helper_tare_discharge', var_helper_tare_discharge, {}),
+                 ('hausverbrauch_json_text', var_hausverbrauch_json, {}),
+                 ('eingriff_dauer_sensor', var_eingriff_dauer, {}),
+                 ('wp_water_heater', var_wp_water_heater, {'temperature': state_attr(var_wp_water_heater, 'temperature')}),
+                 ('wp_temp_sensor', var_wp_temp, {}),
+                 ('wp_hysterese_number', aufz_wp_hysterese_number, {}),
+                 ('wp_ziel_temp_number', var_wp_ziel_number, {}),
+                 ('wp_boost_button', aufz_wp_boost_button, {}),
+                 ('wp_kompressor_sensor', var_wp_kompressor, {}),
+                 ('bms1_temp_min_sensor', var_bms1_temp_min, {}),
+                 ('bms2_temp_min_sensor', var_bms2_temp_min, {}),
+                 ('bms3_temp_min_sensor', var_bms3_temp_min, {}),
+                 ('bms1_temp_max_sensor', var_bms1_temp_max, {}),
+                 ('bms2_temp_max_sensor', var_bms2_temp_max, {}),
+                 ('bms3_temp_max_sensor', var_bms3_temp_max, {}),
+               ] %}
+            {% set ns = namespace(liste=[]) %}
+            {% for name, e, attrs in ents if e != '' %}
+              {% set z = states[e] %}
+              {% set ns.liste = ns.liste + [{'input': name, 'state': states(e),
+                   'last_changed': z.last_changed.isoformat() if z is not none else none,
+                   'attributes': attrs}] %}
+            {% endfor %}
+            {{ {'zeit': now().isoformat(), 'version': bp_version, 'trigger': trigger.id, 'sun': states('sun.sun'),
+                'konfiguration': {
+                  'pack_capacity_ah': pack_capacity_ah,
+                  'nominale_spannung': nominale_spannung,
+                  'max_ampere': max_ampere,
+                  'min_ampere': min_ampere,
+                  'regler_offset_a': regler_offset_a,
+                  'notfall_ampere': notfall_ampere,
+                  'grid_ampere_zwangsladung': grid_ampere_zwangsladung,
+                  'schwelle_peak_shaving': var_schwelle_peak_shaving,
+                  'peak_ampere': peak_ampere,
+                  'duration_peak_hold': aufz_duration_peak_hold,
+                  'wp_boost_aktiv': var_wp_boost_aktiv,
+                  'schwelle_wp_boost': var_schwelle_wp_boost,
+                  'wp_ziel_temp_pv': var_wp_ziel_temp_pv,
+                  'wp_hysterese_pv': var_wp_hysterese_pv,
+                  'wp_ziel_temp_normal': var_wp_ziel_temp_normal,
+                  'wp_hysterese_normal': var_wp_hysterese_normal,
+                  'duration_wp_anlauf': var_dauer_wp_anlauf,
+                  'duration_wp_laufzeit': aufz_duration_wp_laufzeit,
+                  'top_balancing_voltage': top_balancing_voltage,
+                  'duration_top_balancing': aufz_duration_top_balancing,
+                  'float_voltage_balancing': var_float_balancing,
+                  'float_voltage_normal': var_float_normal,
+                  'default_tou_soc': default_tou_soc,
+                  'escalation_tou_soc': escalation_tou_soc,
+                  'crate_2_deg': crate_2_deg,
+                  'crate_5_deg': crate_5_deg,
+                  'crate_10_deg': crate_10_deg,
+                  'crate_12_deg': crate_12_deg,
+                  'crate_15_deg': crate_15_deg,
+                  'crate_20_deg': crate_20_deg,
+                  'crate_40_deg': crate_40_deg,
+                  'crate_45_deg': crate_45_deg,
+                  'zeit_blockade_ende': var_zeit_blockade,
+                  'ladevorlauf_stunden': aufz_ladevorlauf_stunden,
+                  'faktor_fallback': faktor_fallback,
+                  'puffer_kwh': puffer_kwh,
+                  'fallback_max_soc': fallback_max_soc,
+                  'fallback_min_kwh': fallback_min_kwh,
+                  'min_reststunden': aufz_min_reststunden,
+                  'duration_cooldown': aufz_duration_cooldown,
+                },
+                'entitaeten': ns.liste} | to_json }}
+
   - variables:
       limit_cold: >
         {% set t = temp_min_live %}

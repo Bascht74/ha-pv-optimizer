@@ -4,7 +4,7 @@ variables:-Kette des Blueprints ausserhalb von Home Assistant auszuwerten.
 
 Nachgebaut ist nur, was der Blueprint tatsaechlich benutzt:
 
-- states(entity), states[entity].state / .last_changed / .attributes
+- states(entity), states[entity].state / .last_changed / .attributes, states.domain.objekt
 - state_attr, is_state, now, utcnow, today_at, as_datetime, as_local,
   as_timestamp, timedelta
 - Filter float/int mit Default, round mit Methode (HA liefert bei
@@ -106,6 +106,23 @@ class States:
         if not entity_id or not isinstance(entity_id, str):
             return None
         return self.tabelle.get(entity_id)
+
+    def __getattr__(self, domain: str) -> "_DomainStates":
+        # states.notify.xyz -> Zustand oder None, wie in Home Assistant.
+        if domain.startswith("_"):
+            raise AttributeError(domain)
+        return _DomainStates(self.tabelle, domain)
+
+
+class _DomainStates:
+    def __init__(self, tabelle: dict[str, Zustand], domain: str):
+        self._tabelle = tabelle
+        self._domain = domain
+
+    def __getattr__(self, name: str) -> Zustand | None:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._tabelle.get(f"{self._domain}.{name}")
 
 
 # --------------------------------------------------------------------------
@@ -268,7 +285,8 @@ class Harness:
             int=ha_int,
             round=ha_round,
             from_json=json.loads,
-            to_json=lambda v, **kw: json.dumps(v, **kw),
+            # HA serialisiert datetime-Objekte (z. B. period_start im Solcast-Attribut) als ISO-String.
+            to_json=lambda v, **kw: json.dumps(v, default=lambda o: o.isoformat() if hasattr(o, "isoformat") else str(o), **kw),
             as_datetime=ha_as_datetime,
             as_local=ha_as_local,
             as_timestamp=ha_as_timestamp,

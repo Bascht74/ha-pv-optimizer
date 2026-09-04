@@ -10,7 +10,8 @@ A single Home Assistant Blueprint (`PV-Ladesteuerung.yaml`) for PV, battery, and
 
 - `PV-Ladesteuerung.yaml` — the blueprint itself (`domain: automation`, `mode: queued`). This is the only file under active development.
 - `pv-steuerung.yaml_` — companion Home Assistant package, a *template*: every helper the blueprint's inputs expect (`input_boolean`, `input_select`, `input_number`, `input_text`, `timer`, `utility_meter`, the intervention `binary_sensor` and its `history_stats`). Two `<HIER EINTRAGEN>` placeholders must be filled per site. Not a blueprint itself, not auto-loaded by Home Assistant under this filename.
-- `tests/` — `ha_jinja.py` renders the blueprint's `variables:` chain outside Home Assistant; `test_struktur.py` holds the mechanical checks, `test_rechnung.py` the computation regressions. `.github/workflows/check.yml` runs them.
+- `tests/` — `ha_jinja.py` renders the blueprint's `variables:` chain outside Home Assistant; `test_struktur.py` holds the mechanical checks, `test_rechnung.py` the computation regressions, `test_aufzeichnung.py` the recording round-trip. `.github/workflows/check.yml` runs them.
+- `tests/fixtures/*.jsonl` — lines written by the blueprint's diagnostic recording (one per half-hour run, all input values incl. the Solcast forecast the run saw). `szenario_aus_aufzeichnung` in `conftest.py` rebuilds the run; every line is pushed through the chain by `test_aufzeichnung.py`. Setup is described in the package header.
 - `CHANGELOG.md` — one entry per published version, `Fixed`/`Added`/`Changed`/`Removed`.
 - `LICENSE` — Apache 2.0.
 
@@ -134,4 +135,5 @@ Logbook messages follow one shape:
 - `mode: queued`, single automation, `choose:`-based priority cascade in the main action block: the first matching branch wins, and branch position determines precedence. Priorities are numbered in-code and kept contiguous; renumbering alone is a patch-level, non-behavioral change.
 - A separate, unnumbered branch group handles heat-pump hot-water boost (start/end/watchdog). Convention: only *initiating* steps get a priority number; cleanup/watchdog/end steps are named but not numbered, since they don't compete with other branches for precedence.
 - SoC is derived internally from a "shadow BMS" — cumulative charge/discharge counters rather than trusting the inverter's own SoC — but that calculation lives in a companion Home Assistant sensor *outside* this blueprint. The blueprint only ever writes tare/calibration helper values; it does not own the SoC formula.
+- The diagnostic recording writes to the fixed entity id `notify.pv_optimizer_aufzeichnung` and does nothing if it does not exist. This is the one deliberately hard-wired entity: opting in means creating the entity, not reconfiguring instances. Every new entity input must be added to the recording's entity list (`test_aufzeichnung_erfasst_jeden_input` enforces it).
 - Several `template` triggers exist purely to catch fast-moving conditions (grid export spikes, cell voltage thresholds) between the regular 5-minute polling cycle — don't assume every code path only runs on the 5-minute tick.
