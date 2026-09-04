@@ -5,6 +5,15 @@ All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 
 ## V5.10.0
 
+Added
+- Optional diagnostic recording. When an entity named
+  `notify.pv_optimizer_aufzeichnung` exists (File integration), every half-hour run
+  appends one JSON line with all input values: configuration, entity states with
+  `last_changed`, and the attributes the blueprint reads, above all the Solcast
+  forecast this run actually saw. Solcast reshapes the curve during the day, so a
+  later export cannot reproduce a decision. Without the entity nothing happens;
+  no new input field. The test harness rebuilds a run from such a line.
+
 Fixed
 - The daily housekeeping no longer depends on the inverter answering. The Modbus
   retry ends the run when the connection stays down, and the helper resets came

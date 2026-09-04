@@ -20,6 +20,20 @@
 # SOC-Sensor"). Er rechnet den Ladestand aus den Lade-/Entladezaehlern und den
 # beiden Tara-Werten unten und muss das Attribut raw_drift_soc liefern; er
 # gehoert zur Wechselrichter-Anbindung des Standorts, nicht in dieses Package.
+#
+# Optional: Diagnose-Aufzeichnung. Existiert notify.pv_optimizer_aufzeichnung,
+# haengt der Blueprint jede halbe Stunde eine JSON-Zeile mit allen Eingangs-
+# werten an - ohne diese Entitaet passiert nichts. Sie laesst sich NICHT per
+# YAML anlegen (die File-Integration kennt nur noch Config-Entries), sondern
+# nur ueber die Oberflaeche:
+#   1. Einstellungen -> Geraete & Dienste -> Integration hinzufuegen -> "File"
+#      -> Benachrichtigungsdienst, Dateipfad
+#      /config/www/pv_optimizer_aufzeichnung.jsonl, Zeitstempel AUS.
+#      (/config/www ist standardmaessig freigegeben, kein allowlist-Eintrag.)
+#   2. Einstellungen -> Entitaeten -> die neue notify-Entitaet -> Zahnrad ->
+#      Entitaets-ID auf notify.pv_optimizer_aufzeichnung aendern.
+# Download im Browser unter /local/pv_optimizer_aufzeichnung.jsonl (ohne
+# Anmeldung erreichbar, ca. 0,7 MB je Tag); die Datei gehoert nach tests/fixtures/.
 # ==============================================================================
 
 input_boolean:

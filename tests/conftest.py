@@ -6,10 +6,11 @@ PV-Kurve ist die geglaettete Erzeugung eines echten Tages an einem der beiden
 Standorte, die Batterie hat 2 x 314 Ah bei 51,2 V (32,2 kWh), das
 Verbrauchsprofil liegt bei 0,19 kWh je Halbstunde.
 
-Echte Solcast-Arrays gibt es hier noch nicht - dafuer muesste eine kleine
-Automation den detailedForecast taeglich in eine Datei schreiben. Sobald
-solche Aufzeichnungen vorliegen, gehoeren sie als JSON nach tests/fixtures/
-und die geloggten Entscheidungen des Tages werden zum Erwartungswert.
+Echte Laeufe kommen aus der Diagnose-Aufzeichnung des Blueprints (JSON-Zeilen
+an notify.pv_optimizer_aufzeichnung, Einrichtung im Package-Kopf). Solche
+Dateien gehoeren nach tests/fixtures/*.jsonl; szenario_aus_aufzeichnung baut
+aus jeder Zeile ein Harness, die geloggten Entscheidungen des Tages sind der
+Erwartungswert.
 """
 from __future__ import annotations
 
@@ -24,6 +25,8 @@ from ha_jinja import TZ, Harness, Zustand, input_definitionen, lade_yaml
 WURZEL = Path(__file__).resolve().parent.parent
 BLUEPRINT_PFAD = WURZEL / "PV-Ladesteuerung.yaml"
 PACKAGE_PFAD = WURZEL / "pv-steuerung.yaml_"
+FIXTURES_PFAD = WURZEL / "tests" / "fixtures"
+AUFZEICHNUNG_ENTITY = "notify.pv_optimizer_aufzeichnung"
 
 # Mittlere kW je Halbstunde, 08:00 bis 17:30 Serverzeit, aus einer echten
 # Tageskurve. Davor und danach 0.
@@ -176,6 +179,38 @@ def szenario(
     if zustands_overrides:
         tabelle.update(zustands_overrides)
     return Harness(blueprint, inputs, tabelle, jetzt, trigger_id)
+
+
+# --------------------------------------------------------------------------
+# Echte Laeufe aus der Diagnose-Aufzeichnung
+# --------------------------------------------------------------------------
+def aufzeichnung_lesen(zeile: str) -> dict:
+    """Eine Zeile der Aufzeichnung; ein Zeitstempel-Praefix der File-Integration wird uebersprungen."""
+    return json.loads(zeile[zeile.index("{"):])
+
+
+def szenario_aus_aufzeichnung(blueprint: dict, aufz: dict) -> Harness:
+    """
+    Baut aus einer aufgezeichneten Zeile das Harness fuer genau diesen Lauf:
+    Konfiguration wie an der Instanz, Entitaeten mit Zustand, last_changed und
+    den Attributen, die der Blueprint liest; nicht aufgezeichnete Entity-Inputs
+    waren an der Instanz leer.
+    """
+    inputs = standard_inputs(blueprint)
+    inputs.update(aufz["konfiguration"])
+    aufgezeichnet = {e["input"] for e in aufz["entitaeten"]}
+    for name, d in input_definitionen(blueprint).items():
+        if "entity" in (d.get("selector") or {}) and name not in aufgezeichnet:
+            inputs[name] = ""
+    tabelle: dict[str, Zustand] = {}
+    for e in aufz["entitaeten"]:
+        if e["last_changed"] is None:
+            continue  # Entitaet existierte nicht: states() liefert 'unknown', states[...] None
+        eid = inputs[e["input"]]
+        tabelle[eid] = Zustand(eid, str(e["state"]), e.get("attributes") or {},
+                               dt.datetime.fromisoformat(e["last_changed"]))
+    tabelle["sun.sun"] = Zustand("sun.sun", aufz["sun"])
+    return Harness(blueprint, inputs, tabelle, dt.datetime.fromisoformat(aufz["zeit"]), aufz["trigger"])
 
 
 def zeit(tag: dt.date, hh: int, mm: int = 0) -> dt.datetime:
