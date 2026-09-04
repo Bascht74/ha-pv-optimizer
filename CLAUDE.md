@@ -67,7 +67,8 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 - Prefer targeted edits over rewriting large blocks from memory — the file is large enough that blind rewrites risk silent corruption elsewhere.
 - Check every runtime-behavior change against real data (a Home Assistant trace, logbook export, or CSV) where possible, not just syntax validity — this project has a documented case of a syntactically valid fix that was logically inert.
 - `git diff` is the source of truth for what changed, not a prose description.
-- **Ask before creating a git commit**, even when the underlying code edit was already approved. Approving a commit approves the push with it — push to `origin/main` straight after, without asking again and without announcing it as a separate step. Only skip the push when explicitly told to.
+- **Ask before creating a git commit**, even when the underlying code edit was already approved. Approving a commit approves the push with it — push straight after, without asking again and without announcing it as a separate step. Only skip the push when explicitly told to.
+- **Work goes to a branch and a pull request, never straight to `main`.** Fill in `.github/pull_request_template.md`; its checklist is the validation list below in short form. There is no CI, so the PR body is the only record that the checks were run.
 - Do not add new blueprint `input:` fields without asking first — instances are hand-configured per site, and a new field means manual reassignment on each one.
 - **Every entity input carries `default: ""`**, including the ones that are mandatory in practice. Omitting `default` makes Home Assistant render the field differently and breaks instance loading outright instead of reporting what is missing. Mandatory fields are enforced at runtime by the startup check, which names them and stops the run.
 
