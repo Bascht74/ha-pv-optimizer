@@ -3,6 +3,15 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V5.10.1
+
+Fixed
+- The half-hour consumption slot is derived from the trigger time, not from the
+  clock at execution. The queued automation can delay the half-hour run by
+  minutes; from 15 minutes on, the measured energy landed in the following slot
+  of the consumption profile that the morning blockade and Prio 8 rely on. The
+  midnight detection of that run uses the same basis.
+
 ## V5.10.0
 
 Added

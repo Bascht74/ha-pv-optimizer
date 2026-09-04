@@ -209,3 +209,34 @@ def test_boost_startet_nur_mit_gueltigem_warmwasser_sensor(blueprint, tag, ww_st
     w = h.inputs["wp_temp_sensor"]
     h.states.tabelle[w] = Zustand(w, ww_state)
     assert h.auswerten(bis="wp_boost_startet_gleich")["wp_boost_startet_gleich"] is erwartet
+
+
+# --------------------------------------------------------------------------
+# Slot-Index des Verbrauchsprofils folgt dem Trigger, nicht der Uhr
+# --------------------------------------------------------------------------
+def _update_json_variablen(blueprint):
+    schritt = next(s for s in blueprint["action"]
+                   if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    return {k: v for t in schritt["then"] if isinstance(t, dict) and "variables" in t for k, v in t["variables"].items()}
+
+
+@pytest.mark.parametrize("trigger_hh, trigger_mm, verzug_min, erwartet", [
+    (14, 0, 0, 27),    # puenktlich: Slot 13:30-14:00
+    (14, 0, 17, 27),   # 17 Minuten in der Warteschlange: derselbe Slot, nicht 14:00-14:30
+    (0, 0, 16, 47),    # Mitternachtslauf verspaetet: letzter Slot des Vortags
+])
+def test_slot_index_folgt_dem_trigger_nicht_der_uhr(blueprint, tag, trigger_hh, trigger_mm, verzug_min, erwartet):
+    """
+    mode: queued kann den Halbstundenlauf hinter andere Laeufe schieben. Der Slot,
+    dessen Verbrauch verbucht wird, ist der vor der Trigger-Zeit - egal, wann der
+    Lauf tatsaechlich rechnet. Sonst landet der Wert ab 15 Minuten Verzug im
+    falschen Slot des EMA-Profils, an dem Blockade und Prio 8 haengen.
+    """
+    trigger_zeit = zeit(tag, trigger_hh, trigger_mm)
+    h = szenario(blueprint, trigger_zeit + dt.timedelta(minutes=verzug_min), trigger_id="update_json")
+    vars_ = _update_json_variablen(blueprint)
+    ctx = {"trigger": {"id": "update_json", "now": trigger_zeit}}
+    ctx.update(h._aufloesen({"var_hausverbrauch_json": vars_["var_hausverbrauch_json"]}, ctx))
+    assert h._aufloesen(vars_["h_index"], ctx) == erwartet
+    ist_mitternacht = h._aufloesen(vars_["ist_mitternachtslauf"], ctx)
+    assert ist_mitternacht is (trigger_hh == 0), f"ist_mitternachtslauf={ist_mitternacht!r}"
