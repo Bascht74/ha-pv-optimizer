@@ -2758,7 +2758,7 @@ action:
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
-                      message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Batterieladen auf {{ null_ampere }} A geändert, damit PV-Überschuss zur anlaufenden Wärmepumpe fließt (Wärmepumpen-Sperre aktiv). Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
+                      message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Nachlauf-Timer abgebrochen, damit der PV-Überschuss zur anlaufenden Wärmepumpe fließt, da die Wärmepumpen-Anlaufsperre aktiv ist. Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
                       entity_id: !input helper_logbook_dummy
             default:
               - action: logbook.log
@@ -3322,8 +3322,8 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(1) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
-                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(1) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ haus_log_addon }}{{ solcast_log_addon }}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    (Bedarf = (freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ haus_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
               # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
@@ -3465,9 +3465,14 @@ action:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p3 }}"
+              # 'blockade' nicht ueberschreiben - derselbe Guard wie in Prio 4.
+              # In einem Zeitraster-Lauf wird der Peak-Timer erst NACH der
+              # Austrittserkennung aufgezogen; blockade_aktiv ist dort noch true,
+              # der Austritt faellt aus. Ohne Guard ginge der gespeicherte Modus
+              # verloren und der Tagesmarker wuerde nie gesetzt.
               - if:
                   - condition: template
-                    value_template: "{{ var_lade_modus != '' }}"
+                    value_template: "{{ var_lade_modus != '' and aktueller_modus != 'blockade' }}"
                 then:
                   - action: input_select.select_option
                     target:
