@@ -1410,6 +1410,12 @@ action:
                 {% endif %}
                 {% set ns.p50_rest = ns.p50_rest + (slot.pv_estimate * 0.5 * anteil) %}
                 {% set ns.blend_rest = ns.blend_rest + (blend * anteil) %}
+                {# Der bereits abgelaufene Teil des laufenden Slots gehoert auf die
+                   Ist-Seite: trend_real_bisher ist ein Tageszaehler und enthaelt ihn
+                   schon. Ohne ihn ist der Nenner zu klein, der Realitaets-Check faellt
+                   zu optimistisch aus und saegt an jeder Slot-Grenze. Restslots haben
+                   anteil = 1,0 und tragen hier nichts bei. #}
+                {% set ns.blend_bisher = ns.blend_bisher + (blend * (1 - anteil)) %}
               {% endif %}
             {% endif %}
           {% endfor %}
@@ -2782,7 +2788,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen und Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W, zurück zum Normalbetrieb."
+                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %){% else %}die Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W liegt{% endif %}."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -3514,8 +3520,8 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
-                    (Bedarf = {% if blockade_dyn_d_ab_t > 0.05 %}(freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(1) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% else %}freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% endif %} × Eskalationsfaktor {{ faktor_fallback }} = {{ blockade_dyn_bedarf | round(1) }} kWh.
-                    Verfügbar = Brutto-Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(1) }} kWh (Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag als Kehrwert des Eskalationsfaktors, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(1) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh) = {{ blockade_dyn_verf | round(1) }} kWh.
+                    (Bedarf = {% if blockade_dyn_d_ab_t > 0.05 %}(freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% else %}freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% endif %} × Eskalationsfaktor {{ faktor_fallback }} = {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh.
+                    Verfügbar = Brutto-Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh (Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag als Kehrwert des Eskalationsfaktors, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh) = {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh.
                     Informativ: Prognose bis Ladebeginn: {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung & Lastspitzen-Kappung).
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
