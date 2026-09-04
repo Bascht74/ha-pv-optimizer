@@ -5,8 +5,9 @@ Halbstundenlauf mit allen Eingangswerten, so wie der Lauf sie gesehen hat. Einri
 steht im Kopf von `pv-steuerung.yaml_`, Download unter
 `/local/pv_optimizer_aufzeichnung.jsonl` der Instanz.
 
-Ablage: `<standort>_<datum>.jsonl`, z. B. `standort-a_2026-09-04.jsonl`. Ein
-Zeitstempel-Präfix der File-Integration vor dem `{` ist erlaubt.
+Ablage: `<standort>_<datum>.jsonl`. Die Dateien bleiben, wie sie heruntergeladen
+wurden: Die zwei Kopfzeilen der File-Integration, Testsendungen und ein Zeitstempel-
+Präfix vor dem `{` werden beim Einlesen übersprungen.
 
 `test_aufzeichnung.py` schickt jede Zeile jeder Datei durch die Variablenkette. Das
 belegt zunächst nur, dass die Kette mit echten Werten durchläuft. Eine Regression

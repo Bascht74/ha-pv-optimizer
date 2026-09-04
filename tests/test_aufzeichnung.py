@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from conftest import (AUFZEICHNUNG_ENTITY, FIXTURES_PFAD, aufzeichnung_lesen, standard_inputs,
+from conftest import (AUFZEICHNUNG_ENTITY, FIXTURES_PFAD, aufzeichnung_lesen, aufzeichnungen, standard_inputs,
                       szenario, szenario_aus_aufzeichnung, zeit)
 from ha_jinja import Harness, input_definitionen
 
@@ -95,10 +95,8 @@ def test_aufzeichnung_reproduziert_den_lauf(blueprint, tag, hh, soc):
 
 def _zeilen():
     for datei in sorted(FIXTURES_PFAD.glob("*.jsonl")):
-        with open(datei, encoding="utf-8") as f:
-            for nr, zeile in enumerate(f, 1):
-                if zeile.strip():
-                    yield pytest.param(zeile, id=f"{datei.name}:{nr}")
+        for nr, zeile in aufzeichnungen(datei):
+            yield pytest.param(zeile, id=f"{datei.name}:{nr}")
 
 
 @pytest.mark.parametrize("zeile", list(_zeilen()))
