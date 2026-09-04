@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.10.0]"
+      bp_version: "[V5.10.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1069,13 +1069,13 @@ action:
       - variables:
           var_hausverbrauch_json: !input hausverbrauch_json_text
           var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
-          # Finde die Halbstunde heraus, die exakt JETZT geendet hat.
-          # Beispiel: Trigger um 14:00 -> Es geht um 13:30 bis 14:00 Uhr. (now() - 15 Min = 13:45 Uhr).
-          # Daraus errechnet sich der korrekte Index (0 bis 47).
-          # WICHTIG: alles in EINEM Template. HA konvertiert datetime-Variablen zwischen
-          # Blöcken zu Strings; ein separates calc_time würde beim Zugriff auf .hour crashen.
+          # Die Halbstunde, die mit dem Trigger geendet hat: Trigger 14:00 -> Slot
+          # 13:30-14:00, Index aus (Trigger - 15 Min). Basis ist trigger.now, nicht
+          # now(): mode: queued kann den Lauf minutenlang verzoegern, der Zaehler
+          # gehoert aber zum Slot vor der Trigger-Zeit. Alles in EINEM Template -
+          # HA macht datetime-Variablen zwischen Bloecken zu Strings.
           h_index: >
-            {% set t = now() - timedelta(minutes=15) %}
+            {% set t = trigger.now - timedelta(minutes=15) %}
             {{ t.hour * 2 + (1 if t.minute >= 30 else 0) }}
           json_str_pre: "{{ states(var_hausverbrauch_json) }}"
       # UNKNOWN-SCHUTZ: Direkt nach einem HA-Neustart kann der Helfer kurz
@@ -1098,7 +1098,7 @@ action:
           # Kaltstart-Default darf NUR beim Mitternachts-Lauf gesetzt werden.
           # Zu allen anderen Zeiten wird der Slot bei ungültigem Helfer übersprungen
           # (nächster 30-Min-Lauf versucht es erneut).
-          ist_mitternachtslauf: "{{ now().hour == 0 and now().minute < 15 }}"
+          ist_mitternachtslauf: "{{ trigger.now.hour == 0 and trigger.now.minute < 15 }}"
       - if:
           - condition: template
             value_template: "{{ not json_gueltig and not ist_mitternachtslauf }}"
