@@ -184,9 +184,20 @@ def szenario(
 # --------------------------------------------------------------------------
 # Echte Laeufe aus der Diagnose-Aufzeichnung
 # --------------------------------------------------------------------------
+def ist_aufzeichnung(zeile: str) -> bool:
+    """Die File-Integration schreibt beim Anlegen zwei Kopfzeilen; dazu kommen Testsendungen."""
+    return '"entitaeten"' in zeile and '"konfiguration"' in zeile
+
+
 def aufzeichnung_lesen(zeile: str) -> dict:
     """Eine Zeile der Aufzeichnung; ein Zeitstempel-Praefix der File-Integration wird uebersprungen."""
     return json.loads(zeile[zeile.index("{"):])
+
+
+def aufzeichnungen(pfad: Path) -> list[tuple[int, str]]:
+    """(Zeilennummer, Zeile) aller echten Aufzeichnungen einer Datei."""
+    with open(pfad, encoding="utf-8") as f:
+        return [(nr, z) for nr, z in enumerate(f, 1) if ist_aufzeichnung(z)]
 
 
 def szenario_aus_aufzeichnung(blueprint: dict, aufz: dict) -> Harness:
