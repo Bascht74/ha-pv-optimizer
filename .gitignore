@@ -2,3 +2,8 @@ PVLadesteuerung_HANDOVER.md
 PV-Ladesteuerung_HANDOVER.md
 .DS_Store
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

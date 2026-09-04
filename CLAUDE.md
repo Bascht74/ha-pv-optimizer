@@ -9,12 +9,21 @@ A single Home Assistant Blueprint (`PV-Ladesteuerung.yaml`) for PV, battery, and
 ## Repository layout
 
 - `PV-Ladesteuerung.yaml` — the blueprint itself (`domain: automation`, `mode: queued`). This is the only file under active development.
-- `pv-steuerung.yaml_` — companion Home Assistant package (helpers referenced by the blueprint's inputs: `input_boolean`, `input_number`, `input_text`, `timer`, template sensors, `utility_meter`). Not a blueprint itself, not auto-loaded by Home Assistant under this filename.
+- `pv-steuerung.yaml_` — companion Home Assistant package, a *template*: every helper the blueprint's inputs expect (`input_boolean`, `input_select`, `input_number`, `input_text`, `timer`, `utility_meter`, the intervention `binary_sensor` and its `history_stats`). Two `<HIER EINTRAGEN>` placeholders must be filled per site. Not a blueprint itself, not auto-loaded by Home Assistant under this filename.
+- `tests/` — `ha_jinja.py` renders the blueprint's `variables:` chain outside Home Assistant; `test_struktur.py` holds the mechanical checks, `test_rechnung.py` the computation regressions. `.github/workflows/check.yml` runs them.
+- `CHANGELOG.md` — one entry per published version, `Fixed`/`Added`/`Changed`/`Removed`.
 - `LICENSE` — Apache 2.0.
 
 ## Validating changes
 
-There is no CI and no test framework. Before treating any change to `PV-Ladesteuerung.yaml` as done, check it against this list.
+`pytest` runs the mechanical part of this list (`tests/test_struktur.py`) and renders the
+`variables:` chain outside Home Assistant against synthetic scenarios (`tests/test_rechnung.py`,
+harness in `tests/ha_jinja.py`). GitHub Actions runs it on every push and pull request. Run it
+locally before pushing: `pip install -r requirements-dev.txt && pytest -q`. A regression that came
+out of a log analysis belongs in `test_rechnung.py` as a scenario with a hand-computed expected
+value, so it stays fixed. The judgement calls below (value range, effect chain, does the branch
+fire) are still manual. Before treating any change to `PV-Ladesteuerung.yaml` as done, check it
+against this list.
 
 **Write the release note first, then run the checks** (format under "Release notes" — note it is the one English artifact in a repo whose comments and log texts are German). Drafting it up front forces every change to be named before it is validated; a change that is hard to phrase is usually one that hasn't been thought through.
 
