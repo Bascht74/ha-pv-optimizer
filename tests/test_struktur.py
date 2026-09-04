@@ -88,3 +88,45 @@ def test_package_liefert_die_helfer_die_der_blueprint_erwartet(blueprint, packag
     domain = input_definitionen(blueprint)[helfer_input]["selector"]["entity"]["domain"]
     vorhanden = package.get(domain) or {}
     assert vorhanden, f"Package definiert keine {domain}-Entitaet fuer {helfer_input}"
+
+
+# --------------------------------------------------------------------------
+# Reihenfolge der Root-Actions - Defekte, die kein Rendering zeigt
+# --------------------------------------------------------------------------
+def _schritt(blueprint, praedikat, was):
+    for i, s in enumerate(blueprint["action"]):
+        if isinstance(s, dict) and praedikat(s):
+            return i
+    raise AssertionError(f"Schritt nicht gefunden: {was}")
+
+
+def _hat_choose_alias(s, anfang):
+    return any(isinstance(o, dict) and str(o.get("alias", "")).startswith(anfang) for o in (s.get("choose") or []))
+
+
+def test_tagespflege_steht_vor_dem_deye_stop(blueprint):
+    """
+    Bleibt der Wechselrichter um Mitternacht weg, beendet der Deye-Retry den Lauf.
+    Die Tageshelfer muessen davor zurueckgesetzt sein - sonst sperren 'heute voll'
+    und der Blockade-Marker Prio 1, Prio 6 und die Morgen-Blockade am ganzen Folgetag.
+    """
+    deye = _schritt(blueprint, lambda s: "Deye-Anbindung nicht verf" in str(s), "Deye-Stop")
+    for alias in ("100%-Tage-Tracking", "Tageshelfer zur"):
+        i = _schritt(blueprint, lambda s, a=alias: _hat_choose_alias(s, a), alias)
+        assert i < deye, f"'{alias}' ist Schritt {i}, der Deye-Stop Schritt {deye}"
+
+
+def test_pflichtfeld_pruefung_steht_vor_den_root_actions(blueprint):
+    """Die Datenpflege darf nicht mit Ersatzwerten gerechnet haben, bevor der Lauf stoppt."""
+    pflicht = _schritt(blueprint, lambda s: "pflichtfelder_fehlend" in (s.get("variables") or {}), "Pflichtfeld")
+    erste_hilfsschreibung = _schritt(blueprint, lambda s: "input_boolean.turn_on" in str(s), "erster Helfer-Write")
+    assert pflicht < erste_hilfsschreibung, f"Pflichtfeld-Pruefung Schritt {pflicht}, erster Helfer-Write Schritt {erste_hilfsschreibung}"
+
+
+def test_boost_start_verlangt_gueltigen_warmwasser_sensor(blueprint):
+    for s in blueprint["action"]:
+        for o in (s.get("choose") or []) if isinstance(s, dict) else []:
+            if isinstance(o, dict) and str(o.get("alias", "")).startswith("WP-BOOST: START"):
+                assert any("ww_temp_gueltig" in str(c) for c in o["conditions"]), "Start-Zweig prueft ww_temp_gueltig nicht"
+                return
+    raise AssertionError("WP-BOOST: START nicht gefunden")
