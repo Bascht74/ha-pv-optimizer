@@ -130,3 +130,18 @@ def test_boost_start_verlangt_gueltigen_warmwasser_sensor(blueprint):
                 assert any("ww_temp_gueltig" in str(c) for c in o["conditions"]), "Start-Zweig prueft ww_temp_gueltig nicht"
                 return
     raise AssertionError("WP-BOOST: START nicht gefunden")
+
+
+def test_ampere_ersatzwerte_sind_einheitlich():
+    """
+    float()-Defaults auf Stromgroessen greifen nie, weil die Inputs Zahlenfelder
+    sind und die Variablen berechnet werden. Was bleibt, ist eine Falle: drei
+    verschiedene Zahlen, die der Leser als 'egal' erkennen muss. Deshalb genau
+    ein Wert je Groesse - und der eine echte Fallback (Register unbekannt) ist
+    der konfigurierte Maximalstrom, damit er kein Anheben ausloest.
+    """
+    text = BLUEPRINT_PFAD.read_text(encoding="utf-8")
+    treffer = re.findall(r"(max_ampere|peak_ampere|temperatur_limit_ampere|states\(var_wr_max_charge\))\s*\|\s*(?:float|int)\(([^)]*)\)", text)
+    erlaubt = {("max_ampere", "140"), ("peak_ampere", "48"), ("states(var_wr_max_charge)", "max_ampere")}
+    falsch = sorted({t for t in treffer if t not in erlaubt})
+    assert falsch == [], falsch

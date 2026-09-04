@@ -11,6 +11,10 @@ Fixed
   minutes; from 15 minutes on, the measured energy landed in the following slot
   of the consumption profile that the morning blockade and Prio 8 rely on. The
   midnight detection of that run uses the same basis.
+- The fallback for an unreadable charge-current register is the configured
+  maximum current instead of a fixed 140 A, so an unknown reading cannot trigger
+  a raise. The remaining fallbacks on computed current values could never apply
+  and are removed; each current quantity now has a single default.
 
 ## V5.10.0
 
