@@ -1088,6 +1088,7 @@ action:
       var_wr_tou_6: !input wr_tou_6
       var_eingriff_dauer: !input eingriff_dauer_sensor
       var_timer_wp_anlauf: !input helper_timer_wp_anlauf
+      var_dauer_wp_anlauf: !input duration_wp_anlauf
       var_timer_wp_boost: !input helper_timer_wp_boost
       var_timer_peak: !input helper_timer_peak
       var_timer_cooldown: !input helper_timer_cooldown
@@ -1835,12 +1836,29 @@ action:
       # ein falsches 'Hold-Timer abgelaufen' erzeugte. Hier wird die
       # WP-Boost-Bedingung nachgebildet, damit der Timer gar nicht erst
       # startet. Waehrend der WP-Anlaufphase ist Peak-Shaving komplett aus.
+      # Nach einem Watchdog-Ende darf der Boost nicht sofort neu anspringen: Dessen
+      # Bedingung (Export ueber der Peak-Schwelle) erfuellt die Start-Bedingung
+      # (Export ueber der niedrigeren Boost-Schwelle) zwangslaeufig mit, das Wasser
+      # ist noch kalt, und der Cancel laesst beide Timer idle zurueck. Karenz =
+      # Anlaufdauer, also die Zeit, die der Verdichter zum Anspringen bekommen hat.
+      wp_boost_karenz_ok: >
+        {% set p = (var_dauer_wp_anlauf | string).split(':') %}
+        {% set karenz_s = (((p[0] | int(0)) * 3600) + ((p[1] | int(0)) * 60)
+                           + ((p[2] | int(0)) if p | length > 2 else 0)) if p | length >= 2 else 1800 %}
+        {% if var_timer_wp_boost != '' and states[var_timer_wp_boost] is defined
+              and states[var_timer_wp_boost] is not none %}
+          {{ (now() - states[var_timer_wp_boost].last_changed).total_seconds() >= karenz_s }}
+        {% else %}
+          true
+        {% endif %}
+
       wp_boost_startet_gleich: >
         {{ var_wp_boost_aktiv
            and real_export > schwelle_wp_boost
            and ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv)
            and states(var_timer_wp_anlauf) != 'active'
-           and states(var_timer_wp_boost) != 'active' }}
+           and states(var_timer_wp_boost) != 'active'
+           and wp_boost_karenz_ok }}
 
       # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 4)
       #
@@ -2887,6 +2905,8 @@ action:
             value_template: "{{ states(var_timer_wp_anlauf) != 'active' }}"
           - condition: template
             value_template: "{{ states(var_timer_wp_boost) != 'active' }}"
+          - condition: template
+            value_template: "{{ wp_boost_karenz_ok }}"
         sequence:
           - action: number.set_value
             target:
