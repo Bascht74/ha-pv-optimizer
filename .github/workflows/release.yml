@@ -7,6 +7,15 @@ name: Release
 # Sektion fehlt - so kann kein Release ohne Changelog-Eintrag entstehen.
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version wie in blueprint.name, z. B. V5.10.1 - erscheint als Name des Laufs und wird gegen das Repository geprueft"
+        required: false
+        type: string
+
+# Ohne run-name hiesse jeder Lauf nur "Release"; die Versionsnummer ist das,
+# was man in der Liste sucht.
+run-name: "Release ${{ inputs.version || '(Version aus blueprint.name)' }}"
 
 permissions:
   contents: write
@@ -27,6 +36,9 @@ jobs:
         run: |
           version=$(sed -n '2p' PV-Ladesteuerung.yaml | grep -o 'V[0-9]*\.[0-9]*\.[0-9]*')
           test -n "$version" || { echo "Keine Version in blueprint.name"; exit 1; }
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$version" ]; then
+            echo "Eingabe ${{ inputs.version }} passt nicht zu blueprint.name ($version)"; exit 1
+          fi
           if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
             echo "Tag $version existiert bereits"; exit 1
           fi
