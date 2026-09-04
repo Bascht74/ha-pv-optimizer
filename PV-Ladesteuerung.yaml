@@ -1321,7 +1321,8 @@ action:
       # Ein nicht verfuegbarer Warmwasser-Sensor laese sich ueber den Fallback als
       # 50 Grad, also "kalt" - das gaebe den Boost frei, statt ihn zu sperren.
       ww_temp_gueltig: "{{ var_wp_temp != '' and states(var_wp_temp) not in ['unknown', 'unavailable', 'none', 'None', ''] }}"
-      aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(140) }}"
+      # Unbekanntes Register: Maximalstrom annehmen, damit kein Anheben ausgeloest wird.
+      aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(max_ampere) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
       pv_power: "{{ states(var_pv_power) | float(0) }}"
       pv_forecast: "{{ states(var_pv_forecast) | float(0) }}"
@@ -2089,7 +2090,7 @@ action:
                and (states(var_hausverbrauch_kwh) | float(0)) >= ((json_profil[h_index_now] | float(0.2)) * ((now().minute % 30) / 30)) * 2.0
                and ((states(var_hausverbrauch_kwh) | float(0)) - ((json_profil[h_index_now] | float(0.2)) * ((now().minute % 30) / 30))) >= 0.2)
            else '' }}
-      temp_log_addon: "{{ (' (Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) else '' }}"
+      temp_log_addon: "{{ (' (Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else ' (Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if temperatur_limit_ampere < max_ampere else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
       # deshalb hier die Regelabweichung aufschlagen.
@@ -2118,10 +2119,10 @@ action:
       # ziel_p5_raw haette Peak-Shaving (Prio 6) einen bereits hoeher geplanten
       # Ladestrom auf seine Stufe heruntergezogen, weil es in der Kaskade vorn steht.
       target_p3: >
-        {{ [ [ (aktueller_ladestrom | float(0)) + (peak_ampere | float(20)),
-               (peak_ampere | float(20)) + (regler_offset_a | float(2.0)),
+        {{ [ [ (aktueller_ladestrom | float(0)) + peak_ampere,
+               peak_ampere + (regler_offset_a | float(2.0)),
                ziel_p5_raw | float(0) ] | max,
-             max_ampere | float(200), temperatur_limit_ampere | float(200) ] | min | round(0, 'ceil') }}
+             max_ampere, temperatur_limit_ampere ] | min | round(0, 'ceil') }}
       # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
 
@@ -2424,7 +2425,7 @@ action:
         data:
           notification_id: "bms_offline_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom-Obergrenze sicherheitshalber auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, solange Zellspannungen und Temperaturen nicht überwacht werden können. {% if (aktueller_ladestrom | float(0)) > (temperatur_limit_ampere | float(0)) %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Das ist nur ein Deckel — die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %}"
+          message: "{{ bp_version }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom-Obergrenze sicherheitshalber auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, solange Zellspannungen und Temperaturen nicht überwacht werden können. {% if (aktueller_ladestrom | float(0)) > temperatur_limit_ampere %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Das ist nur ein Deckel — die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %}"
       # Logbuch-Eintrag, gedrosselt auf max. eine Meldung je halber Stunde -
       # gleiches Muster wie die Deye-Ausfallwarnung: exakt an den 5-Minuten-Takt
       # UND Minute 0/30 gebunden, damit gleichzeitig gequeuete Trigger die
@@ -2436,7 +2437,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} BMS offline: Ladestrom-Obergrenze auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. {% if (aktueller_ladestrom | float(0)) > (temperatur_limit_ampere | float(0)) %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Die Obergrenze ist kein Sollwert: Die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %} (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
+              message: "{{ bp_version }} BMS offline: Ladestrom-Obergrenze auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und weder Zellspannungen noch Temperaturen überwacht werden können. {% if (aktueller_ladestrom | float(0)) > temperatur_limit_ampere %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Die Obergrenze ist kein Sollwert: Die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %} (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
               entity_id: !input helper_logbook_dummy
     else:
       - action: persistent_notification.dismiss
@@ -3366,8 +3367,8 @@ action:
             value_template: >
               {{ is_day
                  and (packs_online | int(0) > 0 or packs_offline_bestaetigt)
-                 and (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999))
-                 and ((aktueller_ladestrom | float(0)) - (temperatur_limit_ampere | float(0))) > 1 }}
+                 and temperatur_limit_ampere < max_ampere
+                 and ((aktueller_ladestrom | float(0)) - temperatur_limit_ampere) > 1 }}
         sequence:
           - action: number.set_value
             target:
@@ -3481,7 +3482,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 2 (Netz-Zwangsladung läuft): Batterie-Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p15 }} A angehoben, damit die laufende Winter-Zwangsladung die Batterie über das Netz aufladen kann.{% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %}"
+                  message: "{{ bp_version }} Prio 2 (Netz-Zwangsladung läuft): Batterie-Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p15 }} A angehoben, damit die laufende Winter-Zwangsladung die Batterie über das Netz aufladen kann.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3511,7 +3512,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ haus_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
@@ -3647,7 +3648,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if (temperatur_limit_ampere | float(9999)) < (max_ampere | float(9999)) %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
