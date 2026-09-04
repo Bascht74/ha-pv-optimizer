@@ -3,6 +3,31 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V5.10.0
+
+Fixed
+- The daily housekeeping no longer depends on the inverter answering. The Modbus
+  retry ends the run when the connection stays down, and the helper resets came
+  after it: a midnight outage left "full today" and the blockade marker set for
+  the whole next day, locking out top balancing, peak shaving and the morning
+  blockade. The resets and the 100 %-day list now run before the retry; only the
+  checks that read inverter registers stay behind it.
+- Battery capacity derives from the configured packs, not from the packs whose
+  BMS happens to report. A dropout of seconds halved the energy model for that
+  run, and the Prio 8 hysteresis then held the current set from it.
+- The hot-water boost cannot start on a dead temperature sensor. An unavailable
+  reading fell back to 50 degrees, which reads as "cold" and satisfied the start
+  condition while never satisfying "target reached".
+- The mandatory-field check runs right after the input variables, before the
+  first block that reads a measurement. It sat behind the housekeeping blocks,
+  which had already worked with substitute values by the time it stopped the run.
+
+Changed
+- The automation queue holds 20 runs instead of 10. With 21 triggers, several of
+  which fire in bursts, and single runs that can take up to 50 s through the
+  restart grace period, the Modbus retry and the heat-pump read-back loops, ten
+  slots filled up and everything beyond was dropped without a trace in the log.
+
 ## V5.9.0
 
 Fixed

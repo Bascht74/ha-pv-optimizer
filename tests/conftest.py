@@ -108,6 +108,8 @@ def szenario(
     if jetzt.tzinfo is None:
         jetzt = jetzt.replace(tzinfo=TZ)
     inputs = standard_inputs(blueprint)
+    # Zwei Packs, wie an beiden Standorten: die optionalen Pack-3-Inputs bleiben leer.
+    inputs.update({"vmax3_sensor": "", "bms3_temp_min_sensor": "", "bms3_temp_max_sensor": ""})
     if input_overrides:
         inputs.update(input_overrides)
     e = lambda name: inputs[name]  # noqa: E731

@@ -898,6 +898,110 @@ action:
       var_helper_tare_discharge: !input helper_tare_discharge
       var_schatten_bms: !input schatten_bms_sensor
       var_lade_modus: !input helper_lade_modus
+      var_json_tracking: !input json_tracking_sensor
+      var_batterie_heute_voll: !input helper_batterie_heute_voll
+      var_max_soc_heute: !input helper_max_soc_heute
+
+  # TAGESPFLEGE - bewusst VOR dem Deye-Retry: Bleibt die Anbindung um Mitternacht
+  # weg, beendet der Retry den Lauf, und 'heute voll' sowie der Blockade-Marker
+  # sperrten Prio 1, Prio 6 und die Morgen-Blockade einen ganzen Tag. Nichts hier
+  # liest ein Wechselrichter-Register. Reihenfolge ist kritisch: das Tracking muss
+  # vor 'Tageshelfer zuruecksetzen' laufen, denn jenes setzt den Voll-Helfer auf
+  # 'off' - dahinter kaeme der heutige Tag nie in die Liste.
+  - choose:
+      - alias: "100%-Tage-Tracking (vor dem Reset des Voll-Helfers)"
+        conditions:
+          - condition: trigger
+            id: maintenance
+        sequence:
+        # Haengt den heutigen Tag an die Liste an, wenn die Batterie voll wurde.
+        # Reihenfolge im Maintenance-Lauf (23:58): 1. hier die Liste aktualisieren,
+        # 2. 'Tageshelfer zuruecksetzen' setzt batterie_heute_voll = off, 3. 'BMS
+        # Balancing Logic' wertet aus.
+        #
+        # Die Liste liegt in einem input_text, weil der immer als String speichert.
+        # Ein Sensor-State kaeme als Python-Repr mit einfachen Quotes zurueck -
+        # kein gueltiges JSON, from_json scheitert.
+        - if:
+            - condition: template
+              value_template: "{{ var_json_tracking != '' }}"
+          then:
+            - variables:
+                  # ROBUSTES EINLESEN: String ODER native Liste
+                  #
+                  # HA rendert Template-Ergebnisse mit 'native type conversion': Ein
+                  # gespeicherter String, der wie eine Liste aussieht, kann via states()
+                  # bereits als echte Liste zurueckkommen - nicht vorhersagbar. Beide
+                  # Faelle abdecken, erst native Liste, dann String. (Gleiches Muster
+                  #  bei slot_daten_dict und blockade_dyn.)
+                tracking_roh: "{{ states(var_json_tracking) }}"
+                tracking_liste: >
+                  {% if tracking_roh is not string and tracking_roh is iterable %}
+                    {{ tracking_roh | list }}
+                  {% elif tracking_roh is string and tracking_roh.startswith('[') %}
+                    {{ tracking_roh | from_json }}
+                  {% else %}
+                    {{ [] }}
+                  {% endif %}
+                tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
+                tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
+                # Heutigen Tag anhaengen, wenn die Batterie voll war und er
+                # noch nicht drin steht. Immer auf die letzten 14 Tage
+                # begrenzen (input_text-Limit: 255 Zeichen, 14 Eintraege
+                # im JSON-Format = ~196 Zeichen).
+                tracking_neu: >
+                  {% if tracking_war_voll and tracking_heute not in tracking_liste %}
+                    {{ ((tracking_liste + [tracking_heute]) | sort)[-14:] }}
+                  {% else %}
+                    {{ tracking_liste[-14:] }}
+                  {% endif %}
+            - action: input_text.set_value
+              target:
+                entity_id: "{{ var_json_tracking }}"
+              data:
+                # to_json erzeugt korrektes JSON mit DOPPELTEN Quotes.
+                # Da input_text immer als String speichert, bleibt es dabei.
+                value: "{{ tracking_neu | to_json }}"
+
+  - choose:
+      - alias: "Tageshelfer zurücksetzen"
+        conditions:
+          - condition: trigger
+            id: maintenance
+        sequence:
+          # Alles hier laeuft vor der Pflichtfeld-Pruefung; leere Felder ueberspringen.
+          - if:
+              - condition: template
+                value_template: "{{ var_batterie_heute_voll != '' }}"
+            then:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: "{{ var_batterie_heute_voll }}"
+          - if:
+              - condition: template
+                value_template: "{{ var_helper_blockade_beendet != '' }}"
+            then:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: "{{ var_helper_blockade_beendet }}"
+          - if:
+              - condition: template
+                value_template: "{{ var_lade_modus != '' }}"
+            then:
+              - action: input_select.select_option
+                target:
+                  entity_id: "{{ var_lade_modus }}"
+                data:
+                  option: "normal"
+          - if:
+              - condition: template
+                value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
+            then:
+              - action: input_number.set_value
+                target:
+                  entity_id: !input helper_max_soc_heute
+                data:
+                  value: 0
 
   # DEYE-RETRY
   #
@@ -1050,7 +1154,6 @@ action:
       var_grid_export_kwh: !input grid_export_kwh_heute
       var_speicherverlust: !input speicherverlust_gesamt
       var_offener_verlust: !input helper_offener_verlust
-      var_max_soc_heute: !input helper_max_soc_heute
       var_battery_soc: !input battery_soc_sensor
       var_wp_temp: !input wp_temp_sensor
       var_wp_water_heater: !input wp_water_heater
@@ -1078,8 +1181,6 @@ action:
       var_bms3_temp_max: !input bms3_temp_max_sensor
 
       var_zwangsladung_aktiv: !input helper_zwangsladung_aktiv
-      var_batterie_heute_voll: !input helper_batterie_heute_voll
-      var_json_tracking: !input json_tracking_sensor
       var_wr_tou_1: !input wr_tou_1
       var_wr_tou_2: !input wr_tou_2
       var_wr_tou_3: !input wr_tou_3
@@ -1135,10 +1236,91 @@ action:
       var_zeit_blockade: !input zeit_blockade_ende
 
 
+  # ====================================================================
+  # PFLICHTFELD-PRUEFUNG - direkt hinter den Input-Variablen, vor jedem Zweig,
+  # der Messwerte verrechnet. Nur Entitaets-Felder ohne Leer-Behandlung im Code:
+  # dort wird states('') zu 'unknown' und per float()-Default still zu einem
+  # Ersatzwert - die Regelung liefe mit erfundenen Zahlen weiter. Felder mit
+  # eigenem Fallback bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall
+  # (Deye-Retry davor).
+  # ====================================================================
+  - variables:
+      pflichtfelder_fehlend: >
+        {% set pflicht = [
+             ('Ladezustand SOC (%)', var_battery_soc),
+             ('Batterie-Leistung (W)', var_battery_power),
+             ('Zähler: insgesamt entladen (kWh)', var_battery_total_discharge),
+             ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
+             ('Netz-Leistung (W)', var_grid_export),
+             ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
+             ('PV-Leistung geglättet (W)', var_pv_power),
+             ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
+             ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
+             ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
+             ('Solcast: verbleibende Leistung heute (kWh)', var_solcast_rest_sensor),
+             ('Solcast: aktuelle Leistung (W)', var_pv_forecast),
+             ('Solcast: Prognose nächste Stunde (kWh)', var_solcast_next_hour),
+             ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
+             ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
+             ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
+             ('Helfer: Winter-Zwangsladung aktiv', var_zwangsladung_aktiv),
+             ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
+             ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
+             ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
+             ('Timer: Peak-Shaving Hold', var_timer_peak),
+             ('Timer: Zwangsladung Cooldown', var_timer_cooldown),
+             ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
+             ('Timer: WP-Laufzeit', var_timer_wp_boost),
+             ('BMS 1: höchste Zellspannung (V)', var_vmax1),
+             ('BMS 2: höchste Zellspannung (V)', var_vmax2),
+             ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
+             ('BMS 2: höchste Zelltemperatur', var_bms2_temp_max),
+             ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
+             ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
+             ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
+             ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
+             ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
+             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6)
+           ] %}
+        {% set ns = namespace(fehlt=[]) %}
+        {% for bezeichnung, wert in pflicht %}
+          {% if (wert | default('', true) | string | trim) in ['', 'none', 'None'] %}
+            {% set ns.fehlt = ns.fehlt + [bezeichnung] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.fehlt | to_json }}
+
+  - variables:
+      pflicht_liste: "{{ pflichtfelder_fehlend if pflichtfelder_fehlend is iterable and pflichtfelder_fehlend is not string else (pflichtfelder_fehlend | from_json) }}"
+
+  - if:
+      - condition: template
+        value_template: "{{ pflicht_liste | length > 0 }}"
+    then:
+      # Wie bei der Deye-Warnung: hoechstens alle 30 Minuten melden, sonst
+      # schreibt jeder 5-Minuten-Lauf denselben Eintrag ins Logbuch.
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >-
+                {{ bp_version }} Start abgebrochen: {{ pflicht_liste | length }} Pflichtfeld{{ 'er sind' if pflicht_liste | length > 1 else ' ist' }} nicht zugewiesen
+                ({{ pflicht_liste[:8] | join(', ') }}{% if pflicht_liste | length > 8 %} und {{ pflicht_liste | length - 8 }} weitere{% endif %}).
+                Ohne diese Entitäten würde mit Ersatzwerten geregelt. Bitte im Blueprint zuweisen.
+                (Informativ: Meldung erscheint höchstens alle 30 Minuten).
+              entity_id: !input helper_logbook_dummy
+      - stop: "Pflichtfeld nicht zugewiesen - Regelung ausgesetzt."
+
   - variables:
       grid_export: "{{ (states(var_grid_export) | float(0)) * -1 }}"
       aktueller_soc: "{{ states(var_battery_soc) | float(0) }}"
       ww_temp: "{{ states(var_wp_temp) | float(50) }}"
+      # Ein nicht verfuegbarer Warmwasser-Sensor laese sich ueber den Fallback als
+      # 50 Grad, also "kalt" - das gaebe den Boost frei, statt ihn zu sperren.
+      ww_temp_gueltig: "{{ var_wp_temp != '' and states(var_wp_temp) not in ['unknown', 'unavailable', 'none', 'None', ''] }}"
       aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(140) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
       pv_power: "{{ states(var_pv_power) | float(0) }}"
@@ -1254,8 +1436,13 @@ action:
       packs_offline_bestaetigt: >
         {{ packs_online == 0 and pack1_lange_offline and pack2_lange_offline and pack3_lange_offline }}
 
+      # Kapazitaet ist eine physische Groesse: ein Pack, dessen BMS gerade nicht
+      # meldet, ist nicht ausgebaut. packs_online ist ungefiltert - ein Aussetzer
+      # von Sekunden halbierte sonst das Energiemodell fuer diesen Lauf, und die
+      # Hysterese von Prio 8 hielt den daraus gesetzten Strom danach fest.
+      packs_konfiguriert: "{{ (1 if var_bms1_temp_min != '' else 0) + (1 if var_bms2_temp_min != '' else 0) + (1 if var_bms3_temp_min != '' else 0) }}"
       batterie_kapazitaet: >
-        {% set p_count = packs_online if packs_online > 0 else 1 %}
+        {% set p_count = packs_konfiguriert if packs_konfiguriert > 0 else 1 %}
         {{ (pack_capacity_ah * nominale_spannung * p_count) / 1000 }}
 
       next_hour_50: "{{ states(var_solcast_next_hour) | float(0) }}"
@@ -1864,7 +2051,8 @@ action:
            and ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv)
            and states(var_timer_wp_anlauf) != 'active'
            and states(var_timer_wp_boost) != 'active'
-           and wp_boost_karenz_ok }}
+           and wp_boost_karenz_ok
+           and ww_temp_gueltig }}
 
       # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 4)
       #
@@ -2115,94 +2303,12 @@ action:
         data:
           notification_id: "bms_offline_warning"
 
-  # 100%-TAGE-TRACKING
-  #
-  # REIHENFOLGE IST KRITISCH: Dieser Block MUSS vor 'Taegliches Aufraeumen'
-  # laufen - jener setzt helper_batterie_heute_voll auf 'off' zurueck.
-  # Stuende das Tracking dahinter, laese es den Helfer immer als 'off' und
-  # der heutige Tag kaeme nie in die Liste.
-  - choose:
-      - alias: "100%-Tage-Tracking (vor dem Reset des Voll-Helfers)"
-        conditions:
-          - condition: trigger
-            id: maintenance
-        sequence:
-        # Haengt den heutigen Tag an die Liste an, wenn die Batterie voll wurde.
-        # Reihenfolge im Maintenance-Lauf (23:58): 1. hier die Liste aktualisieren,
-        # 2. 'Taegliches Aufraeumen' setzt batterie_heute_voll = off, 3. 'BMS
-        # Balancing Logic' wertet aus.
-        #
-        # Die Liste liegt in einem input_text, weil der immer als String speichert.
-        # Ein Sensor-State kaeme als Python-Repr mit einfachen Quotes zurueck -
-        # kein gueltiges JSON, from_json scheitert.
-        - if:
-            - condition: template
-              value_template: "{{ var_json_tracking != '' }}"
-          then:
-            - variables:
-                  # ROBUSTES EINLESEN: String ODER native Liste
-                  #
-                  # HA rendert Template-Ergebnisse mit 'native type conversion': Ein
-                  # gespeicherter String, der wie eine Liste aussieht, kann via states()
-                  # bereits als echte Liste zurueckkommen - nicht vorhersagbar. Beide
-                  # Faelle abdecken, erst native Liste, dann String. (Gleiches Muster
-                  #  bei slot_daten_dict und blockade_dyn.)
-                tracking_roh: "{{ states(var_json_tracking) }}"
-                tracking_liste: >
-                  {% if tracking_roh is not string and tracking_roh is iterable %}
-                    {{ tracking_roh | list }}
-                  {% elif tracking_roh is string and tracking_roh.startswith('[') %}
-                    {{ tracking_roh | from_json }}
-                  {% else %}
-                    {{ [] }}
-                  {% endif %}
-                tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
-                tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
-                # Heutigen Tag anhaengen, wenn die Batterie voll war und er
-                # noch nicht drin steht. Immer auf die letzten 14 Tage
-                # begrenzen (input_text-Limit: 255 Zeichen, 14 Eintraege
-                # im JSON-Format = ~196 Zeichen).
-                tracking_neu: >
-                  {% if tracking_war_voll and tracking_heute not in tracking_liste %}
-                    {{ ((tracking_liste + [tracking_heute]) | sort)[-14:] }}
-                  {% else %}
-                    {{ tracking_liste[-14:] }}
-                  {% endif %}
-            - action: input_text.set_value
-              target:
-                entity_id: "{{ var_json_tracking }}"
-              data:
-                # to_json erzeugt korrektes JSON mit DOPPELTEN Quotes.
-                # Da input_text immer als String speichert, bleibt es dabei.
-                value: "{{ tracking_neu | to_json }}"
-
-
   - choose:
       - alias: "Tägliches Aufräumen & Sanity Checks"
         conditions:
           - condition: trigger
             id: maintenance
         sequence:
-          - action: input_boolean.turn_off
-            target:
-              entity_id: !input helper_batterie_heute_voll
-          # Blockade-Tagesmarker zurücksetzen (falls konfiguriert)
-          - if:
-              - condition: template
-                value_template: "{{ var_helper_blockade_beendet != '' }}"
-            then:
-              - action: input_boolean.turn_off
-                target:
-                  entity_id: "{{ var_helper_blockade_beendet }}"
-          - if:
-              - condition: template
-                value_template: "{{ var_lade_modus != '' }}"
-            then:
-              - action: input_select.select_option
-                target:
-                  entity_id: "{{ var_lade_modus }}"
-                data:
-                  option: "normal"
           # WP-MITTERNACHTS-CHECK: PV-Boost-Werte dürfen nicht über Nacht stehen
           # bleiben (z.B. wenn Timer durch Neustart verloren ging und auch der
           # 5-Min-Watchdog nicht griff). Harte Rücksetzung auf Normalwerte.
@@ -2292,15 +2398,6 @@ action:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p0 }}"
-          - if:
-              - condition: template
-                value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 }}"
-            then:
-              - action: input_number.set_value
-                target:
-                  entity_id: !input helper_max_soc_heute
-                data:
-                  value: 0
           - if:
               - condition: state
                 entity_id: !input helper_zwangsladung_aktiv
@@ -2908,6 +3005,8 @@ action:
           - condition: template
             value_template: "{{ ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv) }}"
           - condition: template
+            value_template: "{{ ww_temp_gueltig }}"
+          - condition: template
             value_template: "{{ states(var_timer_wp_anlauf) != 'active' }}"
           - condition: template
             value_template: "{{ states(var_timer_wp_boost) != 'active' }}"
@@ -3100,82 +3199,6 @@ action:
           message: "{{ bp_version }} Wärmepumpen-Laufzeit auf {{ wp_nachlauf_min | int(15) }} Minuten gekürzt, da das Warmwasser mit {{ ww_temp | round(1) }} °C die Zieltemperatur {{ var_wp_ziel_temp_pv }} °C erreicht hat. Die Wärmepumpe lädt den Speicher noch fertig; danach steht der Überschuss wieder der Batterie zur Verfügung."
           entity_id: !input helper_logbook_dummy
 
-  # ====================================================================
-  # PFLICHTFELD-PRUEFUNG
-  # Nur Entitaets-Felder ohne Leer-Behandlung im Code: dort wird states('')
-  # zu 'unknown' und per float()-Default still zu einem Ersatzwert - die
-  # Regelung liefe mit erfundenen Zahlen weiter. Felder mit eigenem Fallback
-  # bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall (davor).
-  # ====================================================================
-  - variables:
-      pflichtfelder_fehlend: >
-        {% set pflicht = [
-             ('Ladezustand SOC (%)', var_battery_soc),
-             ('Batterie-Leistung (W)', var_battery_power),
-             ('Zähler: insgesamt entladen (kWh)', var_battery_total_discharge),
-             ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
-             ('Netz-Leistung (W)', var_grid_export),
-             ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
-             ('PV-Leistung geglättet (W)', var_pv_power),
-             ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
-             ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
-             ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
-             ('Solcast: verbleibende Leistung heute (kWh)', var_solcast_rest_sensor),
-             ('Solcast: aktuelle Leistung (W)', var_pv_forecast),
-             ('Solcast: Prognose nächste Stunde (kWh)', var_solcast_next_hour),
-             ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
-             ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
-             ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
-             ('Helfer: Winter-Zwangsladung aktiv', var_zwangsladung_aktiv),
-             ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
-             ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
-             ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
-             ('Timer: Peak-Shaving Hold', var_timer_peak),
-             ('Timer: Zwangsladung Cooldown', var_timer_cooldown),
-             ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
-             ('Timer: WP-Laufzeit', var_timer_wp_boost),
-             ('BMS 1: höchste Zellspannung (V)', var_vmax1),
-             ('BMS 2: höchste Zellspannung (V)', var_vmax2),
-             ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
-             ('BMS 2: höchste Zelltemperatur', var_bms2_temp_max),
-             ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
-             ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
-             ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
-             ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
-             ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
-             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6)
-           ] %}
-        {% set ns = namespace(fehlt=[]) %}
-        {% for bezeichnung, wert in pflicht %}
-          {% if (wert | default('', true) | string | trim) in ['', 'none', 'None'] %}
-            {% set ns.fehlt = ns.fehlt + [bezeichnung] %}
-          {% endif %}
-        {% endfor %}
-        {{ ns.fehlt | to_json }}
-
-  - variables:
-      pflicht_liste: "{{ pflichtfelder_fehlend if pflichtfelder_fehlend is iterable and pflichtfelder_fehlend is not string else (pflichtfelder_fehlend | from_json) }}"
-
-  - if:
-      - condition: template
-        value_template: "{{ pflicht_liste | length > 0 }}"
-    then:
-      # Wie bei der Deye-Warnung: hoechstens alle 30 Minuten melden, sonst
-      # schreibt jeder 5-Minuten-Lauf denselben Eintrag ins Logbuch.
-      - if:
-          - condition: template
-            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
-        then:
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: >-
-                {{ bp_version }} Start abgebrochen: {{ pflicht_liste | length }} Pflichtfeld{{ 'er sind' if pflicht_liste | length > 1 else ' ist' }} nicht zugewiesen
-                ({{ pflicht_liste[:8] | join(', ') }}{% if pflicht_liste | length > 8 %} und {{ pflicht_liste | length - 8 }} weitere{% endif %}).
-                Ohne diese Entitäten würde mit Ersatzwerten geregelt. Bitte im Blueprint zuweisen.
-                (Informativ: Meldung erscheint höchstens alle 30 Minuten).
-              entity_id: !input helper_logbook_dummy
-      - stop: "Pflichtfeld nicht zugewiesen - Regelung ausgesetzt."
 
   # ====================================================================
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM

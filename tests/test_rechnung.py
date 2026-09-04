@@ -170,3 +170,42 @@ def test_fall_b_bei_grossem_ueberschuss_inaktiv(blueprint, tag):
     """Frueher Morgen, wenig Platz, viel PV voraus -> keine Eskalation."""
     h = szenario(blueprint, zeit(tag, 8, 5), soc=93.0, forecast=prognose_gleichmaessig(tag, 4.0))
     assert h.auswerten(bis="fall_b_aktiv")["fall_b_aktiv"] is False
+
+
+# --------------------------------------------------------------------------
+# Kapazitaet haengt an den konfigurierten Packs, nicht an den meldenden
+# --------------------------------------------------------------------------
+def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
+    """
+    Pack 2 meldet seit 15 s nicht. Der Temperaturschutz darf das sehen
+    (packs_online = 1), das Energiemodell nicht: die Batterie hat weiterhin
+    zwei Packs, und freie_kwh geht in Blockade, Fall B und Prio 8 ein.
+    """
+    from ha_jinja import Zustand
+    h = szenario(blueprint, zeit(tag, 10, 5), soc=84.0)
+    e = h.inputs["bms2_temp_min_sensor"]
+    h.states.tabelle[e] = Zustand(e, "unavailable", last_changed=h.jetzt - dt.timedelta(seconds=15))
+    ctx = h.auswerten(bis="freie_kwh")
+    kapazitaet_2_packs = 2 * 314 * 51.2 / 1000
+    assert ctx["packs_online"] == 1
+    assert ctx["batterie_kapazitaet"] == pytest.approx(kapazitaet_2_packs, abs=0.05), \
+        f"Kapazitaet {ctx['batterie_kapazitaet']} - halbiert durch einen Sensor-Aussetzer"
+    assert ctx["freie_kwh"] == pytest.approx(kapazitaet_2_packs * 0.16, abs=0.05)
+
+
+# --------------------------------------------------------------------------
+# Boost-Start nur mit gueltigem Warmwasser-Sensor
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("ww_state, erwartet", [
+    ("48.0", True),           # kalt, Export hoch, Timer idle -> Boost darf
+    ("unavailable", False),   # Fallback 50 Grad laese sich als kalt - darf nicht
+    ("unknown", False),
+])
+def test_boost_startet_nur_mit_gueltigem_warmwasser_sensor(blueprint, tag, ww_state, erwartet):
+    from ha_jinja import Zustand
+    h = szenario(blueprint, zeit(tag, 11, 5))
+    g = h.inputs["grid_export_sensor"]
+    h.states.tabelle[g] = Zustand(g, "-7000")            # 7 kW Einspeisung > Boost-Schwelle
+    w = h.inputs["wp_temp_sensor"]
+    h.states.tabelle[w] = Zustand(w, ww_state)
+    assert h.auswerten(bis="wp_boost_startet_gleich")["wp_boost_startet_gleich"] is erwartet
