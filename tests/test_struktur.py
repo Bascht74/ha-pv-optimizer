@@ -145,3 +145,36 @@ def test_ampere_ersatzwerte_sind_einheitlich():
     erlaubt = {("max_ampere", "140"), ("peak_ampere", "48"), ("states(var_wr_max_charge)", "max_ampere")}
     falsch = sorted({t for t in treffer if t not in erlaubt})
     assert falsch == [], falsch
+
+
+def test_direkte_entity_inputs_sind_pflichtfelder(blueprint):
+    """
+    Ein direktes `entity_id: !input x` wird beim Laden der Automation eingesetzt.
+    Ist das Feld leer, verweigert Home Assistant die ganze Automation
+    ("expected 'all' or 'none'") - lange vor jeder Bedingung. Optionale Felder
+    gehoeren deshalb als "{{ var_x }}" in ein geguardetes Template; direkt
+    darf nur stehen, was die Pflichtfeld-Pruefung ohnehin verlangt.
+    """
+    from ha_jinja import InputTag
+
+    direkt: set[str] = set()
+
+    def suche(knoten):
+        if isinstance(knoten, dict):
+            for k, v in knoten.items():
+                if k == "entity_id" and isinstance(v, InputTag):
+                    direkt.add(v.name)
+                suche(v)
+        elif isinstance(knoten, list):
+            for v in knoten:
+                suche(v)
+
+    suche(blueprint["action"])
+    var_zu_input = {k: v.name for s in blueprint["action"] if isinstance(s, dict) and "variables" in s
+                    for k, v in s["variables"].items() if isinstance(v, InputTag)}
+    pflicht_tpl = next(s["variables"]["pflichtfelder_fehlend"] for s in blueprint["action"]
+                       if isinstance(s, dict) and "pflichtfelder_fehlend" in s.get("variables", {}))
+    pflicht_inputs = {var_zu_input[v] for v in re.findall(r"\bvar_\w+", pflicht_tpl) if v in var_zu_input}
+    # Der Logbuch-Anker steht in der Pruefung selbst - ohne ihn kann sie nichts melden.
+    optional_aber_direkt = sorted(direkt - pflicht_inputs)
+    assert optional_aber_direkt == [], f"Direkt eingesetzt, aber nicht Pflicht: {optional_aber_direkt}"

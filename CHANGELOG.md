@@ -3,6 +3,17 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V5.10.3
+
+Fixed
+- The heat-pump entity fields can be left empty on a site without a heat pump.
+  They were inserted directly into action targets, and Home Assistant refuses to
+  load an automation with an empty target ("expected 'all' or 'none'"), so the
+  fields had to hold placeholder entities. They are now templated and guarded,
+  and the mandatory-field check demands them only while the boost is enabled.
+  The logbook anchor and the grid-charge current join the mandatory-field list,
+  as both are used directly.
+
 ## V5.10.2
 
 Fixed

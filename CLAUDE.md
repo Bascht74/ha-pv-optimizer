@@ -82,6 +82,7 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 - **Work goes to a branch and a pull request, never straight to `main`.** Fill in `.github/pull_request_template.md`; its checklist is the validation list below in short form. There is no CI, so the PR body is the only record that the checks were run.
 - Do not add new blueprint `input:` fields without asking first — instances are hand-configured per site, and a new field means manual reassignment on each one.
 - **Every entity input carries `default: ""`**, including the ones that are mandatory in practice. Omitting `default` makes Home Assistant render the field differently and breaks instance loading outright instead of reporting what is missing. Mandatory fields are enforced at runtime by the startup check, which names them and stops the run.
+- **An optional entity input never appears as a direct `entity_id: !input x`.** The value is substituted when the automation loads, and an empty one makes Home Assistant refuse the whole automation ("expected 'all' or 'none'") before any condition runs. Optional fields go through `"{{ var_x }}"` inside a guarded branch; direct `!input` is reserved for fields the startup check lists as mandatory (`test_direkte_entity_inputs_sind_pflichtfelder` enforces the pairing).
 
 ## Code comments and input text
 

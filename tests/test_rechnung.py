@@ -240,3 +240,18 @@ def test_slot_index_folgt_dem_trigger_nicht_der_uhr(blueprint, tag, trigger_hh, 
     assert h._aufloesen(vars_["h_index"], ctx) == erwartet
     ist_mitternacht = h._aufloesen(vars_["ist_mitternachtslauf"], ctx)
     assert ist_mitternacht is (trigger_hh == 0), f"ist_mitternachtslauf={ist_mitternacht!r}"
+
+
+# --------------------------------------------------------------------------
+# Waermepumpen-Felder: Pflicht nur bei eingeschaltetem Boost
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("boost, fehlend_erwartet", [
+    (False, []),
+    (True, ["Warmwasserspeicher (Entität)", "Stellgröße: Hysterese (K)", "Stellgröße: Einmal-Ladung (Button)"]),
+])
+def test_wp_felder_sind_nur_mit_boost_pflicht(blueprint, tag, boost, fehlend_erwartet):
+    """Ein Standort ohne Waermepumpe laesst die Felder leer; mit Boost muessen sie belegt sein."""
+    h = szenario(blueprint, zeit(tag, 10, 0), input_overrides={
+        "wp_boost_aktiv": boost, "wp_water_heater": "", "wp_hysterese_number": "", "wp_boost_button": ""})
+    fehlend = h.auswerten(bis="pflicht_liste")["pflicht_liste"]
+    assert fehlend == fehlend_erwartet

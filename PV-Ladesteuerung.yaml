@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.3]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -833,7 +833,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.10.2]"
+      bp_version: "[V5.10.3]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -1156,7 +1156,11 @@ action:
       var_offener_verlust: !input helper_offener_verlust
       var_battery_soc: !input battery_soc_sensor
       var_wp_temp: !input wp_temp_sensor
+      var_logbook_dummy: !input helper_logbook_dummy
+      var_wr_grid_charge_current: !input wr_grid_charge_current
       var_wp_water_heater: !input wp_water_heater
+      var_wp_hysterese_number: !input wp_hysterese_number
+      var_wp_boost_button: !input wp_boost_button
       var_wp_kompressor: !input wp_kompressor_sensor
       var_solcast_heute: !input solcast_heute_sensor
       var_solcast_rest_sensor: !input solcast_rest_sensor
@@ -1280,8 +1284,19 @@ action:
              ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
              ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
              ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
-             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6)
+             ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6),
+             ('Helfer: Logbuch-Anker', var_logbook_dummy),
+             ('Stellgröße: Netzlade-Strom (A)', var_wr_grid_charge_current)
            ] %}
+        {# Die Wärmepumpen-Felder sind nur Pflicht, wenn der Boost eingeschaltet ist. #}
+        {% if var_wp_boost_aktiv %}
+          {% set pflicht = pflicht + [
+               ('Warmwasserspeicher (Entität)', var_wp_water_heater),
+               ('Warmwasser-Temperatur (Sensor)', var_wp_temp),
+               ('Stellgröße: Hysterese (K)', var_wp_hysterese_number),
+               ('Stellgröße: Einmal-Ladung (Button)', var_wp_boost_button)
+             ] %}
+        {% endif %}
         {% set ns = namespace(fehlt=[]) %}
         {% for bezeichnung, wert in pflicht %}
           {% if (wert | default('', true) | string | trim) in ['', 'none', 'None'] %}
@@ -1518,10 +1533,6 @@ action:
     then:
       - variables:
           # Inputs, die sonst nur direkt als !input oder umgerechnet vorliegen.
-          aufz_wr_grid_charge_current: !input wr_grid_charge_current
-          aufz_logbook_dummy: !input helper_logbook_dummy
-          aufz_wp_hysterese_number: !input wp_hysterese_number
-          aufz_wp_boost_button: !input wp_boost_button
           aufz_duration_peak_hold: !input duration_peak_hold
           aufz_duration_wp_laufzeit: !input duration_wp_laufzeit
           aufz_duration_top_balancing: !input duration_top_balancing
@@ -1552,7 +1563,7 @@ action:
                  ('wr_float_voltage_sensor', var_wr_float_voltage, {}),
                  ('wr_battery_voltage_sensor', var_wr_battery_voltage, {}),
                  ('wr_grid_charge_switch', var_wr_grid_charge_switch, {}),
-                 ('wr_grid_charge_current', aufz_wr_grid_charge_current, {}),
+                 ('wr_grid_charge_current', var_wr_grid_charge_current, {}),
                  ('wr_tou_1', var_wr_tou_1, {}),
                  ('wr_tou_2', var_wr_tou_2, {}),
                  ('wr_tou_3', var_wr_tou_3, {}),
@@ -1569,7 +1580,7 @@ action:
                  ('solcast_current_sensor', var_pv_forecast, {}),
                  ('solcast_next_hour_sensor', var_solcast_next_hour, {'estimate10': state_attr(var_solcast_next_hour, 'estimate10')}),
                  ('helper_lade_modus', var_lade_modus, {}),
-                 ('helper_logbook_dummy', aufz_logbook_dummy, {}),
+                 ('helper_logbook_dummy', var_logbook_dummy, {}),
                  ('helper_batterie_heute_voll', var_batterie_heute_voll, {}),
                  ('json_tracking_sensor', var_json_tracking, {}),
                  ('helper_blockade_beendet', var_helper_blockade_beendet, {}),
@@ -1588,9 +1599,9 @@ action:
                  ('eingriff_dauer_sensor', var_eingriff_dauer, {}),
                  ('wp_water_heater', var_wp_water_heater, {'temperature': state_attr(var_wp_water_heater, 'temperature')}),
                  ('wp_temp_sensor', var_wp_temp, {}),
-                 ('wp_hysterese_number', aufz_wp_hysterese_number, {}),
+                 ('wp_hysterese_number', var_wp_hysterese_number, {}),
                  ('wp_ziel_temp_number', var_wp_ziel_number, {}),
-                 ('wp_boost_button', aufz_wp_boost_button, {}),
+                 ('wp_boost_button', var_wp_boost_button, {}),
                  ('wp_kompressor_sensor', var_wp_kompressor, {}),
                  ('bms1_temp_min_sensor', var_bms1_temp_min, {}),
                  ('bms2_temp_min_sensor', var_bms2_temp_min, {}),
@@ -2468,7 +2479,7 @@ action:
             then:
               - action: number.set_value
                 target:
-                  entity_id: !input wp_hysterese_number
+                  entity_id: "{{ var_wp_hysterese_number }}"
                 data:
                   value: "{{ var_wp_hysterese_normal }}"
               # RETRY-BAUSTEIN (siehe Boost-Ende): beide Entities, 10s prüfen, max 3.
@@ -2476,7 +2487,7 @@ action:
                   sequence:
                     - action: water_heater.set_temperature
                       target:
-                        entity_id: !input wp_water_heater
+                        entity_id: "{{ var_wp_water_heater }}"
                       data:
                         temperature: "{{ var_wp_ziel_temp_normal }}"
                     - if:
@@ -3109,12 +3120,12 @@ action:
       # Reset-Zweig von 'wp_boost_ende' mit seinem Retry-Baustein.
       - action: number.set_value
         target:
-          entity_id: !input wp_hysterese_number
+          entity_id: "{{ var_wp_hysterese_number }}"
         data:
           value: "{{ var_wp_hysterese_normal }}"
       - action: water_heater.set_temperature
         target:
-          entity_id: !input wp_water_heater
+          entity_id: "{{ var_wp_water_heater }}"
         data:
           temperature: "{{ var_wp_ziel_temp_normal }}"
       - if:
@@ -3163,12 +3174,12 @@ action:
         sequence:
           - action: number.set_value
             target:
-              entity_id: !input wp_hysterese_number
+              entity_id: "{{ var_wp_hysterese_number }}"
             data:
               value: "{{ var_wp_hysterese_pv }}"
           - action: water_heater.set_temperature
             target:
-              entity_id: !input wp_water_heater
+              entity_id: "{{ var_wp_water_heater }}"
             data:
               temperature: "{{ var_wp_ziel_temp_pv }}"
           # ViCare-Doppelsetzung: Zieltemperatur zusätzlich über number-Entity
@@ -3183,7 +3194,7 @@ action:
                   value: "{{ var_wp_ziel_temp_pv }}"
           - action: button.press
             target:
-              entity_id: !input wp_boost_button
+              entity_id: "{{ var_wp_boost_button }}"
           - action: timer.start
             target:
               entity_id: !input helper_timer_wp_anlauf
@@ -3217,7 +3228,7 @@ action:
         sequence:
           - action: number.set_value
             target:
-              entity_id: !input wp_hysterese_number
+              entity_id: "{{ var_wp_hysterese_number }}"
             data:
               value: "{{ var_wp_hysterese_normal }}"
           # RETRY-BAUSTEIN (identisch an Boost-Ende, Watchdog, Mitternachts-Check):
@@ -3228,7 +3239,7 @@ action:
               sequence:
                 - action: water_heater.set_temperature
                   target:
-                    entity_id: !input wp_water_heater
+                    entity_id: "{{ var_wp_water_heater }}"
                   data:
                     temperature: "{{ var_wp_ziel_temp_normal }}"
                 - if:
@@ -3284,7 +3295,7 @@ action:
         sequence:
           - action: number.set_value
             target:
-              entity_id: !input wp_hysterese_number
+              entity_id: "{{ var_wp_hysterese_number }}"
             data:
               value: "{{ var_wp_hysterese_normal }}"
           # RETRY-BAUSTEIN (siehe Boost-Ende): beide Entities setzen, 10s prüfen,
@@ -3293,7 +3304,7 @@ action:
               sequence:
                 - action: water_heater.set_temperature
                   target:
-                    entity_id: !input wp_water_heater
+                    entity_id: "{{ var_wp_water_heater }}"
                   data:
                     temperature: "{{ var_wp_ziel_temp_normal }}"
                 - if:
