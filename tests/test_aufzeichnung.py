@@ -11,7 +11,7 @@ import pytest
 
 from conftest import (AUFZEICHNUNG_ENTITY, FIXTURES_PFAD, aufzeichnung_lesen, aufzeichnungen, standard_inputs,
                       szenario, szenario_aus_aufzeichnung, zeit)
-from ha_jinja import Harness, input_definitionen
+from ha_jinja import Harness, Zustand, input_definitionen
 
 
 def _block(blueprint: dict) -> dict:
@@ -104,3 +104,51 @@ def test_echte_aufzeichnungen_laufen_durch_die_kette(blueprint, zeile):
     """Jede echte Zeile rendert die komplette Variablenkette ohne Fehler."""
     ctx = szenario_aus_aufzeichnung(blueprint, aufzeichnung_lesen(zeile)).auswerten()
     assert "target_p5" in ctx
+
+
+# --------------------------------------------------------------------------
+# Entlade-Untergrenze an einem echten Abend: Aufzeichnung plus die Tagesprognose
+# der Folgetage aus deren erster Zeile (Solcast-Stand um Mitternacht).
+# --------------------------------------------------------------------------
+def _zeilen_von(datei):
+    return [aufzeichnung_lesen(z) for _, z in aufzeichnungen(FIXTURES_PFAD / datei)]
+
+
+def _eintrag(z, inp):
+    return next(e for e in z["entitaeten"] if e["input"] == inp)
+
+
+def _tagesprognose(z):
+    fc = _eintrag(z, "solcast_heute_sensor")["attributes"]["detailedForecast"]
+    return round(sum(s["pv_estimate"] for s in fc) * 0.5, 2), round(sum(s["pv_estimate10"] for s in fc) * 0.5, 2)
+
+
+def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
+    """
+    Dachterrasse, 06.09. 21:00, Ladestand 95 %: Prognose fuer den 07.09. laut dessen
+    Mitternachtszeile 40.94 kWh (P10 35.54), Tagesverbrauch aus dem Profil 11.8 kWh.
+    Von Hand: Blend 38.24 x 0.92 - 11.8 = 23.4 kWh = 73 % von 32.15 kWh ->
+    Ziel-Kandidat 90 - 73 = 17, Einspeise-Kandidat 27, Mindest 50 -> F = max(17, min(50, 27)) = 27.
+    Im September bindet die Untergrenze also nicht: Die Nacht fiel real nur auf 80 %.
+    """
+    from conftest import fake_entity
+    zs = _zeilen_von("dachterrasse_2026-09-04_bis_07.jsonl")
+    abend = next(z for z in zs if z["zeit"].startswith("2026-09-06T21:00"))
+    morgen = next(z for z in zs if z["zeit"].startswith("2026-09-07T00:00"))
+    p50, p10 = _tagesprognose(morgen)
+    assert (p50, p10) == (40.94, 35.54)
+
+    h = szenario_aus_aufzeichnung(blueprint, abend)
+    eid = fake_entity("solcast_morgen_sensor", "sensor")
+    h.inputs["solcast_morgen_sensor"] = eid
+    h.states.tabelle[eid] = Zustand(eid, str(p50), {"estimate10": p10})
+    ctx = h.auswerten(bis="tou_schreiben")
+
+    assert ctx["entlade_aktiv"] is True
+    assert ctx["aktueller_soc"] == 95
+    assert ctx["verbrauch_tag_kwh"] == pytest.approx(11.8, abs=0.05)
+    assert ctx["b_stern_pct"] == pytest.approx(73, abs=1)
+    assert ctx["f_soc"] == 27
+    nacht = [float(_eintrag(z, "battery_soc_sensor")["state"]) for z in zs
+             if "2026-09-06T21:00" <= z["zeit"][:16] <= "2026-09-07T08:00"]
+    assert min(nacht) == 80
