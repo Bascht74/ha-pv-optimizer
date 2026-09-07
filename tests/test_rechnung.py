@@ -143,7 +143,7 @@ def test_json_profil_fallback_bei_leerem_helfer(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
-# Hausverbrauchs-Hinweis in Prio 8 und Fall B
+# Hausverbrauchs-Hinweis in Prio 7 und Fall B
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("minute, slot_kwh, meldet", [
     (25, 0.80, True),   # Backofen: 0,80 kWh nach 25 min gegen 0,19 x 25/30 = 0,16 erwartet
@@ -181,7 +181,7 @@ def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
     """
     Pack 2 meldet seit 15 s nicht. Der Temperaturschutz darf das sehen
     (packs_online = 1), das Energiemodell nicht: die Batterie hat weiterhin
-    zwei Packs, und freie_kwh geht in Blockade, Fall B und Prio 8 ein.
+    zwei Packs, und freie_kwh geht in Blockade, Fall B und Prio 7 ein.
     """
     from ha_jinja import Zustand
     h = szenario(blueprint, zeit(tag, 10, 5), soc=84.0)
@@ -232,7 +232,7 @@ def test_slot_index_folgt_dem_trigger_nicht_der_uhr(blueprint, tag, trigger_hh, 
     mode: queued kann den Halbstundenlauf hinter andere Laeufe schieben. Der Slot,
     dessen Verbrauch verbucht wird, ist der vor der Trigger-Zeit - egal, wann der
     Lauf tatsaechlich rechnet. Sonst landet der Wert ab 15 Minuten Verzug im
-    falschen Slot des EMA-Profils, an dem Blockade und Prio 8 haengen.
+    falschen Slot des EMA-Profils, an dem Blockade und Prio 7 haengen.
     """
     trigger_zeit = zeit(tag, trigger_hh, trigger_mm)
     h = szenario(blueprint, trigger_zeit + dt.timedelta(minutes=verzug_min), trigger_id="update_json")
