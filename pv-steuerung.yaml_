@@ -58,6 +58,9 @@ input_select:
       - top_balancing
       - fall_b_max
       - nacht
+      # Wird derzeit von keinem Zweig gesetzt. Bleibt fuer eine kuenftige
+      # Netzlade-Logik erhalten, damit bestehende Instanzen die Option behalten.
+      - zwangsladung
     initial: normal
 
 input_text:
