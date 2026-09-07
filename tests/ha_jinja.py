@@ -220,6 +220,34 @@ def parse_native(gerendert: str) -> Any:
 # --------------------------------------------------------------------------
 # Das Harness
 # --------------------------------------------------------------------------
+def _statische_env() -> jinja2.Environment:
+    env = jinja2.Environment(undefined=jinja2.ChainableUndefined)
+    env.globals.update(
+        as_datetime=ha_as_datetime, as_local=ha_as_local, as_timestamp=ha_as_timestamp,
+        timedelta=dt.timedelta, float=ha_float, int=ha_int,
+    )
+    env.filters.update(
+        float=ha_float, int=ha_int, round=ha_round, from_json=json.loads,
+        # Wie HA: datetime-Objekte (period_start im Solcast-Attribut) sind NICHT
+        # serialisierbar - to_json wirft dann "Type is not JSON serializable".
+        to_json=lambda v, **kw: json.dumps(v, **kw),
+        as_datetime=ha_as_datetime, as_local=ha_as_local, as_timestamp=ha_as_timestamp,
+    )
+    env.tests.update(
+        number=lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+        list=lambda v: isinstance(v, list),
+        datetime=lambda v: isinstance(v, dt.datetime),
+    )
+    return env
+
+
+# Eine Environment und ein Template-Cache fuer alle Harness-Instanzen: Das Kompilieren
+# der ~240 Templates je Lauf kostete mehr als das Rendern. Zustand (states, now)
+# kommt je Aufruf als Render-Kontext mit, nicht als Global.
+_ENV = _statische_env()
+_TEMPLATES: dict[str, jinja2.Template] = {}
+
+
 class Harness:
     """Wertet die top-level variables:-Schritte des Blueprints in Reihenfolge aus."""
 
@@ -238,12 +266,10 @@ class Harness:
             jetzt = jetzt.replace(tzinfo=TZ)
         self.jetzt = jetzt.astimezone(TZ)
         self.trigger_id = trigger_id
-        self._env = self._baue_env()
-        self._cache: dict[str, jinja2.Template] = {}
+        self._laufzeit = self._laufzeit_kontext()
 
-    # -- Umgebung ---------------------------------------------------------
-    def _baue_env(self) -> jinja2.Environment:
-        env = jinja2.Environment(undefined=jinja2.ChainableUndefined)
+    # -- Zustandsabhaengige Funktionen ------------------------------------
+    def _laufzeit_kontext(self) -> dict:
         jetzt = self.jetzt
         states = self.states
 
@@ -266,46 +292,16 @@ class Harness:
         def is_state(entity_id: Any, wert: Any) -> bool:
             return states(entity_id) == wert
 
-        env.globals.update(
-            states=states,
-            state_attr=state_attr,
-            is_state=is_state,
-            now=now,
-            utcnow=utcnow,
-            today_at=today_at,
-            as_datetime=ha_as_datetime,
-            as_local=ha_as_local,
-            as_timestamp=ha_as_timestamp,
-            timedelta=dt.timedelta,
-            float=ha_float,
-            int=ha_int,
-        )
-        env.filters.update(
-            float=ha_float,
-            int=ha_int,
-            round=ha_round,
-            from_json=json.loads,
-            # Wie HA: datetime-Objekte (period_start im Solcast-Attribut) sind NICHT
-            # serialisierbar - to_json wirft dann "Type is not JSON serializable".
-            to_json=lambda v, **kw: json.dumps(v, **kw),
-            as_datetime=ha_as_datetime,
-            as_local=ha_as_local,
-            as_timestamp=ha_as_timestamp,
-        )
-        env.tests.update(
-            number=lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-            list=lambda v: isinstance(v, list),
-            datetime=lambda v: isinstance(v, dt.datetime),
-        )
-        return env
+        return dict(states=states, state_attr=state_attr, is_state=is_state,
+                    now=now, utcnow=utcnow, today_at=today_at)
 
     # -- Rendern ----------------------------------------------------------
     def render(self, quelle: str, ctx: dict) -> Any:
-        tpl = self._cache.get(quelle)
+        tpl = _TEMPLATES.get(quelle)
         if tpl is None:
-            tpl = self._env.from_string(quelle)
-            self._cache[quelle] = tpl
-        return parse_native(tpl.render(**ctx))
+            tpl = _ENV.from_string(quelle)
+            _TEMPLATES[quelle] = tpl
+        return parse_native(tpl.render(**self._laufzeit, **ctx))
 
     def _aufloesen(self, wert: Any, ctx: dict) -> Any:
         if isinstance(wert, InputTag):

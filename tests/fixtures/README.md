@@ -5,7 +5,7 @@ Halbstundenlauf mit allen Eingangswerten, so wie der Lauf sie gesehen hat. Einri
 steht im Kopf von `pv-steuerung.yaml_`, Download unter
 `/local/pv_optimizer_aufzeichnung.jsonl` der Instanz.
 
-Ablage: `<standort>_<datum>.jsonl`. Standorte: `dachterrasse` (2 × 314 Ah, Wärmepumpe)
+Ablage: `<standort>_<datum>.jsonl` oder `<standort>_<von>_bis_<bis>.jsonl` bei mehreren Tagen. Standorte: `dachterrasse` (2 × 314 Ah, Wärmepumpe)
 und `pv` (2 × 200 Ah, ohne Wärmepumpe). Die Dateien bleiben, wie sie heruntergeladen
 wurden: Die zwei Kopfzeilen der File-Integration, Testsendungen und ein Zeitstempel-
 Präfix vor dem `{` werden beim Einlesen übersprungen.
