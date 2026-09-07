@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.1.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.1.1]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -828,7 +828,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.1.0]"
+      bp_version: "[V6.1.1]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -849,9 +849,9 @@ action:
       # Zellausgleich gilt als faellig, wenn die Batterie so viele Tage nicht voll war.
       lade_wirkungsgrad: 0.92
       zellausgleich_nach_tagen: 9
-      # Morgen-Blockade und gedrosselte Nachladung halten Platz fuer die Einspeise-
-      # spitze frei. Erreicht die erwartete Spitze nicht diesen Anteil der
-      # Peak-Shaving-Schwelle, gibt es nichts zu kappen: dann volle Ladung ab der ersten Sonne.
+      # Die Morgen-Blockade haelt Platz fuer die Einspeisespitze frei. Erreicht die
+      # erwartete Spitze nicht diesen Anteil der Peak-Shaving-Schwelle, gibt es
+      # nichts zu kappen, und die gedrosselte Ladung beginnt mit der ersten Sonne.
       peak_erwartung_anteil: 0.9
       # Ab welchem Anteil des Ladefensters der Realitaets-Check greift. Frueher
       # bestimmt eine einzelne Wolkenluecke den Quotienten, spaeter bleibt zu
@@ -2011,12 +2011,12 @@ action:
       # Unsicherheit und Realitaets-Check stecken bereits in den Slots.
       # Ohne Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin
       # meist Fall B, weil ohne Prognose kein Rest-Überschuss ausgewiesen wird.
-      # Ohne erwartete Einspeisespitze gibt es nichts freizuhalten: Maximum.
+      # Auch ohne Einspeisespitze gedrosselt: Die Batterie soll so spaet voll
+      # werden, wie die Prognose es zulaesst, statt Stunden bei 100 % zu stehen.
       amp_basis_13: >
-        {{ max_ampere if not spitze_erwartet
-           else ((sim_ampere_min | int(0))
-                 if (sim_ampere_min | int(0)) > 0
-                 else (noetige_leistung_roh / nominale_spannung)) }}
+        {{ (sim_ampere_min | int(0))
+           if (sim_ampere_min | int(0)) > 0
+           else (noetige_leistung_roh / nominale_spannung) }}
       # Sicherheitsfaktor und Regelabweichung ADDIEREN sich, sie konkurrieren
       # nicht: Der Offset gleicht nur aus, dass der Wechselrichter unter dem
       # Sollwert einregelt - er ist keine Reserve. Als groesserer von beiden
@@ -3639,7 +3639,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 7 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
-                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if not spitze_erwartet %} Zielstrom = Maximum {{ max_ampere | round(0) }} A, da die erwartete Einspeisespitze {{ (spitze_erwartet_w / 1000) | round(1) }} kW unter {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Peak-Shaving-Schwelle {{ (schwelle_peak_shaving / 1000) | round(1) }} kW bleibt und kein Platz für Peak-Shaving freizuhalten ist.{% elif (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ sim_slots_fenster | length }} von {{ rest_slots | length }} Prognose-Zeitfenstern {{ amp_basis_13 | round(1) }} A{% if (sim_slots_fenster | length) < (rest_slots | length) %} (Ladefenster endet, wo die Prognose unter {{ (fenster_mindest_anteil * 100) | round(0) | int }} % der Tages-Höchstleistung fällt; Ladevorlauf {{ ladevorlauf_text }} davor){% endif %}, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ trend_log_addon }}{{ haus_log_addon }}{{ temp_log_addon }}
+                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ sim_slots_fenster | length }} von {{ rest_slots | length }} Prognose-Zeitfenstern {{ amp_basis_13 | round(1) }} A{% if (sim_slots_fenster | length) < (rest_slots | length) %} (Ladefenster endet, wo die Prognose unter {{ (fenster_mindest_anteil * 100) | round(0) | int }} % der Tages-Höchstleistung fällt; Ladevorlauf {{ ladevorlauf_text }} davor){% endif %}, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ trend_log_addon }}{{ haus_log_addon }}{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

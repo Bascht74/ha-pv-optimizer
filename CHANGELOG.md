@@ -3,6 +3,14 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.1.1
+
+Fixed
+- On days without an expected export peak the time-based charge stays throttled.
+  The previous version raised it to the maximum current there; the battery would
+  then sit at 100 % for hours, while the throttle exists to reach full as late as
+  the forecast allows. Only the morning blockade depends on the expected peak.
+
 ## V6.1.0
 
 Changed

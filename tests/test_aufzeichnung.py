@@ -162,18 +162,20 @@ def _lauf(blueprint, datei, zeit_prefix):
     return szenario_aus_aufzeichnung(blueprint, z).auswerten()
 
 
-def test_ohne_erwartete_spitze_keine_blockade_und_voller_ladestrom(blueprint):
+def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
     """
     PV, 05.09. 08:00: Prognose-Spitze 5,8 kW nach Abzug des Hausverbrauchs, Schwelle
-    11,9 kW, 90 % davon 10,7 kW. Nichts zu kappen -> keine Blockade, Prio 7 auf Maximum.
-    Real hielt die Blockade an diesem Tag bis 13:00 bei 14 kWh Einspeisung, und die
-    Batterie wurde nicht voll.
+    11,9 kW, 90 % davon 10,7 kW. Nichts zu kappen -> keine Blockade. Prio 7 bleibt
+    gedrosselt (Simulation 18 A fuer 8,3 kWh in 11 h), damit die Batterie so spaet
+    voll wird, wie die Prognose es zulaesst. Real hielt die Blockade an diesem Tag
+    bis 13:00 bei 14 kWh Einspeisung, und die Batterie wurde nicht voll.
     """
     ctx = _lauf(blueprint, "pv_2026-09-04_bis_07.jsonl", "2026-09-05T08:00")
     assert ctx["spitze_erwartet_w"] == pytest.approx(5776, abs=5)
     assert ctx["spitze_erwartet"] is False
     assert ctx["blockade_aktiv"] is False
-    assert ctx["target_p5"] == 200
+    assert ctx["sim_ampere_min"] == 18
+    assert ctx["target_p5"] == 21
 
 
 def test_mit_erwarteter_spitze_bleibt_alles_wie_bisher(blueprint):
