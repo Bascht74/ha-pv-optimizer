@@ -3,6 +3,17 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.1.0
+
+Changed
+- The morning blockade and the throttled top-up of the time-based charge apply
+  only on days with an expected export peak: the highest forecast slot minus the
+  house load of that slot must reach 90 % of the peak-shaving threshold. Both
+  mechanisms hold back battery capacity for a peak that would otherwise be
+  curtailed; on a day without such a peak they only export energy the battery
+  could have taken, so the battery charges at full current from the first sun.
+  The peak is read from the forecast array already in use, no new input.
+
 ## V6.0.0
 
 Added

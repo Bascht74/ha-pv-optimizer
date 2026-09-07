@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.0.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.1.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -828,7 +828,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.0.0]"
+      bp_version: "[V6.1.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -849,6 +849,10 @@ action:
       # Zellausgleich gilt als faellig, wenn die Batterie so viele Tage nicht voll war.
       lade_wirkungsgrad: 0.92
       zellausgleich_nach_tagen: 9
+      # Morgen-Blockade und gedrosselte Nachladung halten Platz fuer die Einspeise-
+      # spitze frei. Erreicht die erwartete Spitze nicht diesen Anteil der
+      # Peak-Shaving-Schwelle, gibt es nichts zu kappen: dann volle Ladung ab der ersten Sonne.
+      peak_erwartung_anteil: 0.9
       # Ab welchem Anteil des Ladefensters der Realitaets-Check greift. Frueher
       # bestimmt eine einzelne Wolkenluecke den Quotienten, spaeter bleibt zu
       # wenig Ladezeit, um noch nachzusteuern.
@@ -1479,6 +1483,20 @@ action:
           {{ default_arr }}
         {% endif %}
 
+      # Erwartete Einspeisespitze heute (W): hoechster Prognose-Slot minus Hausverbrauch
+      # desselben Slots, P50 ohne Abschlag. Die Blockade faellt nur, wenn selbst die
+      # mittlere Prognose keine Spitze nahe der Peak-Shaving-Schwelle hergibt.
+      spitze_erwartet_w: >
+        {% set ns = namespace(best=0.0) %}
+        {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+          {% set t = as_datetime(s.period_start) | as_local %}
+          {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
+          {% set w = (s.pv_estimate | float(0)) * 1000 - (json_profil[idx] | float(0.2)) * 2000 %}
+          {% if w > ns.best %}{% set ns.best = w %}{% endif %}
+        {% endfor %}
+        {{ ns.best }}
+      spitze_erwartet: "{{ spitze_erwartet_w >= schwelle_peak_shaving * peak_erwartung_anteil }}"
+
       # HINWEIS: Diese Variable wird derzeit nirgends gelesen (reine Diagnose).
       # Sie traegt die Blend-Formel trotzdem mit, damit bei einer Aenderung der
       # Gewichtung keine zweite Definition zurueckbleibt.
@@ -1993,10 +2011,12 @@ action:
       # Unsicherheit und Realitaets-Check stecken bereits in den Slots.
       # Ohne Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin
       # meist Fall B, weil ohne Prognose kein Rest-Überschuss ausgewiesen wird.
+      # Ohne erwartete Einspeisespitze gibt es nichts freizuhalten: Maximum.
       amp_basis_13: >
-        {{ (sim_ampere_min | int(0))
-           if (sim_ampere_min | int(0)) > 0
-           else (noetige_leistung_roh / nominale_spannung) }}
+        {{ max_ampere if not spitze_erwartet
+           else ((sim_ampere_min | int(0))
+                 if (sim_ampere_min | int(0)) > 0
+                 else (noetige_leistung_roh / nominale_spannung)) }}
       # Sicherheitsfaktor und Regelabweichung ADDIEREN sich, sie konkurrieren
       # nicht: Der Offset gleicht nur aus, dass der Wechselrichter unter dem
       # Sollwert einregelt - er ist keine Reserve. Als groesserer von beiden
@@ -2384,6 +2404,7 @@ action:
       # blockiert, sondern mit dem Notlauf-Strom weitergeladen.
       blockade_aktiv: >
         {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
+           and spitze_erwartet
            and not packs_offline_bestaetigt
            and states(var_timer_peak) != 'active'
            and (trigger.id != 'export_peak_schwelle'
@@ -3618,7 +3639,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ bp_version }} Prio 7 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
-                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ sim_slots_fenster | length }} von {{ rest_slots | length }} Prognose-Zeitfenstern {{ amp_basis_13 | round(1) }} A{% if (sim_slots_fenster | length) < (rest_slots | length) %} (Ladefenster endet, wo die Prognose unter {{ (fenster_mindest_anteil * 100) | round(0) | int }} % der Tages-Höchstleistung fällt; Ladevorlauf {{ ladevorlauf_text }} davor){% endif %}, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ trend_log_addon }}{{ haus_log_addon }}{{ temp_log_addon }}
+                        (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if not spitze_erwartet %} Zielstrom = Maximum {{ max_ampere | round(0) }} A, da die erwartete Einspeisespitze {{ (spitze_erwartet_w / 1000) | round(1) }} kW unter {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Peak-Shaving-Schwelle {{ (schwelle_peak_shaving / 1000) | round(1) }} kW bleibt und kein Platz für Peak-Shaving freizuhalten ist.{% elif (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ sim_slots_fenster | length }} von {{ rest_slots | length }} Prognose-Zeitfenstern {{ amp_basis_13 | round(1) }} A{% if (sim_slots_fenster | length) < (rest_slots | length) %} (Ladefenster endet, wo die Prognose unter {{ (fenster_mindest_anteil * 100) | round(0) | int }} % der Tages-Höchstleistung fällt; Ladevorlauf {{ ladevorlauf_text }} davor){% endif %}, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ trend_log_addon }}{{ haus_log_addon }}{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

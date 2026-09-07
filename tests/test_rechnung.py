@@ -320,3 +320,17 @@ def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
     assert ctx["zellausgleich_faellig"] is True
     assert ctx["ziel_soc_eff"] == 100
     assert ctx["f_soc"] == 85
+
+
+# --------------------------------------------------------------------------
+# Erwartete Einspeisespitze: Grenze bei 90 % der Peak-Shaving-Schwelle
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("schwelle_w, erwartet", [
+    (6500, False),   # Kurve mit 3,6 kW Spitze minus 0,38 kW Haus = 3,2 kW < 5,85 kW
+    (3500, True),    # 3,2 kW >= 3,15 kW
+    (3600, False),   # 3,2 kW <  3,24 kW
+])
+def test_spitze_erwartet_an_der_90_prozent_grenze(blueprint, tag, schwelle_w, erwartet):
+    ctx = szenario(blueprint, zeit(tag, 9, 0), input_overrides={"schwelle_peak_shaving": schwelle_w}).auswerten(bis="spitze_erwartet")
+    assert ctx["spitze_erwartet_w"] == pytest.approx(3600 - 0.19 * 2000, abs=1)
+    assert ctx["spitze_erwartet"] is erwartet
