@@ -104,6 +104,8 @@ def szenario(
     hausverbrauch_slot_kwh: float = 0.0,
     ladestrom: float = 200.0,
     boost_timer_idle_seit_s: float = 3600 * 6,
+    prognose_tage_kwh: tuple[float, float, float] | None = (25.0, 20.0, 15.0),
+    prognose_tage_p10_anteil: float = 1.0,
     zustands_overrides: dict[str, Zustand] | None = None,
     input_overrides: dict | None = None,
     trigger_id: str = "monitoring_5min",
@@ -113,6 +115,9 @@ def szenario(
     inputs = standard_inputs(blueprint)
     # Zwei Packs, wie an beiden Standorten: die optionalen Pack-3-Inputs bleiben leer.
     inputs.update({"vmax3_sensor": "", "bms3_temp_min_sensor": "", "bms3_temp_max_sensor": ""})
+    # Entlade-Planung: Tagesprognosen morgen / Tag 3 / Tag 4; None schaltet sie aus.
+    if prognose_tage_kwh is None:
+        inputs.update({"solcast_morgen_sensor": "", "solcast_tag3_sensor": "", "solcast_tag4_sensor": ""})
     if input_overrides:
         inputs.update(input_overrides)
     e = lambda name: inputs[name]  # noqa: E731
@@ -154,6 +159,8 @@ def szenario(
         z("solcast_rest_sensor", round(rest_kwh, 2)),
         z("solcast_current_sensor", pv_jetzt_w),
         z("solcast_next_hour_sensor", round(naechste_h_kwh, 3), {"estimate10": round(naechste_h_kwh * 0.7, 3)}),
+        *[z(name, kwh, {"estimate10": round(kwh * prognose_tage_p10_anteil, 3)})
+          for name, kwh in zip(("solcast_morgen_sensor", "solcast_tag3_sensor", "solcast_tag4_sensor"), prognose_tage_kwh or ())],
         # Hausverbrauch
         z("hausverbrauch_json_text", json.dumps(profil)),
         z("hausverbrauch_utility_sensor", hausverbrauch_slot_kwh),
