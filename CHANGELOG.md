@@ -3,6 +3,13 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.1.2
+
+Fixed
+- Two comments still referred to a "Prio 8" that no longer exists since the
+  priorities were renumbered; they now name the Prio 7 condition and the Prio 7
+  charge they describe. No behaviour change.
+
 ## V6.1.1
 
 Fixed

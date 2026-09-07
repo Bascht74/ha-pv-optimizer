@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.1.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.1.2]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -828,7 +828,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.1.1]"
+      bp_version: "[V6.1.2]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -871,7 +871,7 @@ action:
       # Ab diesem Ladestand senkt Prio 7 den Ladestrom nicht mehr ab, sie hebt ihn
       # nur noch an. Der Restbedarf ist dann so klein, dass eine Absenkung kaum
       # noch Peak-Shaving-Puffer schafft, das Vollwerden aber sichtbar verzoegert.
-      # Ab 97 % (Prio-8-Bedingung) regelt sie ohnehin gar nicht mehr.
+      # Ab 97 % (Eintrittsbedingung von Prio 7) regelt sie ohnehin gar nicht mehr.
       # Abstand zwischen Prio 7 und Fall B: Prio 7 rechnet mit dem vollen
       # Ladevorlauf, Fall B prueft mit diesem Abzug davon. Ohne den Abstand
       # loest Fall B taeglich gegen Abend aus - sobald Prio 7 den Vorlauf
@@ -2939,7 +2939,7 @@ action:
             # das Peak-Shaving, puffert die Batterie und real_export faellt unter die
             # Schwelle - der Erfolg wuerde die Massnahme sonst selbst beenden. Zum
             # Starten taugt potential_export nicht, ihn hebt schon eine normale
-            # Prio-8-Ladung ueber die Schwelle.
+            # Prio-7-Ladung ueber die Schwelle.
             #
             # 'not wp_boost_startet_gleich': sonst cancelt der WP-Boost den eben
             # gestarteten Timer. Batterie-Guard wie in Prio 5.
