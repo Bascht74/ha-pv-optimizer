@@ -37,9 +37,6 @@
 # ==============================================================================
 
 input_boolean:
-  winter_zwangsladung_aktiv:          # -> Helfer: Winter-Zwangsladung aktiv
-    name: "Winter Zwangsladung aktiv"
-    icon: mdi:snowflake-alert
   batterie_heute_voll:                # -> Helfer: Batterie war heute voll
     name: "Batterie heute voll"
     icon: mdi:battery-check
@@ -59,7 +56,6 @@ input_select:
       - peak_shaving
       - wp_sperre
       - top_balancing
-      - zwangsladung
       - fall_b_max
       - nacht
     initial: normal
@@ -122,9 +118,9 @@ input_number:
     mode: box
 
 timer:
-  winter_zwangsladung_cooldown:       # -> Timer: Zwangsladung Cooldown (auch Zellausgleich-Nachlauf)
-    name: "Winter Zwangsladung Cooldown"
-    icon: mdi:timer-snowflake
+  zellausgleich_nachlauf:             # -> Timer: Zellausgleich-Nachlauf
+    name: "Zellausgleich Nachlauf"
+    icon: mdi:timer-sand
   peak_shaving_hold:                  # -> Timer: Peak-Shaving Hold
     name: "Peak Shaving Hold"
     icon: mdi:timer-flash

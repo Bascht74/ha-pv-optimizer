@@ -21,13 +21,20 @@ Added
   grid.
 
 Removed
+- The winter forced grid charge, whole: its three triggers, the priority branch
+  that held the charge current, the midnight safety resets of the grid-charge
+  switch, and the inputs for the grid-charge switch, the grid-charge current, the
+  forced-charge current, the "forced charge active" helper and the cooldown
+  duration. Cell balancing is reached through PV only; the discharge planning
+  raises its target to 100 % when the balancing is overdue. The remaining
+  priorities are renumbered 0 to 7 without a gap.
 - The escalation minimum SOC input and the two rules that set the ToU programs
-  after two full days or nine days without a full charge. Instances that still
-  assign the removed input must drop it before the blueprint loads.
+  after two full days or nine days without a full charge.
+- Instances that still assign any removed input must drop those lines before
+  the blueprint loads; the cooldown timer input stays and is now named
+  "Zellausgleich-Nachlauf".
 
 Changed
-- The winter forced grid charge does not start while discharge planning is
-  active. Without planning it works as before.
 - The stored-loss booking compares the night's low against the current ToU
   floor instead of the fixed minimum.
 - The sunset warning about a battery that did not fill is suppressed while the

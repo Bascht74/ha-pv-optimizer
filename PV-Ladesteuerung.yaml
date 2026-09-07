@@ -98,18 +98,6 @@ blueprint:
             BMS-Packs ausgefallen sind und keine Zellspannungen mehr vorliegen. Leer lassen, wenn nicht vorhanden.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
-        wr_grid_charge_switch:
-          name: "Stellgröße: Netzladung Ein/Aus"
-          description: >-
-            Die switch-Entität, mit der die Netzladung des Wechselrichters ein- und ausgeschaltet wird. Der Blueprint schaltet sie nur für die Winter-Zwangsladung ein und danach wieder aus.
-          default: ""
-          selector: {"entity": {"domain": "switch"}}
-        wr_grid_charge_current:
-          name: "Stellgröße: Netzlade-Strom (A)"
-          description: >-
-            Die number-Entität für den Ladestrom bei Netzladung. Wird zusammen mit dem Schalter darüber für die Winter-Zwangsladung genutzt.
-          default: ""
-          selector: {"entity": {"domain": "number"}}
         wr_tou_1:
           name: "ToU-Programm 1: Min-SOC (%)"
           description: >-
@@ -165,12 +153,6 @@ blueprint:
             niedrig wählen: Ohne BMS lassen sich Zellspannungen und Temperaturen nicht überwachen.
           default: 10
           selector: {"number": {"min": 2, "max": 50, "step": 1, "unit_of_measurement": "A"}}
-        grid_ampere_zwangsladung:
-          name: "Netzlade-Strom bei Zwangsladung (A)"
-          description: >-
-            Ladestrom in Ampere für die Winter-Zwangsladung aus dem Netz. Eher niedrig wählen — es geht nur darum, die Zellen wieder auf ein balancierfähiges Niveau zu bringen, nicht um schnelles Volladen. Netzstrom ist teuer.
-          default: 50
-          selector: {"number": {"min": 10, "max": 140, "step": 1, "unit_of_measurement": "A"}}
     sec_net_pv:
       name: "3 – Netz & PV-Leistung (Pflicht)"
       description: >-
@@ -312,12 +294,6 @@ blueprint:
             Normalerweise 0, reine Statistik.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
-        helper_zwangsladung_aktiv:
-          name: "Helfer: Winter-Zwangsladung aktiv"
-          description: >-
-            input_boolean, der die Netzladung im Winter scharf schaltet. Solange er aus ist, lädt der Blueprint niemals aus dem Netz.
-          default: ""
-          selector: {"entity": {"domain": "input_boolean"}}
         helper_timer_peak:
           name: "Timer: Peak-Shaving Hold"
           description: >-
@@ -325,9 +301,9 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "timer"}}
         helper_timer_cooldown:
-          name: "Timer: Zwangsladung Cooldown"
+          name: "Timer: Zellausgleich-Nachlauf"
           description: >-
-            timer-Entität. Sperrt nach einer Zwangsladung eine Weile die nächste, damit sich das System nicht hochschaukelt.
+            timer-Entität. Läuft nach Erreichen der Zellausgleich-Spannung und hält die erhöhte Erhaltungsspannung, bis er abgelaufen ist.
           default: ""
           selector: {"entity": {"domain": "timer"}}
         helper_timer_wp_anlauf:
@@ -698,12 +674,6 @@ blueprint:
             Gewicht 0–1 der mittleren Solcast-Prognose (P50) gegenüber der vorsichtigen (P10) für die Tagesbilanzen. 0,5 = Mittelwert. Kleiner = vorsichtiger, größer = mutiger; zu hoch gehaltene Batterie speist ein, zu tiefe kauft nachts nach.
           default: 0.5
           selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
-        duration_cooldown:
-          name: "Sperrzeit nach Zwangsladung"
-          description: >-
-            Zeitdauer (hh:mm:ss), die nach einer Winter-Zwangsladung vergehen muss, bevor die nächste starten darf. Verhindert, dass sich das System bei dauerhaft schlechtem Wetter hochschaukelt und ständig aus dem Netz nachlädt.
-          default: "04:00:00"
-          selector: {"time": {}}
 trigger_variables:
   tv_battery_soc: !input battery_soc_sensor
   t_cooldown: !input helper_timer_cooldown
@@ -793,23 +763,6 @@ trigger:
     to: "idle"
     from: "active"
     id: wp_boost_ende
-  - alias: "Trigger Zwangsladung START: 10 Tage nicht voll"
-    platform: template
-    value_template: >
-      {{ (states(tv_battery_soc) | float(100)) < 100 }}
-    for: {days: 10}
-    id: zwangsladung_start
-  - alias: "Trigger Zwangsladung COOLDOWN: 100% erreicht"
-    platform: template
-    value_template: >
-      {{ (states(tv_battery_soc) | float(0)) > 99.9 }}
-    id: zwangsladung_100
-  - alias: "Trigger Zwangsladung ENDE: Cooldown Timer abgelaufen"
-    platform: state
-    entity_id: !input helper_timer_cooldown
-    to: "idle"
-    from: "active"
-    id: zwangsladung_ende
   - alias: "Trigger Float-Boost START: Zellausgleich-Timer läuft los"
     platform: state
     entity_id: !input helper_timer_cooldown
@@ -879,7 +832,6 @@ action:
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
-      # zugleich das einzige Fenster, in dem die Netz-Zwangsladung starten darf.
       winter_monate: [11, 12, 1, 2]
       # Sicherheitspuffer anteilig statt fest, gedeckelt durch puffer_kwh:
       # Ein fester Abzug wirkt umgekehrt proportional (1 kWh von 4 kWh sind 25 %,
@@ -912,16 +864,16 @@ action:
       # sobald das Warmwasser seine Zieltemperatur erreicht hat. Kein sofortiges
       # Ende, damit die Waermepumpe den Speicher noch fertig laden kann.
       wp_nachlauf_min: 15
-      # Ab diesem Ladestand senkt Prio 8 den Ladestrom nicht mehr ab, sie hebt ihn
+      # Ab diesem Ladestand senkt Prio 7 den Ladestrom nicht mehr ab, sie hebt ihn
       # nur noch an. Der Restbedarf ist dann so klein, dass eine Absenkung kaum
       # noch Peak-Shaving-Puffer schafft, das Vollwerden aber sichtbar verzoegert.
       # Ab 97 % (Prio-8-Bedingung) regelt sie ohnehin gar nicht mehr.
-      # Abstand zwischen Prio 8 und Fall B: Prio 8 rechnet mit dem vollen
+      # Abstand zwischen Prio 7 und Fall B: Prio 7 rechnet mit dem vollen
       # Ladevorlauf, Fall B prueft mit diesem Abzug davon. Ohne den Abstand
-      # loest Fall B taeglich gegen Abend aus - sobald Prio 8 den Vorlauf
+      # loest Fall B taeglich gegen Abend aus - sobald Prio 7 den Vorlauf
       # gerade nicht mehr schafft, ist auch die Fall-B-Bedingung erfuellt,
       # obwohl die Energie im vollen Fenster noch reicht. Bewusst hier und
-      # nicht als Aufschlag bei Prio 8: So bleibt der Ladestrom unveraendert
+      # nicht als Aufschlag bei Prio 7: So bleibt der Ladestrom unveraendert
       # und damit auch die Kapazitaet, die fuers Peak-Shaving frei bleibt.
       fallb_vorlauf_abzug: 0.5
       # Wo das Ladefenster endet: nach dem letzten Zeitfenster, dessen
@@ -950,7 +902,7 @@ action:
 
   # TAGESPFLEGE - bewusst VOR dem Deye-Retry: Bleibt die Anbindung um Mitternacht
   # weg, beendet der Retry den Lauf, und 'heute voll' sowie der Blockade-Marker
-  # sperrten Prio 1, Prio 6 und die Morgen-Blockade einen ganzen Tag. Nichts hier
+  # sperrten Prio 1, Prio 5 und die Morgen-Blockade einen ganzen Tag. Nichts hier
   # liest ein Wechselrichter-Register. Reihenfolge ist kritisch: das Tracking muss
   # vor 'Tageshelfer zuruecksetzen' laufen, denn jenes setzt den Voll-Helfer auf
   # 'off' - dahinter kaeme der heutige Tag nie in die Liste.
@@ -1203,7 +1155,6 @@ action:
       var_battery_soc: !input battery_soc_sensor
       var_wp_temp: !input wp_temp_sensor
       var_logbook_dummy: !input helper_logbook_dummy
-      var_wr_grid_charge_current: !input wr_grid_charge_current
       var_wp_water_heater: !input wp_water_heater
       var_wp_hysterese_number: !input wp_hysterese_number
       var_wp_boost_button: !input wp_boost_button
@@ -1212,7 +1163,6 @@ action:
       var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
       var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
-      var_wr_grid_charge_switch: !input wr_grid_charge_switch
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
@@ -1233,7 +1183,6 @@ action:
       var_bms2_temp_max: !input bms2_temp_max_sensor
       var_bms3_temp_max: !input bms3_temp_max_sensor
 
-      var_zwangsladung_aktiv: !input helper_zwangsladung_aktiv
       var_wr_tou_1: !input wr_tou_1
       var_wr_tou_2: !input wr_tou_2
       var_wr_tou_3: !input wr_tou_3
@@ -1280,7 +1229,6 @@ action:
       vertrauen_tag3: !input vertrauen_tag3
       vertrauen_tag4: !input vertrauen_tag4
       nacht_p50_anteil: !input nacht_p50_anteil
-      grid_ampere_zwangsladung: !input grid_ampere_zwangsladung
       top_balancing_voltage: !input top_balancing_voltage
       var_float_normal: !input float_voltage_normal
       var_float_balancing: !input float_voltage_balancing
@@ -1320,12 +1268,11 @@ action:
              ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
              ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
              ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
-             ('Helfer: Winter-Zwangsladung aktiv', var_zwangsladung_aktiv),
              ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
              ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
              ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
              ('Timer: Peak-Shaving Hold', var_timer_peak),
-             ('Timer: Zwangsladung Cooldown', var_timer_cooldown),
+             ('Timer: Zellausgleich-Nachlauf', var_timer_cooldown),
              ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
              ('Timer: WP-Laufzeit', var_timer_wp_boost),
              ('BMS 1: höchste Zellspannung (V)', var_vmax1),
@@ -1338,8 +1285,7 @@ action:
              ('ToU-Programm 4: Min-SOC (%)', var_wr_tou_4),
              ('ToU-Programm 5: Min-SOC (%)', var_wr_tou_5),
              ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6),
-             ('Helfer: Logbuch-Anker', var_logbook_dummy),
-             ('Stellgröße: Netzlade-Strom (A)', var_wr_grid_charge_current)
+             ('Helfer: Logbuch-Anker', var_logbook_dummy)
            ] %}
         {# Die Wärmepumpen-Felder sind nur Pflicht, wenn der Boost eingeschaltet ist. #}
         {% if var_wp_boost_aktiv %}
@@ -1508,7 +1454,7 @@ action:
       # Kapazitaet ist eine physische Groesse: ein Pack, dessen BMS gerade nicht
       # meldet, ist nicht ausgebaut. packs_online ist ungefiltert - ein Aussetzer
       # von Sekunden halbierte sonst das Energiemodell fuer diesen Lauf, und die
-      # Hysterese von Prio 8 hielt den daraus gesetzten Strom danach fest.
+      # Hysterese von Prio 7 hielt den daraus gesetzten Strom danach fest.
       packs_konfiguriert: "{{ (1 if var_bms1_temp_min != '' else 0) + (1 if var_bms2_temp_min != '' else 0) + (1 if var_bms3_temp_min != '' else 0) }}"
       batterie_kapazitaet: >
         {% set p_count = packs_konfiguriert if packs_konfiguriert > 0 else 1 %}
@@ -1589,7 +1535,6 @@ action:
           aufz_duration_peak_hold: !input duration_peak_hold
           aufz_duration_wp_laufzeit: !input duration_wp_laufzeit
           aufz_duration_top_balancing: !input duration_top_balancing
-          aufz_duration_cooldown: !input duration_cooldown
           aufz_ladevorlauf_stunden: !input ladevorlauf_stunden
           aufz_min_reststunden: !input min_reststunden
       - action: notify.send_message
@@ -1615,8 +1560,6 @@ action:
                  ('wr_max_charge_current', var_wr_max_charge, {}),
                  ('wr_float_voltage_sensor', var_wr_float_voltage, {}),
                  ('wr_battery_voltage_sensor', var_wr_battery_voltage, {}),
-                 ('wr_grid_charge_switch', var_wr_grid_charge_switch, {}),
-                 ('wr_grid_charge_current', var_wr_grid_charge_current, {}),
                  ('wr_tou_1', var_wr_tou_1, {}),
                  ('wr_tou_2', var_wr_tou_2, {}),
                  ('wr_tou_3', var_wr_tou_3, {}),
@@ -1643,7 +1586,6 @@ action:
                  ('helper_max_soc_heute', var_max_soc_heute, {}),
                  ('speicherverlust_gesamt', var_speicherverlust, {}),
                  ('helper_offener_verlust', var_offener_verlust, {}),
-                 ('helper_zwangsladung_aktiv', var_zwangsladung_aktiv, {}),
                  ('helper_timer_peak', var_timer_peak, {}),
                  ('helper_timer_cooldown', var_timer_cooldown, {}),
                  ('helper_timer_wp_anlauf', var_timer_wp_anlauf, {}),
@@ -1681,7 +1623,6 @@ action:
                   'min_ampere': min_ampere,
                   'regler_offset_a': regler_offset_a,
                   'notfall_ampere': notfall_ampere,
-                  'grid_ampere_zwangsladung': grid_ampere_zwangsladung,
                   'schwelle_peak_shaving': var_schwelle_peak_shaving,
                   'peak_ampere': peak_ampere,
                   'duration_peak_hold': aufz_duration_peak_hold,
@@ -1718,7 +1659,6 @@ action:
                   'fallback_max_soc': fallback_max_soc,
                   'fallback_min_kwh': fallback_min_kwh,
                   'min_reststunden': aufz_min_reststunden,
-                  'duration_cooldown': aufz_duration_cooldown,
                 },
                 'entitaeten': ns.liste} | to_json }}
 
@@ -2048,7 +1988,7 @@ action:
       haus_aktuell_w: "{{ (json_profil[h_index_now] | float(0.2)) * 2000 }}"
       prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
 
-      # Ziel-Strom Prio 8: Slot-Simulation (kleinster Strom, der den Bedarf real
+      # Ziel-Strom Prio 7: Slot-Simulation (kleinster Strom, der den Bedarf real
       # deckt), danach nur noch der manuelle Sicherheitsfaktor. Prognose-
       # Unsicherheit und Realitaets-Check stecken bereits in den Slots.
       # Ohne Slot-Daten Fallback auf lineare Verteilung - dann greift ohnehin
@@ -2069,7 +2009,7 @@ action:
       # Brutto-PV-Ueberschuss Resttag = Summe der Slots mit PV-Ueberschuss (nur
       # positive Netto-Slots aus slot_daten). Gegenstueck zum Nachladebedarf,
       # der bei benoetigt_kwh auf der Batterieseite steht (BRUTTO-Rechnung,
-      # konsistent mit Prio 8 und der Blockade).
+      # konsistent mit Prio 7 und der Blockade).
       brutto_ueberschuss_rest: "{{ (rest_slots | map('first') | map('float') | sum) | float(0) }}"
       # Wirksamer Puffer fuer Fall B: puffer_anteil des Rest-Ueberschusses,
       # gedeckelt durch puffer_kwh. Die Blockade rechnet ihren eigenen Puffer,
@@ -2085,12 +2025,12 @@ action:
       # der Bedarf ueber der Bagatellgrenze liegt (fallback_min_kwh).
       # Macht explizit, was der Vergleich oben bei faktor_fallback >= 1,0
       # bereits impliziert: deckt der Rest-Ueberschuss den Bedarf nicht, findet
-      # die Simulation in Prio 8 kein X und fiele auf die niedrigere
+      # die Simulation in Prio 7 kein X und fiele auf die niedrigere
       # Zeitverteilung zurueck. Liefert die Begruendung fuers Log und traegt,
       # falls faktor_fallback je unter 1,0 gesetzt wird.
       prognose_deckt_bedarf_nicht: "{{ brutto_ueberschuss_rest < benoetigt_kwh }}"
       # Energie bis zum VERKUERZTEN Ladevorlauf - die Groesse, ueber die Fall B
-      # entscheidet. Prio 8 rechnet mit dem vollen Vorlauf und hat damit den
+      # entscheidet. Prio 7 rechnet mit dem vollen Vorlauf und hat damit den
       # Abstand, den Bedarf zu decken, bevor Fall B ueberhaupt greift.
       energie_bis_vorlauf: >
         {% set ns = namespace(ges=0.0) %}
@@ -2173,7 +2113,6 @@ action:
       # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
       # deshalb hier die Regelabweichung aufschlagen.
       target_p1: "{{ [(min_ampere | float(8)) + (regler_offset_a | float(2.0)), temperatur_limit_ampere] | min | round(0, 'ceil') }}"
-      target_p15: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # PEAK-SHAVING-TREPPE
       #
       # Bei jeder Ueberschreitung der Schwelle wird der Ladestrom um eine feste
@@ -2186,26 +2125,25 @@ action:
       # heraus, die Rechnung ergibt ~aktueller_ladestrom + 2 A.
       #
       # KEIN Absenken: Rueckregeln wuerde bei jeder Wolke Schreibzugriffe
-      # ausloesen. Faellt die PV ab, laeuft der Hold-Timer aus und Prio 8
+      # ausloesen. Faellt die PV ab, laeuft der Hold-Timer aus und Prio 7
       # uebernimmt wieder.
       # Der Offset wirkt nur beim EINSTIEG: Steigt der Strom von einem kleinen
       # Wert, fehlen sonst 2 A an der Batterie. Bei den Folgestufen steckt er
       # bereits im aktuellen Sollwert - dort waere ein erneuter Aufschlag zu viel.
       # Peak-Shaving hebt den Ladestrom stufenweise an, darf dabei aber nie unter
-      # dem liegen, was Prio 8 ohnehin laden wuerde: Beide wollen Ueberschuss in
+      # dem liegen, was Prio 7 ohnehin laden wuerde: Beide wollen Ueberschuss in
       # die Batterie bringen, und der hoehere Wert erfuellt beide Zwecke. Ohne
-      # ziel_p5_raw haette Peak-Shaving (Prio 6) einen bereits hoeher geplanten
+      # ziel_p5_raw haette Peak-Shaving (Prio 5) einen bereits hoeher geplanten
       # Ladestrom auf seine Stufe heruntergezogen, weil es in der Kaskade vorn steht.
       target_p3: >
         {{ [ [ (aktueller_ladestrom | float(0)) + peak_ampere,
                peak_ampere + (regler_offset_a | float(2.0)),
                ziel_p5_raw | float(0) ] | max,
              max_ampere, temperatur_limit_ampere ] | min | round(0, 'ceil') }}
-      # Prio 8 Zielstrom, zusätzlich durch Temperatur gedeckelt
+      # Prio 7 Zielstrom, zusätzlich durch Temperatur gedeckelt
       target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
 
   - variables:
-      zwangsladung_aktiv: "{{ is_state(var_zwangsladung_aktiv, 'on') }}"
       heute_schon_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
       aktueller_modus: "{{ states(var_lade_modus) if var_lade_modus != '' else 'normal' }}"
       # ERSATZ-AUSLOESER BEI BMS-KOMPLETTAUSFALL
@@ -2229,7 +2167,7 @@ action:
         {% if bms_ausfall_balancing %}alle BMS-Packs ausgefallen sind und die gemessene Batteriespannung {{ batterie_spannung | round(2) }} V die Zellausgleich-Spannung {{ var_float_balancing | round(2) }} V erreicht hat{% else %}höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V{% endif %}
       top_balancing_noetig: >
         {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing))
-        or (states(var_timer_cooldown) == 'active' and not zwangsladung_aktiv)) }}
+        or states(var_timer_cooldown) == 'active') }}
 
       schnee_falle_aktiv: >
         {% set is_winter = now().month in winter_monate %}
@@ -2273,11 +2211,11 @@ action:
            and wp_boost_karenz_ok
            and ww_temp_gueltig }}
 
-      # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 4)
+      # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 3)
       #
       # wp_sperre_aktiv steuert unveraendert die Peak-Shaving-Timer-Logik -
       # waehrend der WP-Anlaufphase soll Peak-Shaving immer unterbleiben. Nur
-      # die harte 0A-Verriegelung in Prio 4 endet mit der Blockade: Startet die
+      # die harte 0A-Verriegelung in Prio 3 endet mit der Blockade: Startet die
       # WP danach (nachmittags bei viel Sonne), darf die Batterie weiterladen.
       #
       # blockade_heute_beendet ist hier noch nicht definiert - daher inline.
@@ -2295,9 +2233,9 @@ action:
         {% else %}
           0
         {% endif %}
-      # Der Boost darf Prio 8 nur sperren, solange danach noch genug Ladezeit
+      # Der Boost darf Prio 7 nur sperren, solange danach noch genug Ladezeit
       # bleibt. Laeuft er laenger, als ueber den Ladevorlauf hinaus ueberhaupt
-      # Zeit da ist, frisst er den Vorlauf auf - dann regelt Prio 8 weiter und
+      # Zeit da ist, frisst er den Vorlauf auf - dann regelt Prio 7 weiter und
       # die Waermepumpe teilt sich den Ueberschuss mit der Batterie.
       wp_laufzeit_sperrt: >
         {{ wp_laufzeit_aktiv and
@@ -2313,11 +2251,11 @@ action:
         {% else %}false{% endif %}
 
       # ================================================================
-      # DYNAMISCHES BLOCKADE-ENDE T (Brutto-Rechnung, konsistent mit Prio 8)
+      # DYNAMISCHES BLOCKADE-ENDE T (Brutto-Rechnung, konsistent mit Prio 7)
       # Spaetester Ladebeginn T (Halbstunden-Raster), sodass ab T noch gilt:
       #   Verfügbar = Brutto-Überschuss ab T minus Puffer        (PV-Seite)
       #   Bedarf    = (freier Platz + Nachladebedarf ab T) x Faktor (Batterie)
-      # Der Nachladebedarf steht bewusst auf der Batterieseite wie in Prio 8,
+      # Der Nachladebedarf steht bewusst auf der Batterieseite wie in Prio 7,
       # nicht als Netto-Abzug auf der PV-Seite.
       # Faktor = min(faktor_fallback x prognose_unsicherheit, 2,0).
       # ================================================================
@@ -2339,7 +2277,7 @@ action:
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
               {% set haus_kwh = json_profil[h_index] | float(0.2) %}
               {# Abschlag auf den Blend und erst danach der Hausverbrauch - wie in
-                 Prio 8. Andersherum wuerde der Abschlag den Hausverbrauch mitkuerzen
+                 Prio 7. Andersherum wuerde der Abschlag den Hausverbrauch mitkuerzen
                  und den Ueberschuss um Hausverbrauch x (1 - Abschlag) zu hoch ansetzen. #}
               {% set netto = blend * b_abschlag - haus_kwh %}
               {# Alle Restslots chronologisch: [zeit-str, ist_kandidat, ueber, defi].
@@ -2350,11 +2288,11 @@ action:
             {% endif %}
           {% endfor %}
         {% endif %}
-        {# Ladefenster und Ladevorlauf wie in Prio 8: Zeitfenster unterhalb der
+        {# Ladefenster und Ladevorlauf wie in Prio 7: Zeitfenster unterhalb der
            Tages-Anteilsgrenze liefern zu wenig, um den Ladestrom zu bedienen, und
            die Vorlaufzeit am Ende steht nicht zur Verfuegung. Beides muss hier
            genauso abgezogen werden - sonst blockiert die Morgen-Blockade auf
-           Grundlage von Energie, mit der Prio 8 nachmittags gar nicht rechnet. #}
+           Grundlage von Energie, mit der Prio 7 nachmittags gar nicht rechnet. #}
         {% set grenze = (tages_netto_pmax | float(0)) * (fenster_mindest_anteil | float(0.15)) * 0.5 * b_abschlag %}
         {% set nsf = namespace(last=-1) %}
         {% for i in range(ns.alle | length) %}
@@ -2383,7 +2321,7 @@ action:
            beseitigt wurde. Asymmetrie bleibt: lieber zu frueh aus der Blockade
            (kostet nur Peak-Shaving-Fenster) als zu spaet.
            Der Ladevorlauf wirkt hier bewusst NICHT mit - er regelt allein den
-           Ladestrom in Prio 8; sonst wuerde ein groesserer Vorlauf zugleich das
+           Ladestrom in Prio 7; sonst wuerde ein groesserer Vorlauf zugleich das
            Peak-Shaving-Fenster verkuerzen. #}
         {% set ziel_faktor = faktor_fallback | float(1.2) %}
         {% set ns2 = namespace(best='', pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
@@ -2425,7 +2363,7 @@ action:
       # Existiert ein T (spaetester Ladebeginn, ab dem noch genug Netto-Energie
       # kommt): blockieren. Das Ziel ist bewusst streng gerechnet, damit die
       # Blockade lieber zu frueh als zu spaet endet. T wandert bei sinkender Prognose von selbst
-      # nach vorn. Kein T mehr -> direkte Freigabe an die Kaskade (Prio 8).
+      # nach vorn. Kein T mehr -> direkte Freigabe an die Kaskade (Prio 7).
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
@@ -2509,7 +2447,7 @@ action:
       # Geschrieben wird nur, wenn es wirken kann: Aenderung ab 5 Punkten und der
       # Ladestand hoechstens 10 Punkte ueber der hoeheren der beiden Grenzen.
       tou_schreiben: >
-        {{ entlade_aktiv and not zwangsladung_aktiv
+        {{ entlade_aktiv
            and ((f_soc - tou_ist) | abs) >= 5
            and aktueller_soc <= ([f_soc, tou_ist] | max) + 10 }}
 
@@ -2680,13 +2618,13 @@ action:
           # Faellt dieser einmalige Trigger aus (Reload/Neustart nach
           # Sonnenuntergang), bliebe das Register ueber Nacht gedrosselt. Hier als
           # Sicherung nachziehen - nur bei echter Abweichung (sonst jede Nacht ein
-          # Log) und nicht waehrend Netz-Zwangsladung oder Zellausgleich, deren
-          # Ladestrom nicht ueberschrieben werden darf. Die uebrigen Prio-Zweige
+          # Log) und nicht waehrend des Zellausgleichs, dessen Ladestrom nicht
+          # ueberschrieben werden darf. Die uebrigen Prio-Zweige
           # greifen nachts ohnehin nicht.
           - if:
               - condition: template
                 value_template: >
-                  {{ not zwangsladung_aktiv and states(var_timer_cooldown) != 'active'
+                  {{ states(var_timer_cooldown) != 'active'
                      and ((aktueller_ladestrom | round(0)) - (target_p0 | round(0))) | abs >= 2 }}
             then:
               - action: logbook.log
@@ -2699,45 +2637,6 @@ action:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p0 }}"
-          - if:
-              - condition: state
-                entity_id: !input helper_zwangsladung_aktiv
-                state: "on"
-              - condition: template
-                value_template: "{{ states(var_wr_tou_1) | float(0) < 100 }}"
-            then:
-              - action: input_boolean.turn_off
-                target:
-                  entity_id: !input helper_zwangsladung_aktiv
-              - action: switch.turn_off
-                target:
-                  entity_id: "{{ var_wr_grid_charge_switch }}"
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Sicherheits-Rücksetzung: Zwangsladung und Netz-Ladeschalter ausgeschaltet, da die Zwangsladung aktiv war, aber das Netz-Ladeziel nicht auf 100 % stand (ToU 1 ist {{ states(var_wr_tou_1) }} % ≠ 100 %)."
-                  entity_id: !input helper_logbook_dummy
-          # NETZ-LADESCHALTER-MITTERNACHTS-CHECK: Der Schalter wird nur bei
-          # Zwangsladung-START ein- und bei -ENDE ausgeschaltet (beide event-
-          # getriggert). Geht 'zwangsladung_ende' verloren (Reload/Neustart),
-          # koennte der Schalter AN bleiben, obwohl der Helfer schon AUS ist
-          # (der Reset oben greift nur bei Helfer == on). Dann laedt die Batterie
-          # nachts aus dem Netz. Hier hart absichern: Schalter an, aber keine
-          # Zwangsladung aktiv -> ausschalten.
-          - if:
-              - condition: template
-                value_template: >
-                  {{ var_wr_grid_charge_switch != '' and not zwangsladung_aktiv
-                     and states(var_wr_grid_charge_switch) == 'on' }}
-            then:
-              - action: switch.turn_off
-                target:
-                  entity_id: "{{ var_wr_grid_charge_switch }}"
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Mitternachts-Check: Netz-Ladeschalter ausgeschaltet, da er an war, obwohl keine Zwangsladung aktiv ist (vermutlich Zwangsladung-Ende verloren, z.B. Reload/Neustart) – so lädt die Batterie nachts nicht aus dem Netz."
-                  entity_id: !input helper_logbook_dummy
 
   - choose:
       - alias: "Aktionen bei Sonnenuntergang ausführen"
@@ -2847,14 +2746,13 @@ action:
               value: "0"
 
   - choose:
-      # Ohne Entlade-Planung sind die ToU-Register nur ein festes Minimum; nach
-      # einer Zwangsladung (100 %) muss es dorthin zurueck.
+      # Ohne Entlade-Planung sind die ToU-Register nur ein festes Minimum.
       - alias: "ToU auf Minimum (keine Entlade-Planung)"
         conditions:
           - condition: trigger
             id: maintenance
           - condition: template
-            value_template: "{{ not entlade_aktiv and not zwangsladung_aktiv and (tou_ist != (default_tou_soc | float(20)) or tou_max_ist != (default_tou_soc | float(20))) }}"
+            value_template: "{{ not entlade_aktiv and (tou_ist != (default_tou_soc | float(20)) or tou_max_ist != (default_tou_soc | float(20))) }}"
         sequence:
           - action: number.set_value
             target:
@@ -2870,102 +2768,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist und keine Zwangsladung läuft."
-              entity_id: !input helper_logbook_dummy
-
-  - choose:
-      - alias: "ZWANGSLADUNG STARTEN"
-        conditions:
-          - condition: trigger
-            id: zwangsladung_start
-          - condition: template
-            value_template: "{{ now().month in winter_monate }}"
-          # Mit Entlade-Planung wird nie ueber das Netz voll geladen.
-          - condition: template
-            value_template: "{{ not entlade_aktiv }}"
-          - condition: state
-            entity_id: !input helper_zwangsladung_aktiv
-            state: "off"
-        sequence:
-          - action: input_boolean.turn_on
-            target:
-              entity_id: !input helper_zwangsladung_aktiv
-          - action: switch.turn_on
-            target:
-              entity_id: "{{ var_wr_grid_charge_switch }}"
-          - action: number.set_value
-            target:
-              entity_id: !input wr_grid_charge_current
-            data:
-              value: "{{ grid_ampere_zwangsladung }}"
-          - action: number.set_value
-            target:
-              entity_id:
-                - !input wr_tou_1
-                - !input wr_tou_2
-                - !input wr_tou_3
-                - !input wr_tou_4
-                - !input wr_tou_5
-                - !input wr_tou_6
-            data:
-              value: 100
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Zwangsladung gestartet, Netz-Ladeschalter aktiviert, da die Batterie seit über 10 Tagen nicht voll war (Ladestand (SOC) {{ aktueller_soc | round(0) }} %; Zwangsladung greift nur im Winter, Nov–Feb)."
-              entity_id: !input helper_logbook_dummy
-
-      - alias: "ZWANGSLADUNG: 100% ERREICHT"
-        conditions:
-          - condition: trigger
-            id: zwangsladung_100
-          - condition: state
-            entity_id: !input helper_zwangsladung_aktiv
-            state: "on"
-          - condition: state
-            entity_id: !input helper_timer_cooldown
-            state: "idle"
-        sequence:
-          - action: timer.start
-            target:
-              entity_id: !input helper_timer_cooldown
-            data:
-              duration: !input duration_cooldown
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Zwangsladung hat 100 % erreicht (Ladestand (SOC) {{ aktueller_soc | round(1) }} %), Nachlauf-Timer für den Zellausgleich gestartet."
-              entity_id: !input helper_logbook_dummy
-
-      - alias: "ZWANGSLADUNG BEENDEN"
-        conditions:
-          - condition: trigger
-            id: zwangsladung_ende
-          - condition: state
-            entity_id: !input helper_zwangsladung_aktiv
-            state: "on"
-        sequence:
-          - action: input_boolean.turn_off
-            target:
-              entity_id: !input helper_zwangsladung_aktiv
-          - action: switch.turn_off
-            target:
-              entity_id: "{{ var_wr_grid_charge_switch }}"
-          - action: number.set_value
-            target:
-              entity_id:
-                - !input wr_tou_1
-                - !input wr_tou_2
-                - !input wr_tou_3
-                - !input wr_tou_4
-                - !input wr_tou_5
-                - !input wr_tou_6
-            data:
-              value: "{{ default_tou_soc }}"
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ bp_version }} Netz-Zwangsladung beendet, Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt, da der Nachlauf-Timer abgelaufen ist."
+              message: "{{ bp_version }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist."
               entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -3095,13 +2898,13 @@ action:
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
-                      message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Nachlauf-Timer abgebrochen, damit der PV-Überschuss zur anlaufenden Wärmepumpe fließt, da die Wärmepumpen-Anlaufsperre aktiv ist. Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
+                      message: "{{ bp_version }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Nachlauf-Timer abgebrochen, damit der PV-Überschuss zur anlaufenden Wärmepumpe fließt, da die Wärmepumpen-Anlaufsperre aktiv ist. Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
                       entity_id: !input helper_logbook_dummy
             default:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %){% else %}die Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W liegt{% endif %}."
+                  message: "{{ bp_version }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %){% else %}die Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W liegt{% endif %}."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -3118,7 +2921,7 @@ action:
             # Prio-8-Ladung ueber die Schwelle.
             #
             # 'not wp_boost_startet_gleich': sonst cancelt der WP-Boost den eben
-            # gestarteten Timer. Batterie-Guard wie in Prio 6.
+            # gestarteten Timer. Batterie-Guard wie in Prio 5.
             value_template: >
               {{ (real_export > schwelle_peak_shaving
                   or (states(var_timer_peak) == 'active'
@@ -3144,7 +2947,7 @@ action:
 
   # WP-LAUFZEIT BEENDEN
   #
-  # Die Laufzeit sperrt Prio 8 - der Ueberschuss gehoert in dieser Zeit der
+  # Die Laufzeit sperrt Prio 7 - der Ueberschuss gehoert in dieser Zeit der
   # Waermepumpe. Beendet wird sie, sobald der Verdichter nachweislich nicht mehr
   # laeuft:
   #   MIT Kompressor-Sensor: 10 s durchgehend 'off'. Bewusst der Rohzustand,
@@ -3392,7 +3195,7 @@ action:
   #
   # Greift, wenn weder Verdichter-Sensor noch Einspeisung das Ende anzeigen
   # (bewoelkter Nachmittag). Kein hartes Ende, damit der Speicher fertig laedt;
-  # der ablaufende Timer gibt danach Prio 8 frei und setzt das Ziel zurueck.
+  # der ablaufende Timer gibt danach Prio 7 frei und setzt das Ziel zurueck.
   # Die Restzeit-Pruefung verhindert, dass der Timer endlos neu gesetzt wird.
   - if:
       - condition: template
@@ -3422,7 +3225,7 @@ action:
   - choose:
       # Sicherheits-Obergrenze durchsetzen: temperatur_limit_ampere deckelt zwar
       # jeden Zielwert, geschrieben wird er aber nur, wenn ein Zweig ohnehin
-      # regelt. Oberhalb von kein_absenken_ab_soc regelt Prio 8 nicht mehr, und
+      # regelt. Oberhalb von kein_absenken_ab_soc regelt Prio 7 nicht mehr, und
       # die Absenk-Hysterese verlangt 20 A Differenz - ein kleiner Ueberhang
       # bliebe sonst dauerhaft stehen, ohne Zellspannungs- und Temperaturschutz.
       # Nur bei Tag: Nachts steht der Sollwert bewusst auf Maximum und es
@@ -3463,7 +3266,7 @@ action:
         sequence:
           - variables:
               balancing_start_jetzt: >
-                {{ states(var_timer_cooldown) == 'idle' and not zwangsladung_aktiv and
+                {{ states(var_timer_cooldown) == 'idle' and
                 (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing) }}
           - if:
               - condition: template
@@ -3545,36 +3348,7 @@ action:
                     data:
                       option: "top_balancing"
 
-      - alias: "PRIO 2: WINTER-ZWANGSLADUNG LÄUFT"
-        conditions:
-          - condition: template
-            value_template: "{{ zwangsladung_aktiv }}"
-        sequence:
-          - if:
-              - condition: template
-                value_template: "{{ ((aktueller_ladestrom | round(0)) - (target_p15 | round(0))) | abs >= 2 }}"
-            then:
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 2 (Netz-Zwangsladung läuft): Batterie-Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p15 }} A angehoben, damit die laufende Winter-Zwangsladung die Batterie über das Netz aufladen kann.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %}"
-                  entity_id: !input helper_logbook_dummy
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wr_max_charge }}"
-                data:
-                  value: "{{ target_p15 }}"
-              - if:
-                  - condition: template
-                    value_template: "{{ var_lade_modus != '' }}"
-                then:
-                  - action: input_select.select_option
-                    target:
-                      entity_id: "{{ var_lade_modus }}"
-                    data:
-                      option: "zwangsladung"
-
-      - alias: "PRIO 3: FALL (B) - ZEIT REICHT NICHT (MAX)"
+      - alias: "PRIO 2: FALL (B) - ZEIT REICHT NICHT (MAX)"
         conditions:
           - condition: template
             value_template: "{{ is_day and aktueller_soc < 97 and fall_b_aktiv }}"
@@ -3587,7 +3361,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 3 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    {{ bp_version }} Prio 2 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
                     (Bedarf = (freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Eskalationsfaktor {{ faktor_fallback }}{% endif %}. Verfügbar = Brutto-PV-Überschuss Resttag {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Sicherheitspuffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh){% endif %}).{{ trend_log_addon }}{{ haus_log_addon }}{{ solcast_log_addon }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
@@ -3615,7 +3389,7 @@ action:
                       option: "fall_b_max"
           # WIEDERAUFNAHME: Faellt der Ladestrom waehrend Fall B unter das Ziel -
           # etwa weil Prio 0 bei einem BMS-Ausfall gedrosselt hat -, hebt ihn
-          # sonst niemand wieder an: Prio 8 ist im Modus fall_b_max stillgelegt,
+          # sonst niemand wieder an: Prio 7 ist im Modus fall_b_max stillgelegt,
           # und der Block oben schreibt nur beim Moduswechsel. Gegen Ping-Pong
           # mit Prio 0 schuetzt target_p0 selbst, denn es traegt den Deckel:
           # solange die Begrenzung gilt, ist target_p0 gleich dem Ist-Wert.
@@ -3628,7 +3402,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 3 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält.{{ temp_log_addon }}"
+                  message: "{{ bp_version }} Prio 2 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält.{{ temp_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3637,10 +3411,10 @@ action:
                   value: "{{ target_p0 }}"
 
       # Der Zweig haelt nur den zuletzt gesetzten Wert und bleibt in der Kaskade,
-      # damit Prio 6/8 nicht dazwischenregeln. Ein Absenken auf 0 A braucht es
+      # damit Prio 5/8 nicht dazwischenregeln. Ein Absenken auf 0 A braucht es
       # nicht: Bei 'Load First' bedient der Wechselrichter die Waermepumpe
       # ohnehin zuerst.
-      - alias: "PRIO 4: WP-ANLAUFSPERRE (Ladestrom halten)"
+      - alias: "PRIO 3: WP-ANLAUFSPERRE (Ladestrom halten)"
         conditions:
           - condition: template
             value_template: "{{ wp_sperre_batterie_0a_aktiv }}"
@@ -3661,7 +3435,7 @@ action:
                 data:
                   option: "wp_sperre"
 
-      - alias: "PRIO 5: WP-KOMPRESSOR SPERRE (0A)"
+      - alias: "PRIO 4: WP-KOMPRESSOR SPERRE (0A)"
         conditions:
           - condition: template
             value_template: "{{ wp_kompressor_aktiv }}"
@@ -3673,14 +3447,14 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 5 (Wärmepumpen-Kompressor-Sperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der Wärmepumpe zur Verfügung steht, da ihr Kompressor gerade läuft (Kompressor-Status: {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }})."
+                  message: "{{ bp_version }} Prio 4 (Wärmepumpen-Kompressor-Sperre): Batterieladen wird gestoppt (Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A), damit PV-Überschuss der Wärmepumpe zur Verfügung steht, da ihr Kompressor gerade läuft (Kompressor-Status: {{ states(var_wp_kompressor) if var_wp_kompressor != '' else 'active' }})."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ null_ampere }}"
-              # 'blockade' stehen lassen, Begruendung siehe Prio 4.
+              # 'blockade' stehen lassen, Begruendung siehe Prio 3.
               - if:
                   - condition: template
                     value_template: "{{ var_lade_modus != '' and aktueller_modus != 'blockade' }}"
@@ -3691,7 +3465,7 @@ action:
                     data:
                       option: "wp_sperre"
 
-      - alias: "PRIO 6: PEAK SHAVING"
+      - alias: "PRIO 5: PEAK SHAVING"
         conditions:
           - condition: template
             value_template: "{{ states(var_timer_wp_anlauf) != 'active' }}"
@@ -3723,14 +3497,14 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 6 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
+                  message: "{{ bp_version }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{{ solcast_log_addon }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
                   value: "{{ target_p3 }}"
-              # 'blockade' nicht ueberschreiben - derselbe Guard wie in Prio 4.
+              # 'blockade' nicht ueberschreiben - derselbe Guard wie in Prio 3.
               # In einem Zeitraster-Lauf wird der Peak-Timer erst NACH der
               # Austrittserkennung aufgezogen; blockade_aktiv ist dort noch true,
               # der Austritt faellt aus. Ohne Guard ginge der gespeicherte Modus
@@ -3745,7 +3519,7 @@ action:
                     data:
                       option: "peak_shaving"
 
-      - alias: "PRIO 7: MORGEN-BLOCKADE (0A)"
+      - alias: "PRIO 6: MORGEN-BLOCKADE (0A)"
         conditions:
           - condition: template
             value_template: "{{ blockade_aktiv }}"
@@ -3758,7 +3532,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ bp_version }} Prio 7 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
+                    {{ bp_version }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
                     (Bedarf = {% if blockade_dyn_d_ab_t > 0.05 %}(freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh für Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind){% else %}freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% endif %} × Eskalationsfaktor {{ faktor_fallback }} = {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh.
                     Verfügbar = Brutto-Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh (Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, {% if trend_aktiv %}gemessener Rückstand der Anlage{% else %}Vorab-Abschlag als Kehrwert des Eskalationsfaktors, bis der Realitäts-Check belastbar ist{% endif %}) − Sicherheitspuffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh ({{ (puffer_anteil * 100) | round(0) }} % davon, höchstens {{ puffer_kwh | round(1) }} kWh) = {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh.
                     Informativ: Prognose bis Ladebeginn: {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung & Lastspitzen-Kappung).
@@ -3778,11 +3552,11 @@ action:
                     data:
                       option: "blockade"
 
-      - alias: "PRIO 8: DYNAMISCHES FERTIGLADEN (ZEIT-BASIERT)"
+      - alias: "PRIO 7: DYNAMISCHES FERTIGLADEN (ZEIT-BASIERT)"
         conditions:
           - condition: template
             value_template: "{{ is_day and aktueller_soc < 97 }}"
-          # Solange die Waermepumpen-Laufzeit laeuft, regelt Prio 8 NICHT: Der
+          # Solange die Waermepumpen-Laufzeit laeuft, regelt Prio 7 NICHT: Der
           # Ueberschuss gehoert der Waermepumpe. Beendet wird die Laufzeit
           # gezielt (siehe Block "WP-LAUFZEIT BEENDEN"), nicht ueber diese
           # Bedingung.
@@ -3802,7 +3576,7 @@ action:
                     value_template: "{{ aktueller_modus == 'fall_b_max' }}"
                 sequence:
                   # Kein Rückregeln und keine Logausgabe - dass durchgeladen wird,
-                  # steht bereits in der Meldung von Prio 3. Der stop-Schritt bleibt
+                  # steht bereits in der Meldung von Prio 2. Der stop-Schritt bleibt
                   # im Trace sichtbar.
                   - stop: "Fall-B-Modus (fall_b_max) aktiv – kein Rückregeln, keine Logausgabe."
             default:
@@ -3812,14 +3586,14 @@ action:
                     {% set lu = states[var_wr_max_charge].last_changed %}
                     {{ ((now() - lu).total_seconds() / 60) | int if lu is not none else 60 }}
                   # Modus-basierter Bypass: Wenn ein ANDERER Block zuletzt gesetzt hat
-                  # (Modus != 'normal'), darf Prio 8 einmalig sofort durchregeln.
+                  # (Modus != 'normal'), darf Prio 7 einmalig sofort durchregeln.
                   fremder_modus: "{{ aktueller_modus not in ['normal'] }}"
                   # Anheben: ab 10 A sofort, ab 5 A nach einer Stunde Ruhe. Ohne die
                   # Wartezeit folgt der Sollwert dem ueber den Nachmittag steigenden
                   # Zielstrom in Schritten von wenigen Ampere - drei Registerschreiben
                   # in 50 Minuten, ohne dass die Batterie davon schneller voll wird.
                   # Absenken bleibt traeger und nur unterhalb von kein_absenken_ab_soc
-                  # - auch fuer den Bypass: Sonst senkt Prio 8 nach jedem
+                  # - auch fuer den Bypass: Sonst senkt Prio 7 nach jedem
                   # Peak-Shaving auch bei fast voller Batterie zurueck und
                   # verzoegert genau das Vollwerden, das die Schwelle schuetzen soll.
                   update_freigegeben: >
@@ -3843,7 +3617,7 @@ action:
                     data:
                       name: "PV Optimizer"
                       message: >
-                        {{ bp_version }} Prio 8 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
+                        {{ bp_version }} Prio 7 (Dynamische Ladung, zeit-basiert): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt, da die Prognose eine Anpassung von {{ '%+.1f' | format(diff | float(0)) }} A erfordert
                         (Bedarf {{ benoetigt_kwh | round(1) }} kWh = freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh plus erwarteter Nachladebedarf {{ defizit_kwh | round(1) }} kWh (Phasen, in denen der Hausverbrauch die PV übersteigt und die durch späteren PV-Überschuss noch aufholbar sind).{% if (sim_ampere_min | int(0)) > 0 %} Zielstrom = Simulation über {{ sim_slots_fenster | length }} von {{ rest_slots | length }} Prognose-Zeitfenstern {{ amp_basis_13 | round(1) }} A{% if (sim_slots_fenster | length) < (rest_slots | length) %} (Ladefenster endet, wo die Prognose unter {{ (fenster_mindest_anteil * 100) | round(0) | int }} % der Tages-Höchstleistung fällt; Ladevorlauf {{ ladevorlauf_text }} davor){% endif %}, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, gerundet auf {{ target_p5 }} A.{% else %} Zielstrom = Zeitverteilung {{ verf_stunden | round(1) }} h = {{ amp_basis_13 | round(1) }} A, davon + Regelabweichung {{ regler_offset_a }} A = {{ amp_roh_13 | round(1) }} A, keine Prognose-Zeitfenster.{% endif %} Informativ: letzte Änderung vor {{ min_since }} Min, vorheriger Modus: {{ aktueller_modus }}).{{ trend_log_addon }}{{ haus_log_addon }}{{ temp_log_addon }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value

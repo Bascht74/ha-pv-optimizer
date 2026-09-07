@@ -78,7 +78,7 @@ def test_alle_kernvariablen_sind_top_level(blueprint):
 
 @pytest.mark.parametrize("helfer_input", [
     "helper_lade_modus", "helper_batterie_heute_voll", "helper_blockade_beendet",
-    "helper_zwangsladung_aktiv", "helper_max_soc_heute", "speicherverlust_gesamt",
+    "helper_max_soc_heute", "speicherverlust_gesamt",
     "helper_offener_verlust", "helper_tare_charge", "helper_tare_discharge",
     "json_tracking_sensor", "hausverbrauch_json_text", "helper_logbook_dummy",
     "helper_timer_peak", "helper_timer_cooldown", "helper_timer_wp_anlauf", "helper_timer_wp_boost",
@@ -108,7 +108,7 @@ def test_tagespflege_steht_vor_dem_deye_stop(blueprint):
     """
     Bleibt der Wechselrichter um Mitternacht weg, beendet der Deye-Retry den Lauf.
     Die Tageshelfer muessen davor zurueckgesetzt sein - sonst sperren 'heute voll'
-    und der Blockade-Marker Prio 1, Prio 6 und die Morgen-Blockade am ganzen Folgetag.
+    und der Blockade-Marker Prio 1, Prio 5 und die Morgen-Blockade am ganzen Folgetag.
     """
     deye = _schritt(blueprint, lambda s: "Deye-Anbindung nicht verf" in str(s), "Deye-Stop")
     for alias in ("100%-Tage-Tracking", "Tageshelfer zur"):

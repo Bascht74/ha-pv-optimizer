@@ -148,7 +148,6 @@ def szenario(
         # Wechselrichter
         z("wr_max_charge_current", ladestrom, last_changed=jetzt - dt.timedelta(minutes=45)),
         z("wr_float_voltage_sensor", 53.6), z("wr_battery_voltage_sensor", 53.0),
-        z("wr_grid_charge_switch", "off"), z("wr_grid_charge_current", 50),
         *[z(f"wr_tou_{i}", 20) for i in range(1, 7)],
         # Netz & PV
         z("grid_export_sensor", -500), z("grid_export_kwh_heute", 3.2),
@@ -171,7 +170,7 @@ def szenario(
         # Helfer
         z("helper_lade_modus", "normal"), z("helper_logbook_dummy", ""),
         z("helper_batterie_heute_voll", "off"), z("helper_blockade_beendet", "off"),
-        z("helper_zwangsladung_aktiv", "off"), z("json_tracking_sensor", "[]"),
+        z("json_tracking_sensor", "[]"),
         z("helper_max_soc_heute", soc), z("speicherverlust_gesamt", 0.0), z("helper_offener_verlust", 0.0),
         z("helper_tare_charge", 990.0), z("helper_tare_discharge", 790.0),
         z("schatten_bms_sensor", soc, {"raw_drift_soc": soc}),
@@ -215,15 +214,17 @@ def szenario_aus_aufzeichnung(blueprint: dict, aufz: dict) -> Harness:
     waren an der Instanz leer.
     """
     inputs = standard_inputs(blueprint)
-    inputs.update(aufz["konfiguration"])
-    aufgezeichnet = {e["input"] for e in aufz["entitaeten"]}
+    # Aufzeichnungen aelterer Versionen tragen Felder, die es nicht mehr gibt.
+    definiert = input_definitionen(blueprint)
+    inputs.update({k: v for k, v in aufz["konfiguration"].items() if k in definiert})
+    aufgezeichnet = {e["input"] for e in aufz["entitaeten"] if e["input"] in definiert}
     for name, d in input_definitionen(blueprint).items():
         if "entity" in (d.get("selector") or {}) and name not in aufgezeichnet:
             inputs[name] = ""
     tabelle: dict[str, Zustand] = {}
     for e in aufz["entitaeten"]:
-        if e["last_changed"] is None:
-            continue  # Entitaet existierte nicht: states() liefert 'unknown', states[...] None
+        if e["last_changed"] is None or e["input"] not in definiert:
+            continue  # Entitaet existierte nicht (states() -> 'unknown') oder Input entfernt
         eid = inputs[e["input"]]
         tabelle[eid] = Zustand(eid, str(e["state"]), e.get("attributes") or {},
                                dt.datetime.fromisoformat(e["last_changed"]))
