@@ -152,3 +152,34 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     nacht = [float(_eintrag(z, "battery_soc_sensor")["state"]) for z in zs
              if "2026-09-06T21:00" <= z["zeit"][:16] <= "2026-09-07T08:00"]
     assert min(nacht) == 80
+
+
+# --------------------------------------------------------------------------
+# Morgen-Blockade und Drosselung nur, wenn eine Einspeisespitze zu erwarten ist
+# --------------------------------------------------------------------------
+def _lauf(blueprint, datei, zeit_prefix):
+    z = next(x for x in _zeilen_von(datei) if x["zeit"].startswith(zeit_prefix))
+    return szenario_aus_aufzeichnung(blueprint, z).auswerten()
+
+
+def test_ohne_erwartete_spitze_keine_blockade_und_voller_ladestrom(blueprint):
+    """
+    PV, 05.09. 08:00: Prognose-Spitze 5,8 kW nach Abzug des Hausverbrauchs, Schwelle
+    11,9 kW, 90 % davon 10,7 kW. Nichts zu kappen -> keine Blockade, Prio 7 auf Maximum.
+    Real hielt die Blockade an diesem Tag bis 13:00 bei 14 kWh Einspeisung, und die
+    Batterie wurde nicht voll.
+    """
+    ctx = _lauf(blueprint, "pv_2026-09-04_bis_07.jsonl", "2026-09-05T08:00")
+    assert ctx["spitze_erwartet_w"] == pytest.approx(5776, abs=5)
+    assert ctx["spitze_erwartet"] is False
+    assert ctx["blockade_aktiv"] is False
+    assert ctx["target_p5"] == 200
+
+
+def test_mit_erwarteter_spitze_bleibt_alles_wie_bisher(blueprint):
+    """Dachterrasse, 06.09. 08:00: Spitze 6,1 kW >= 90 % von 6,5 kW -> Blockade und Drosselung wie zuvor."""
+    ctx = _lauf(blueprint, "dachterrasse_2026-09-04_bis_07.jsonl", "2026-09-06T08:00")
+    assert ctx["spitze_erwartet_w"] == pytest.approx(6130, abs=5)
+    assert ctx["spitze_erwartet"] is True
+    assert ctx["blockade_aktiv"] is True
+    assert ctx["target_p5"] < 100
