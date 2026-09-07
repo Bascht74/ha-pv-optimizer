@@ -3,6 +3,36 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.0.0
+
+Added
+- Discharge planning with a dynamic ToU minimum SOC. Each run derives the floor
+  from the cumulative net balance of up to three forecast days (Solcast tomorrow,
+  day 3, day 4 as new optional inputs; PV damped per day and reduced by charging
+  losses, consumption from the learned profile): the battery is discharged at
+  night only as far as the coming days refill it to the target, and never held
+  so high that a sunny day would export. The reserve gives way only when keeping
+  it would force export. New inputs: reserve SOC, target SOC, confidence for day
+  3 and 4, P50 weight. Without the tomorrow forecast assigned, nothing changes.
+- The floor is written only when it can act: a change of at least 5 points and
+  the SOC within 10 points of the higher of old and new floor, or a hold.
+- While the cell balancing is overdue the planning target becomes 100 %, so the
+  full charge lands on the last day of a sunny stretch and never comes from the
+  grid.
+
+Removed
+- The escalation minimum SOC input and the two rules that set the ToU programs
+  after two full days or nine days without a full charge. Instances that still
+  assign the removed input must drop it before the blueprint loads.
+
+Changed
+- The winter forced grid charge does not start while discharge planning is
+  active. Without planning it works as before.
+- The stored-loss booking compares the night's low against the current ToU
+  floor instead of the fixed minimum.
+- The sunset warning about a battery that did not fill is suppressed while the
+  planning target is below 100 %; staying below it is then intended.
+
 ## V5.10.3
 
 Fixed

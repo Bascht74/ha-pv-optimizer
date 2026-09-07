@@ -9,10 +9,12 @@ Bei einem roten Test steht im Namen, welche Regel gerissen ist.
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 
 from conftest import prognose_gleichmaessig, szenario, zeit
+from ha_jinja import Zustand
 
 # Gleichmaessige Prognose: 2,0 kW P50, 1,4 kW P10 -> Blend je Slot
 # (2,0 x 0,5 + 1,4 x 0,5) x 0,5 h = 0,85 kWh.  Bei 20 Slots ab 08:00 endet
@@ -86,7 +88,7 @@ def test_realitaets_check_faktor_ist_ueber_die_halbstunde_konstant(blueprint, ta
         h = szenario(blueprint, jetzt, forecast=prognose_gleichmaessig(tag, KW))
         # Ist-Erzeugung = 85 % des bis jetzt prognostizierten Blends
         t = h.auswerten(bis="trend_dict")["trend_dict"]
-        from ha_jinja import Zustand
+        from ha_jinja import Zustand, Zustand
         h.states.tabelle[h.inputs["pv_erzeugung_heute_sensor"]] = Zustand(
             h.inputs["pv_erzeugung_heute_sensor"], str(round(0.85 * t["blend_bisher"], 4)))
         faktoren.append(h.auswerten(bis="trend_faktor")["trend_faktor"])
@@ -255,3 +257,66 @@ def test_wp_felder_sind_nur_mit_boost_pflicht(blueprint, tag, boost, fehlend_erw
         "wp_boost_aktiv": boost, "wp_water_heater": "", "wp_hysterese_number": "", "wp_boost_button": ""})
     fehlend = h.auswerten(bis="pflicht_liste")["pflicht_liste"]
     assert fehlend == fehlend_erwartet
+
+
+# --------------------------------------------------------------------------
+# Entlade-Untergrenze: nachts nur so tief, wie die naechsten Tage auffuellen
+# --------------------------------------------------------------------------
+# Erwartungswerte von Hand: Kapazitaet 32,15 kWh, Verbrauch 48 x 0,19 = 9,12 kWh/Tag,
+# Wirkungsgrad 0,92, Vertrauen 1 / 0,7 / 0,5, P10 = P50, Mindest 50 %, Ziel 90 %.
+def _tou(soc):
+    from conftest import fake_entity
+    return {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), str(soc)) for i in range(1, 7)}
+
+
+@pytest.mark.parametrize("lage, prognose, b_stern, f_soc", [
+    ("Sommer: 40/40/40 kWh, alles wuerde einspeisen -> Minimum", (40, 40, 40), 166.7, 20),
+    ("Herbst: 15/5/5 kWh, morgen +4,68 kWh = 14,6 % -> 90 - 14,6", (15, 5, 5), 14.56, 75),
+    ("Dezember: 2/2/2 kWh, keine Auffuellung -> halten beim Ladestand 85", (2, 2, 2), 0.0, 85),
+    ("Strecke: 3/30/30 kWh, Sonnentage ab uebermorgen geben die Nacht davor frei", (3, 30, 30), 26.5, 63),
+])
+def test_entlade_untergrenze(blueprint, tag, lage, prognose, b_stern, f_soc):
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=prognose).auswerten(bis="tou_schreiben")
+    assert ctx["entlade_aktiv"] is True
+    assert ctx["b_stern_pct"] == pytest.approx(b_stern, abs=0.1), lage
+    assert ctx["f_soc"] == f_soc, lage
+
+
+@pytest.mark.parametrize("soc, tou, erwartet", [
+    (95.0, 20, False),   # weit ueber der Grenze: Register bleibt, bis es wirken kann
+    (84.0, 20, True),    # 84 <= 75 + 10: jetzt schreiben, die Nacht laeuft auf die Grenze zu
+    (84.0, 72, False),   # Aenderung 75 - 72 = 3 < 5 Punkte
+])
+def test_untergrenze_wird_nur_beim_annaehern_geschrieben(blueprint, tag, soc, tou, erwartet):
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(15, 5, 5), zustands_overrides=_tou(tou))
+    ctx = h.auswerten(bis="tou_schreiben")
+    assert ctx["f_soc"] == 75
+    assert ctx["tou_schreiben"] is erwartet
+
+
+def test_halten_wird_sofort_geschrieben(blueprint, tag):
+    """Dezember: Untergrenze 90 liegt ueber dem Ladestand 85 -> Grenze = 85, Ladestand steht per Definition daran."""
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
+    assert ctx["f_roh"] == pytest.approx(90.0)
+    assert ctx["f_soc"] == 85
+    assert ctx["tou_schreiben"] is True
+
+
+def test_ohne_prognose_morgen_bleibt_die_planung_aus(blueprint, tag):
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, prognose_tage_kwh=None, zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
+    assert ctx["entlade_aktiv"] is False
+    assert ctx["prognose_tage"] == []
+    assert ctx["tou_schreiben"] is False
+
+
+def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
+    """Herbst-Lage, Batterie seit 12 Tagen nicht voll: Ziel 100 % -> Untergrenze 100 - 14,6 = 85."""
+    from conftest import fake_entity
+    eid = fake_entity("json_tracking_sensor", "input_text")
+    liste = json.dumps([(tag - dt.timedelta(days=d)).isoformat() for d in (12, 13, 14)])
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(15, 5, 5),
+                   zustands_overrides={eid: Zustand(eid, liste)}).auswerten(bis="tou_schreiben")
+    assert ctx["tage_seit_voll"] == 12
+    assert ctx["zellausgleich_faellig"] is True
+    assert ctx["ziel_soc_eff"] == 100
+    assert ctx["f_soc"] == 85

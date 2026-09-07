@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V5.10.3]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.0.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -236,6 +236,24 @@ blueprint:
           name: "Solcast: Prognose nächste Stunde (kWh)"
           description: >-
             Sensor mit der erwarteten PV-Energie der kommenden Stunde in kWh. Fließt in kurzfristige Entscheidungen ein, etwa ob sich das Warten auf mehr Sonne noch lohnt.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+        solcast_morgen_sensor:
+          name: "Solcast: Prognose morgen (kWh)"
+          description: >-
+            Tagesprognose für morgen in kWh. Schaltet die Entlade-Planung ein: Die Batterie wird nachts nur so weit entladen, wie die nächsten Tage sie wieder auffüllen. Leer lassen = Planung aus.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+        solcast_tag3_sensor:
+          name: "Solcast: Prognose Tag 3 (kWh)"
+          description: >-
+            Tagesprognose für übermorgen in kWh. Verlängert den Horizont der Entlade-Planung, damit die Nächte vor einer Sonnenstrecke schon Platz schaffen. Optional.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+        solcast_tag4_sensor:
+          name: "Solcast: Prognose Tag 4 (kWh)"
+          description: >-
+            Tagesprognose für den Tag nach übermorgen in kWh, dritter Tag des Planungshorizonts. Optional.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_helpers:
@@ -503,17 +521,11 @@ blueprint:
           default: 53.6
           selector: {"number": {"min": 50.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
         default_tou_soc:
-          name: "ToU Min-SOC normal (%)"
+          name: "ToU Min-SOC Minimum (%)"
           description: >-
-            Mindest-Ladezustand in Prozent für die ToU-Programme im Normalfall. Auf diesen Wert setzt der Blueprint alle sechs Programme zurück, sobald die Batterie an zwei Tagen in Folge voll geworden ist — dann ist das Zell-Gleichgewicht in Ordnung und es muss nachts nicht aus dem Netz nachgeladen werden.
+            Generelles Minimum des Ladestands in Prozent für alle sechs ToU-Programme. Darunter entlädt der Wechselrichter nie. Die Entlade-Planung setzt ihre Untergrenze nie tiefer; ohne Planung steht dieser Wert dauerhaft.
           default: 20
           selector: {"number": {"min": 10, "max": 50, "step": 1, "unit_of_measurement": "%"}}
-        escalation_tou_soc:
-          name: "ToU Min-SOC bei Eskalation (%)"
-          description: >-
-            Erhöhter Mindest-Ladezustand in Prozent, auf den alle sechs ToU-Programme gesetzt werden, wenn die Batterie 9 Tage lang nicht mehr voll wurde. Die Folge: Sie wird nachts aus dem Netz auf ein höheres Niveau gehalten und erreicht am nächsten Sonnentag leichter die Balancing-Schwelle.
-          default: 30
-          selector: {"number": {"min": 10, "max": 60, "step": 1, "unit_of_measurement": "%"}}
     sec_temperature:
       name: "9 – Temperatur-Limits & C-Raten (Feintuning)"
       description: >-
@@ -656,6 +668,36 @@ blueprint:
             Ist weniger Sonnenzeit übrig als hier eingestellt, verzichtet der Blueprint auf die Eskalation — der volle Ladestrom würde in der kurzen Zeit ohnehin nichts mehr bringen.
           default: "01:00:00"
           selector: {"time": {}}
+        reserve_soc:
+          name: "Entlade-Planung: Mindest-Ladestand (%)"
+          description: >-
+            Ladestand in Prozent, unter den die Batterie nachts nicht entladen wird — außer die kommenden Tage würden sie sonst über 100 % füllen und einspeisen. Eingespeister Strom, der vorher hätte entnommen werden können, ist der einzige echte Verlust.
+          default: 50
+          selector: {"number": {"min": 10, "max": 90, "step": 1, "unit_of_measurement": "%"}}
+        ziel_soc:
+          name: "Entlade-Planung: Ziel-Ladestand am Tagesende (%)"
+          description: >-
+            Ladestand in Prozent, den die Prognose der nächsten Tage wieder erreichen soll. Bewusst unter 100 %, damit ein besserer Tag als vorhergesagt noch Platz in der Batterie findet.
+          default: 90
+          selector: {"number": {"min": 50, "max": 100, "step": 1, "unit_of_measurement": "%"}}
+        vertrauen_tag3:
+          name: "Entlade-Planung: Prognosevertrauen Tag 3"
+          description: >-
+            Faktor 0–1, mit dem die PV-Prognose für übermorgen in die Planung eingeht. Kleiner = vorsichtiger, die Nacht davor entlädt weniger. Der Verbrauch wird nie gedämpft.
+          default: 0.7
+          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
+        vertrauen_tag4:
+          name: "Entlade-Planung: Prognosevertrauen Tag 4"
+          description: >-
+            Faktor 0–1 für den dritten Prognosetag. Solcast wird mit dem Abstand unsicherer, deshalb kleiner als Tag 3.
+          default: 0.5
+          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
+        nacht_p50_anteil:
+          name: "Entlade-Planung: Gewicht der mittleren Prognose"
+          description: >-
+            Gewicht 0–1 der mittleren Solcast-Prognose (P50) gegenüber der vorsichtigen (P10) für die Tagesbilanzen. 0,5 = Mittelwert. Kleiner = vorsichtiger, größer = mutiger; zu hoch gehaltene Batterie speist ein, zu tiefe kauft nachts nach.
+          default: 0.5
+          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
         duration_cooldown:
           name: "Sperrzeit nach Zwangsladung"
           description: >-
@@ -833,7 +875,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V5.10.3]"
+      bp_version: "[V6.0.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -851,6 +893,10 @@ action:
       # Prognose-Unsicherheit in die Planung eingeht - ein zusaetzlicher
       # Abschlag darauf zaehlte den P10-Abstand ein zweites Mal.
       blend_p50_anteil: 0.5
+      # Entlade-Planung: Ladeverluste auf den PV-Anteil der Tagesbilanz; der
+      # Zellausgleich gilt als faellig, wenn die Batterie so viele Tage nicht voll war.
+      lade_wirkungsgrad: 0.92
+      zellausgleich_nach_tagen: 9
       # Ab welchem Anteil des Ladefensters der Realitaets-Check greift. Frueher
       # bestimmt eine einzelne Wolkenluecke den Quotienten, spaeter bleibt zu
       # wenig Ladezeit, um noch nachzusteuern.
@@ -1172,6 +1218,9 @@ action:
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
       var_pv_forecast: !input solcast_current_sensor
       var_solcast_next_hour: !input solcast_next_hour_sensor
+      var_solcast_morgen: !input solcast_morgen_sensor
+      var_solcast_tag3: !input solcast_tag3_sensor
+      var_solcast_tag4: !input solcast_tag4_sensor
 
       var_vmax1: !input vmax1_sensor
       var_vmax2: !input vmax2_sensor
@@ -1226,7 +1275,11 @@ action:
       peak_ampere: !input peak_ampere
       nominale_spannung: !input nominale_spannung
       default_tou_soc: !input default_tou_soc
-      escalation_tou_soc: !input escalation_tou_soc
+      reserve_soc: !input reserve_soc
+      ziel_soc: !input ziel_soc
+      vertrauen_tag3: !input vertrauen_tag3
+      vertrauen_tag4: !input vertrauen_tag4
+      nacht_p50_anteil: !input nacht_p50_anteil
       grid_ampere_zwangsladung: !input grid_ampere_zwangsladung
       top_balancing_voltage: !input top_balancing_voltage
       var_float_normal: !input float_voltage_normal
@@ -1579,6 +1632,9 @@ action:
                  ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
                  ('solcast_current_sensor', var_pv_forecast, {}),
                  ('solcast_next_hour_sensor', var_solcast_next_hour, {'estimate10': state_attr(var_solcast_next_hour, 'estimate10')}),
+                 ('solcast_morgen_sensor', var_solcast_morgen, {'estimate10': state_attr(var_solcast_morgen, 'estimate10')}),
+                 ('solcast_tag3_sensor', var_solcast_tag3, {'estimate10': state_attr(var_solcast_tag3, 'estimate10')}),
+                 ('solcast_tag4_sensor', var_solcast_tag4, {'estimate10': state_attr(var_solcast_tag4, 'estimate10')}),
                  ('helper_lade_modus', var_lade_modus, {}),
                  ('helper_logbook_dummy', var_logbook_dummy, {}),
                  ('helper_batterie_heute_voll', var_batterie_heute_voll, {}),
@@ -1642,7 +1698,11 @@ action:
                   'float_voltage_balancing': var_float_balancing,
                   'float_voltage_normal': var_float_normal,
                   'default_tou_soc': default_tou_soc,
-                  'escalation_tou_soc': escalation_tou_soc,
+                  'reserve_soc': reserve_soc,
+                  'ziel_soc': ziel_soc,
+                  'vertrauen_tag3': vertrauen_tag3,
+                  'vertrauen_tag4': vertrauen_tag4,
+                  'nacht_p50_anteil': nacht_p50_anteil,
                   'crate_2_deg': crate_2_deg,
                   'crate_5_deg': crate_5_deg,
                   'crate_10_deg': crate_10_deg,
@@ -2400,6 +2460,88 @@ action:
 # ROOT-ACTIONS STATE-MACHINE
 # ====================================================================
 
+  # ENTLADE-UNTERGRENZE (dynamischer ToU-Mindest-Ladestand)
+  # Nachts nur so tief entladen, wie die naechsten Tage die Batterie wieder auf
+  # das Ziel bringen - und nie so hoch halten, dass ein voller Tag einspeisen
+  # muss. Kumulierte Tagesbilanzen ueber bis zu drei Prognosetage; PV gedaempft
+  # und mit Ladeverlusten, Verbrauch ungedaempft. Aktiv nur mit Prognose morgen.
+  - variables:
+      entlade_aktiv: "{{ var_solcast_morgen != '' }}"
+      verbrauch_tag_kwh: "{{ json_profil | map('float') | sum }}"
+      tage_seit_voll: >
+        {% set s = states(var_json_tracking) if var_json_tracking != '' else '' %}
+        {% if s is not string and s is iterable %}{% set liste = s | list %}
+        {% elif s is string and s.startswith('[') %}{% set liste = s | from_json %}
+        {% else %}{% set liste = [] %}{% endif %}
+        {{ 0 if liste | length == 0 else (now().date() - (liste | max | as_datetime).date()).days }}
+      zellausgleich_faellig: "{{ tage_seit_voll > zellausgleich_nach_tagen }}"
+      # Je konfiguriertem Prognosetag: PV als P50/P10-Blend, Bilanz gegen den Tagesverbrauch.
+      prognose_tage: >
+        {% set ns = namespace(l=[]) %}
+        {% set anteil = nacht_p50_anteil | float(0.5) %}
+        {% for e, v in [(var_solcast_morgen, 1.0), (var_solcast_tag3, vertrauen_tag3 | float(0.7)), (var_solcast_tag4, vertrauen_tag4 | float(0.5))] if e != '' %}
+          {% set p50 = states(e) | float(0) %}
+          {% set p10 = state_attr(e, 'estimate10') | float(p50) %}
+          {% set pv = p50 * anteil + p10 * (1 - anteil) %}
+          {% set ns.l = ns.l + [{'pv': pv, 'vertrauen': v, 'bilanz': pv * v * lade_wirkungsgrad - verbrauch_tag_kwh}] %}
+        {% endfor %}
+        {{ ns.l }}
+      # B*: groesste kumulierte Auffuellung im Horizont, in Prozent der Kapazitaet.
+      # Dunkeltage dazwischen sind abgezogen; eine Sonnenstrecke gibt so schon
+      # die Naechte davor frei, und der volle Tag landet an ihrem Ende.
+      b_stern_pct: >
+        {% set ns = namespace(kum=0.0, best=0.0) %}
+        {% for t in prognose_tage %}{% set ns.kum = ns.kum + t.bilanz %}{% if ns.kum > ns.best %}{% set ns.best = ns.kum %}{% endif %}{% endfor %}
+        {{ (ns.best / batterie_kapazitaet * 100) if batterie_kapazitaet > 0 else 0 }}
+      ziel_soc_eff: "{{ 100 if (zellausgleich_faellig and b_stern_pct > 0) else (ziel_soc | float(90)) }}"
+      f_ziel: "{{ ziel_soc_eff - b_stern_pct }}"
+      f_spill: "{{ 100 - b_stern_pct }}"
+      # Mindest-Ladestand gilt, ausser er erzwaenge Einspeisung; nie tiefer als das Ziel zulaesst.
+      f_roh: "{{ [f_ziel, [reserve_soc | float(50), f_spill] | min] | max }}"
+      # Ueber dem Ladestand heisst halten; unter dem Minimum nie.
+      f_soc: "{{ [[[f_roh, aktueller_soc] | min | round(0, 'floor'), default_tou_soc | float(20)] | max, 100] | min | int }}"
+      tou_ist: >
+        {{ [states(var_wr_tou_1) | float(20), states(var_wr_tou_2) | float(20), states(var_wr_tou_3) | float(20),
+            states(var_wr_tou_4) | float(20), states(var_wr_tou_5) | float(20), states(var_wr_tou_6) | float(20)] | min }}
+      tou_max_ist: >
+        {{ [states(var_wr_tou_1) | float(20), states(var_wr_tou_2) | float(20), states(var_wr_tou_3) | float(20),
+            states(var_wr_tou_4) | float(20), states(var_wr_tou_5) | float(20), states(var_wr_tou_6) | float(20)] | max }}
+      # Geschrieben wird nur, wenn es wirken kann: Aenderung ab 5 Punkten und der
+      # Ladestand hoechstens 10 Punkte ueber der hoeheren der beiden Grenzen.
+      tou_schreiben: >
+        {{ entlade_aktiv and not zwangsladung_aktiv
+           and ((f_soc - tou_ist) | abs) >= 5
+           and aktueller_soc <= ([f_soc, tou_ist] | max) + 10 }}
+
+  - if:
+      - condition: template
+        value_template: "{{ tou_schreiben }}"
+    then:
+      - action: number.set_value
+        target:
+          entity_id:
+            - !input wr_tou_1
+            - !input wr_tou_2
+            - !input wr_tou_3
+            - !input wr_tou_4
+            - !input wr_tou_5
+            - !input wr_tou_6
+        data:
+          value: "{{ f_soc }}"
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: >-
+            {{ bp_version }} Entlade-Untergrenze: Netz-Ladeziele (ToU 1–6) von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
+            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % und die Batterie deshalb gehalten wird
+            {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + 10 % Vorlauf{% endif %}.
+            (Untergrenze = größerer Wert aus Ziel-Kandidat {{ f_ziel | round(0) }} % und kleinerem Wert aus Mindest-Ladestand {{ reserve_soc | round(0) }} % und Einspeise-Kandidat {{ f_spill | round(0) }} %;
+            Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} %;
+            beste Auffüllung aus den Tagesbilanzen {% for t in prognose_tage %}{{ 'morgen' if loop.index == 1 else 'Tag ' ~ (loop.index + 1) }} {{ '%+.1f' | format(t.bilanz) }} kWh = PV {{ t.pv | round(1) }} kWh × Vertrauen {{ t.vertrauen }} × Wirkungsgrad {{ lade_wirkungsgrad }} − Verbrauch {{ verbrauch_tag_kwh | round(1) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
+            {%- if zellausgleich_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}).
+          entity_id: !input helper_logbook_dummy
+
+
   # BLOCKADE-AUSTRITT ERKENNEN
   #
   # Der gespeicherte Modus steht noch auf 'blockade', die Bedingung ist aber
@@ -2631,6 +2773,9 @@ action:
                 state: "off"
               - condition: template
                 value_template: "{{ eingriff_dauer > 0.5 }}"
+              # Unter dem Ziel-Ladestand zu bleiben ist mit Entlade-Planung Absicht.
+              - condition: template
+                value_template: "{{ not (entlade_aktiv and ziel_soc_eff < 100) }}"
             then:
               - action: persistent_notification.create
                 data:
@@ -2679,11 +2824,10 @@ action:
       - alias: "Speicherverlust verbuchen (wenn Batterie unter Reserve fiel)"
         conditions:
           - condition: template
-            value_template: "{{ var_offener_verlust is string and var_offener_verlust | length > 0 and (states(var_offener_verlust) | float(0)) > 0.1 and var_speicherverlust is string and var_speicherverlust | length > 0 and aktueller_soc <= (default_tou_soc | float(20)) }}"
+            value_template: "{{ var_offener_verlust is string and var_offener_verlust | length > 0 and (states(var_offener_verlust) | float(0)) > 0.1 and var_speicherverlust is string and var_speicherverlust | length > 0 and aktueller_soc <= tou_ist }}"
         sequence:
           - variables:
               kandidat_kwh: "{{ states(var_offener_verlust) | float(0) }}"
-              reserve_soc: "{{ default_tou_soc | float(20) }}"
               current_tracker_val: "{{ states(var_speicherverlust) | float(0) }}"
           - action: input_number.set_value
             target:
@@ -2703,121 +2847,31 @@ action:
               value: "0"
 
   - choose:
-      - alias: "BMS Balancing Logic"
+      # Ohne Entlade-Planung sind die ToU-Register nur ein festes Minimum; nach
+      # einer Zwangsladung (100 %) muss es dorthin zurueck.
+      - alias: "ToU auf Minimum (keine Entlade-Planung)"
         conditions:
           - condition: trigger
             id: maintenance
+          - condition: template
+            value_template: "{{ not entlade_aktiv and not zwangsladung_aktiv and (tou_ist != (default_tou_soc | float(20)) or tou_max_ist != (default_tou_soc | float(20))) }}"
         sequence:
-          # ============================================================
-          # BMS-BALANCING-LOGIK
-          # Liest die Tracking-Liste, die weiter oben im selben Lauf
-          # aktualisiert wurde (Block "100%-Tage-Tracking").
-          # ============================================================
-          - variables:
-              # Robustes Einlesen: HA kann den input_text-State
-              # bereits als native Liste liefern (siehe ausfuehrlicher Kommentar
-              # bei tracking_liste oben). Beide Faelle abdecken.
-              tage_liste: >
-                {% set s = states(var_json_tracking) %}
-                {% if s is not string and s is iterable %}
-                  {{ s | list }}
-                {% elif s is string and s.startswith('[') %}
-                  {{ s | from_json }}
-                {% else %}
-                  {{ [] }}
-                {% endif %}
-              heute: "{{ now().strftime('%Y-%m-%d') }}"
-              gestern: "{{ (now() - timedelta(days=1)).strftime('%Y-%m-%d') }}"
-              vor_9_tagen: "{{ (now() - timedelta(days=9)).strftime('%Y-%m-%d') }}"
-              letztes_100_datum: "{{ tage_liste | max if tage_liste | length > 0 else '2000-01-01' }}"
-              # ALLE SECHS ToU-REGISTER PRUEFEN
-              #
-              # min und max ueber alle sechs: Weicht irgendeines vom Soll ab,
-              # unterscheidet sich min oder max vom Zielwert und es wird nachgesetzt
-              # (geschrieben werden ohnehin immer alle sechs). Nur Programm 1 zu
-              # lesen wuerde eine externe Aenderung an einem der anderen uebersehen.
-              tou_werte: >
-                {{ [
-                     states(var_wr_tou_1) | float(20),
-                     states(var_wr_tou_2) | float(20),
-                     states(var_wr_tou_3) | float(20),
-                     states(var_wr_tou_4) | float(20),
-                     states(var_wr_tou_5) | float(20),
-                     states(var_wr_tou_6) | float(20)
-                   ] }}
-              tou_min: "{{ tou_werte | min }}"
-              tou_max: "{{ tou_werte | max }}"
-              # Rueckwaertskompatibel beibehalten (wird noch in den Log-Meldungen
-              # und im Safety-Reset-Zweig verwendet): der Wert von Programm 1.
-              aktueller_min_soc: "{{ states(var_wr_tou_1) | float(20) }}"
-              # NEU: 'alle sechs stimmen mit dem Sollwert ueberein' laesst sich
-              # so pruefen: min == max == soll. Weicht auch nur eines ab, ist
-              # entweder min oder max != soll.
-              tou_alle_auf_default: "{{ tou_min == default_tou_soc | float(20) and tou_max == default_tou_soc | float(20) }}"
-              tou_alle_auf_escalation: "{{ tou_min == escalation_tou_soc | float(30) and tou_max == escalation_tou_soc | float(30) }}"
-          - choose:
-              - alias: "Zwei Tage in Folge voll"
-                conditions:
-                  - condition: template
-                    value_template: "{{ heute in tage_liste and gestern in tage_liste }}"
-                sequence:
-                  - if:
-                      - condition: template
-                        # Prueft ALLE SECHS Register (via min/max).
-                        # Weicht auch nur eines vom Sollwert ab, wird nachgesetzt.
-                        value_template: "{{ not tou_alle_auf_default }}"
-                    then:
-                      - action: number.set_value
-                        target:
-                          entity_id:
-                            - !input wr_tou_1
-                            - !input wr_tou_2
-                            - !input wr_tou_3
-                            - !input wr_tou_4
-                            - !input wr_tou_5
-                            - !input wr_tou_6
-                        data:
-                          value: "{{ default_tou_soc }}"
-                      - action: logbook.log
-                        data:
-                          name: "PV Optimizer"
-                          message: "{{ bp_version }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % abgesenkt ({% if (tou_min | round(0)) == (tou_max | round(0)) %}vorher {{ tou_min | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da die Batterie 2 Tage in Folge voll war."
-                          entity_id: !input helper_logbook_dummy
-              - alias: "Seit 9 Tagen nicht voll"
-                conditions:
-                  # GUARD: 'tage_liste | length > 0'
-                  #
-                  # Ohne Tracking-Daten wird KEINE Entscheidung getroffen: Faellt der
-                  # Speicher aus, ist tage_liste leer und letztes_100_datum faellt auf
-                  # '2000-01-01' - die Bedingung waere trivial wahr und die ToU-Programme
-                  # wuerden hochgesetzt, obwohl die Batterie taeglich voll war.
-                  # 'Keine Daten' ist etwas anderes als 'nicht voll gewesen'.
-                  - condition: template
-                    value_template: "{{ tage_liste | length > 0 }}"
-                  - condition: template
-                    value_template: "{{ letztes_100_datum < vor_9_tagen }}"
-                sequence:
-                  - if:
-                      - condition: template
-                        # Prueft ALLE SECHS Register (via min/max).
-                        value_template: "{{ not tou_alle_auf_escalation }}"
-                    then:
-                      - action: number.set_value
-                        target:
-                          entity_id:
-                            - !input wr_tou_1
-                            - !input wr_tou_2
-                            - !input wr_tou_3
-                            - !input wr_tou_4
-                            - !input wr_tou_5
-                            - !input wr_tou_6
-                        data:
-                          value: "{{ escalation_tou_soc }}"
-                      - action: logbook.log
-                        data:
-                          name: "PV Optimizer"
-                          message: "{{ bp_version }} Netz-Ladeziele (ToU 1–6) auf {{ escalation_tou_soc }} % angehoben ({% if (tou_min | round(0)) == (tou_max | round(0)) %}vorher {{ tou_min | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), um über das Netz nachzuladen, da die Batterie seit über 9 Tagen nicht mehr voll war (letzter Tag mit voller Batterie: {{ letztes_100_datum }})."
-                          entity_id: !input helper_logbook_dummy
+          - action: number.set_value
+            target:
+              entity_id:
+                - !input wr_tou_1
+                - !input wr_tou_2
+                - !input wr_tou_3
+                - !input wr_tou_4
+                - !input wr_tou_5
+                - !input wr_tou_6
+            data:
+              value: "{{ default_tou_soc }}"
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ bp_version }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist und keine Zwangsladung läuft."
+              entity_id: !input helper_logbook_dummy
 
   - choose:
       - alias: "ZWANGSLADUNG STARTEN"
@@ -2826,6 +2880,9 @@ action:
             id: zwangsladung_start
           - condition: template
             value_template: "{{ now().month in winter_monate }}"
+          # Mit Entlade-Planung wird nie ueber das Netz voll geladen.
+          - condition: template
+            value_template: "{{ not entlade_aktiv }}"
           - condition: state
             entity_id: !input helper_zwangsladung_aktiv
             state: "off"
