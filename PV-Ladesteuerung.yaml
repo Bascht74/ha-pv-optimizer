@@ -2390,6 +2390,14 @@ action:
       # TAGESMARKER: Nach dem ersten Austritt (helper_blockade_beendet == on)
       # kein Wiedereintritt mehr bis zum Mitternachts-Reset.
       blockade_heute_beendet: "{{ var_helper_blockade_beendet != '' and states(var_helper_blockade_beendet) == 'on' }}"
+      # Gegenprobe zur Blockade: Der Peak-Timer startet nur, wenn die
+      # Netzeinspeisung die Schwelle real ueberschreitet. Wurde er heute nie
+      # angefasst, gab es keine Spitze. Nach einem HA-Neustart zaehlt der Timer
+      # als heute geaendert, die Diagnose bleibt dann aus - kein Fehlalarm.
+      peak_timer_heute: >
+        {% set t = states[var_timer_peak] if var_timer_peak != '' else none %}
+        {{ t is not none and t.last_changed is not none and (t.last_changed | as_local).date() == now().date() }}
+      blockade_ohne_spitze: "{{ (blockade_heute_beendet or aktueller_modus == 'blockade') and not peak_timer_heute }}"
       # PEAK-SHAVING HAT VORRANG: Die Blockade endet, sobald die Einspeisung die
       # Peak-Schwelle reisst - sonst regelt der Wechselrichter ab, waehrend die
       # Batterie auf 0 A steht. An den entprellten TRIGGER gekoppelt statt an
@@ -2502,7 +2510,7 @@ action:
             {{ bp_version }} Entlade-Untergrenze: Netz-Ladeziele (ToU 1–6) von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
             {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % und die Batterie deshalb gehalten wird
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
-            (Untergrenze = größerer Wert aus Ziel-Kandidat {{ f_ziel | round(1) }} % und kleinerem Wert aus Mindest-Ladestand {{ reserve_soc | round(0) }} % und Einspeise-Kandidat {{ f_spill | round(1) }} %, auf 5 % abgerundet;
+            (Untergrenze = größerer Wert aus Ziel-Kandidat {{ f_ziel | round(1) }} % und kleinerem Wert aus Mindest-Ladestand {{ reserve_soc | round(0) }} % und Einspeise-Kandidat {{ f_spill | round(1) }} %, auf volle 5 % abgerundet;
             Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} %;
             beste Auffüllung aus den Tagesbilanzen {% for t in prognose_tage %}{{ 'morgen' if loop.index == 1 else 'Tag ' ~ (loop.index + 1) }} {{ '%+.1f' | format(t.bilanz) }} kWh = PV {{ t.pv | round(1) }} kWh × Vertrauen {{ t.vertrauen }} × Wirkungsgrad {{ lade_wirkungsgrad }} − Verbrauch {{ verbrauch_tag_kwh | round(1) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
             {%- if zellausgleich_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}).
@@ -2713,6 +2721,21 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: "{{ bp_version }} Diagnose: Batterie wurde heute nicht voll — der Zellausgleich hat nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
+                  entity_id: !input helper_logbook_dummy
+
+          # Fehleinschaetzung in der anderen Richtung: Die Blockade hielt Platz
+          # fuer eine Spitze, die nie kam. Erst hier beurteilbar, nicht am
+          # Blockade-Ende - die Spitze folgt planmaessig NACH dem Ladebeginn.
+          - if:
+              - condition: template
+                value_template: "{{ blockade_ohne_spitze }}"
+            then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: >-
+                    {{ bp_version }} Diagnose: Fehleinschätzung der Prognose, die Morgen-Blockade lief heute, aber die Netzeinspeisung hat die Peak-Shaving-Schwelle {{ schwelle_peak_shaving | round(0) }} W nie überschritten; die zurückgehaltene Kapazität wurde nicht gebraucht.
+                    {%- if var_max_soc_heute != '' %} (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) | float(0) | round(0) }} %.){% endif %}
                   entity_id: !input helper_logbook_dummy
 
           - if:
@@ -3526,7 +3549,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ bp_version }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{% if not spitze_erwartet %} Fehleinschätzung der Prognose: Für heute war keine Einspeisespitze erwartet, da höchstes Prognose-Zeitfenster abzüglich Hausverbrauch {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W ({{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle){% if blockade_heute_beendet or aktueller_modus == 'blockade' %}; die Morgen-Blockade lief dennoch{% else %}, deshalb lief keine Morgen-Blockade{% endif %}.{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
+                  message: "{{ bp_version }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), damit die Batterie den PV-Überschuss aufnimmt und so die Netzeinspeisung kappt, da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} (Informativ: Batterie pufferte bisher {{ (batterie_leistung * -1) | round(0) }} W).{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Fehleinschätzung der Prognose: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchstes Zeitfenster abzüglich Hausverbrauch {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:

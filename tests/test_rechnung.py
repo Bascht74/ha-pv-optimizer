@@ -345,3 +345,23 @@ def test_spitze_erwartet_an_der_90_prozent_grenze(blueprint, tag, schwelle_w, er
     ctx = szenario(blueprint, zeit(tag, 9, 0), input_overrides={"schwelle_peak_shaving": schwelle_w}).auswerten(bis="spitze_erwartet")
     assert ctx["spitze_erwartet_w"] == pytest.approx(3600 - 0.19 * 2000, abs=1)
     assert ctx["spitze_erwartet"] is erwartet
+
+
+# --------------------------------------------------------------------------
+# Fehleinschaetzung: Blockade lief, Spitze blieb aus
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("beendet, timer_tage_alt, erwartet", [
+    ("on", 1, True),    # Blockade lief, Peak-Timer zuletzt gestern angefasst -> keine Spitze heute
+    ("on", 0, False),   # Peak-Timer heute gestartet -> Spitze kam
+    ("off", 1, False),  # keine Blockade -> nichts zu beurteilen
+])
+def test_blockade_ohne_spitze(blueprint, tag, beendet, timer_tage_alt, erwartet):
+    import datetime as _dt
+    from conftest import fake_entity
+    h = szenario(blueprint, zeit(tag, 20, 0))
+    h.states.tabelle[h.inputs["helper_blockade_beendet"]].state = beendet
+    eid = h.inputs["helper_timer_peak"]
+    h.states.tabelle[eid] = Zustand(eid, "idle", {}, last_changed=zeit(tag, 12, 0) - _dt.timedelta(days=timer_tage_alt))
+    ctx = h.auswerten(bis="blockade_ohne_spitze")
+    assert ctx["peak_timer_heute"] is (timer_tage_alt == 0)
+    assert ctx["blockade_ohne_spitze"] is erwartet

@@ -14,9 +14,10 @@ Changed
   Holding at the current SOC stays exact.
 
 Added
-- The peak-shaving message records a forecast misjudgement: when the forecast had
-  expected no export peak for the day, it names the expected peak, the threshold
-  share it fell short of, and whether a morning blockade ran anyway.
+- Forecast misjudgements are recorded in both directions: the peak-shaving message
+  notes when a peak arrives on a day the forecast had ruled out (no morning
+  blockade), with the values that made the decision; at sunset a diagnosis is
+  logged when the morning blockade ran but the export never crossed the threshold.
 
 Fixed
 - Log add-ons (forecast blend, house load, temperature limit, forecast uncertainty)
