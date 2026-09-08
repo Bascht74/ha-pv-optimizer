@@ -128,7 +128,7 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     Dachterrasse, 06.09. 21:00, Ladestand 95 %: Prognose fuer den 07.09. laut dessen
     Mitternachtszeile 40.94 kWh (P10 35.54), Tagesverbrauch aus dem Profil 11.8 kWh.
     Von Hand: Blend 38.24 x 0.92 - 11.8 = 23.4 kWh = 73 % von 32.15 kWh ->
-    Ziel-Kandidat 90 - 73 = 17, Einspeise-Kandidat 27, Mindest 50 -> F = max(17, min(50, 27)) = 27.
+    Ziel-Kandidat 90 - 73 = 17, Einspeise-Kandidat 27, Mindest 50 -> F = max(17, min(50, 27)) = 27 -> 25.
     Im September bindet die Untergrenze also nicht: Die Nacht fiel real nur auf 80 %.
     """
     from conftest import fake_entity
@@ -148,7 +148,8 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     assert ctx["aktueller_soc"] == 95
     assert ctx["verbrauch_tag_kwh"] == pytest.approx(11.8, abs=0.05)
     assert ctx["b_stern_pct"] == pytest.approx(73, abs=1)
-    assert ctx["f_soc"] == 27
+    assert ctx["f_roh"] == pytest.approx(27, abs=1)
+    assert ctx["f_soc"] == 25
     nacht = [float(_eintrag(z, "battery_soc_sensor")["state"]) for z in zs
              if "2026-09-06T21:00" <= z["zeit"][:16] <= "2026-09-07T08:00"]
     assert min(nacht) == 80

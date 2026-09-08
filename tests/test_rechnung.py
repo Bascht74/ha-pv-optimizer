@@ -271,9 +271,9 @@ def _tou(soc):
 
 @pytest.mark.parametrize("lage, prognose, b_stern, f_soc", [
     ("Sommer: 40/40/40 kWh, alles wuerde einspeisen -> Minimum", (40, 40, 40), 166.7, 20),
-    ("Herbst: 15/5/5 kWh, morgen +4,68 kWh = 14,6 % -> 90 - 14,6", (15, 5, 5), 14.56, 75),
+    ("Herbst: 15/5/5 kWh, morgen +4,68 kWh = 14,6 % -> 90 - 14,6 = 75,4 -> 75", (15, 5, 5), 14.56, 75),
     ("Dezember: 2/2/2 kWh, keine Auffuellung -> halten beim Ladestand 85", (2, 2, 2), 0.0, 85),
-    ("Strecke: 3/30/30 kWh, Sonnentage ab uebermorgen geben die Nacht davor frei", (3, 30, 30), 26.5, 63),
+    ("Strecke: 3/30/30 kWh, Sonnentage ab uebermorgen geben die Nacht davor frei: 63,5 -> 60", (3, 30, 30), 26.5, 60),
 ])
 def test_entlade_untergrenze(blueprint, tag, lage, prognose, b_stern, f_soc):
     ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=prognose).auswerten(bis="tou_schreiben")
@@ -284,14 +284,25 @@ def test_entlade_untergrenze(blueprint, tag, lage, prognose, b_stern, f_soc):
 
 @pytest.mark.parametrize("soc, tou, erwartet", [
     (95.0, 20, False),   # weit ueber der Grenze: Register bleibt, bis es wirken kann
-    (84.0, 20, True),    # 84 <= 75 + 10: jetzt schreiben, die Nacht laeuft auf die Grenze zu
-    (84.0, 72, False),   # Aenderung 75 - 72 = 3 < 5 Punkte
+    (78.0, 20, False),   # 78 > 75 + 2: noch ein Lauf zu frueh
+    (77.0, 20, True),    # 77 <= 75 + 2: jetzt schreiben, die Nacht laeuft auf die Grenze zu
+    (77.0, 72, False),   # Aenderung 75 - 72 = 3 < 5 Punkte
 ])
 def test_untergrenze_wird_nur_beim_annaehern_geschrieben(blueprint, tag, soc, tou, erwartet):
     h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(15, 5, 5), zustands_overrides=_tou(tou))
     ctx = h.auswerten(bis="tou_schreiben")
     assert ctx["f_soc"] == 75
     assert ctx["tou_schreiben"] is erwartet
+
+
+def test_untergrenze_liegt_auf_dem_5er_raster(blueprint, tag):
+    """Strecke: Ziel-Kandidat 63,5 -> abgerundet 60, nicht 63; Halten bleibt am Ladestand (83), nicht 80."""
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(3, 30, 30)).auswerten(bis="f_soc")
+    assert ctx["f_roh"] == pytest.approx(63.5, abs=0.1)
+    assert ctx["f_soc"] == 60
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=83.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
+    assert ctx["f_roh"] == pytest.approx(90.0)
+    assert ctx["f_soc"] == 83
 
 
 def test_halten_wird_sofort_geschrieben(blueprint, tag):
