@@ -3,6 +3,30 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.2.0
+
+Changed
+- The discharge floor is written to the ToU registers only once the SOC is within
+  2 points of it, instead of 10. The floor only acts when the SOC reaches it, so an
+  earlier write changes nothing and gets rewritten by the next forecast update.
+- The discharge floor is rounded down to a 5 % step. The forecast carries no finer
+  resolution, and rounding down is the direction that discharges rather than exports.
+  Holding at the current SOC stays exact.
+
+Added
+- Forecast misjudgements are recorded in both directions: the peak-shaving message
+  notes when a peak arrives on a day the forecast had ruled out (no morning
+  blockade), with the values that made the decision; at sunset a diagnosis is
+  logged when the morning blockade ran but the export never crossed the threshold.
+
+Fixed
+- Log add-ons (forecast blend, house load, temperature limit, forecast uncertainty)
+  were glued to the preceding sentence without a space: Home Assistant strips the
+  leading space of a rendered variable, so the space now lives in the message.
+- The discharge-floor message showed its candidates rounded to the nearest integer
+  while the written value was rounded down; it now shows one decimal and states the
+  rounding.
+
 ## V6.1.2
 
 Fixed
