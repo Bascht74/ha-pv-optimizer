@@ -206,3 +206,15 @@ def test_fall_b_am_knappen_morgen(blueprint):
     assert ctx["fall_b_aktiv"] is True
     vorher = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-09T08:00")
     assert vorher["fall_b_aktiv"] is False
+
+
+@pytest.mark.parametrize("zeit_prefix, f_soc, erster_tag", [
+    ("2026-09-11T03:00", 20, "heute"),    # heute 37.5 kWh Blend -> Nacht frei; mit "morgen" 25 kWh stuende hier 50
+    ("2026-09-10T21:00", 25, "morgen"),   # abends zaehlt morgen
+])
+def test_horizont_der_entlade_planung_in_der_nacht(blueprint, zeit_prefix, f_soc, erster_tag):
+    """PV: Die zweite Nachthaelfte plant mit der heutigen Prognose, der Abend mit der morgigen."""
+    ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", zeit_prefix)
+    assert ctx["entlade_aktiv"] is True
+    assert ctx["prognose_tage"][0]["name"] == erster_tag
+    assert ctx["f_soc"] == f_soc

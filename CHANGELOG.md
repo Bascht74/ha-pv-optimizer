@@ -3,6 +3,15 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.3.0
+
+Changed
+- The discharge planning starts its forecast horizon with the day whose PV ends the
+  night: today's forecast between midnight and sunrise, tomorrow's otherwise. Before,
+  the second half of every night was planned with a horizon shifted by one day, so the
+  floor jumped at midnight and again at sunrise, and the register writes clustered in
+  the early morning. The confidence weights follow the forecast distance as before.
+
 ## V6.2.1
 
 Fixed

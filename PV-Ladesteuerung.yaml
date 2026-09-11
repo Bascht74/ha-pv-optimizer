@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.2.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.3.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -828,7 +828,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.2.1]"
+      bp_version: "[V6.3.0]"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
       # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
@@ -2445,15 +2445,24 @@ action:
         {% else %}{% set liste = [] %}{% endif %}
         {{ 0 if liste | length == 0 else (now().date() - (liste | max | as_datetime).date()).days }}
       zellausgleich_faellig: "{{ tage_seit_voll > zellausgleich_nach_tagen }}"
-      # Je konfiguriertem Prognosetag: PV als P50/P10-Blend, Bilanz gegen den Tagesverbrauch.
+      # Je Prognosetag: PV als P50/P10-Blend, Bilanz gegen den Tagesverbrauch.
+      # Erster Tag des Horizonts ist der Tag, dessen PV die Nacht beendet: nach
+      # Mitternacht bis Sonnenaufgang ist das HEUTE, sonst morgen. Ohne diese
+      # Weiche plant die zweite Nachthaelfte mit einem um einen Tag verschobenen
+      # Horizont, und die Untergrenze springt um Mitternacht und bei Sonnenaufgang.
+      # Vertrauen nach Prognoseabstand: ein Tag voraus 1,0, dann tag3/tag4.
       prognose_tage: >
         {% set ns = namespace(l=[]) %}
         {% set anteil = nacht_p50_anteil | float(0.5) %}
-        {% for e, v in [(var_solcast_morgen, 1.0), (var_solcast_tag3, vertrauen_tag3 | float(0.7)), (var_solcast_tag4, vertrauen_tag4 | float(0.5))] if e != '' %}
+        {% set frueh = (not is_day) and now() < today_at('12:00') %}
+        {% set tage = [(var_solcast_heute, 'heute', 1.0), (var_solcast_morgen, 'morgen', 1.0), (var_solcast_tag3, 'Tag 3', vertrauen_tag3 | float(0.7))]
+                      if frueh else
+                      [(var_solcast_morgen, 'morgen', 1.0), (var_solcast_tag3, 'Tag 3', vertrauen_tag3 | float(0.7)), (var_solcast_tag4, 'Tag 4', vertrauen_tag4 | float(0.5))] %}
+        {% for e, name, v in tage if e != '' %}
           {% set p50 = states(e) | float(0) %}
           {% set p10 = state_attr(e, 'estimate10') | float(p50) %}
           {% set pv = p50 * anteil + p10 * (1 - anteil) %}
-          {% set ns.l = ns.l + [{'pv': pv, 'vertrauen': v, 'bilanz': pv * v * lade_wirkungsgrad - verbrauch_tag_kwh}] %}
+          {% set ns.l = ns.l + [{'name': name, 'pv': pv, 'vertrauen': v, 'bilanz': pv * v * lade_wirkungsgrad - verbrauch_tag_kwh}] %}
         {% endfor %}
         {{ ns.l }}
       # B*: groesste kumulierte Auffuellung im Horizont, in Prozent der Kapazitaet.
@@ -2513,7 +2522,7 @@ action:
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             (Untergrenze = größerer Wert aus Ziel-Kandidat {{ f_ziel | round(1) }} % und kleinerem Wert aus Mindest-Ladestand {{ reserve_soc | round(0) }} % und Einspeise-Kandidat {{ f_spill | round(1) }} %, auf volle 5 % abgerundet;
             Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} %;
-            beste Auffüllung aus den Tagesbilanzen {% for t in prognose_tage %}{{ 'morgen' if loop.index == 1 else 'Tag ' ~ (loop.index + 1) }} {{ '%+.1f' | format(t.bilanz) }} kWh = PV {{ t.pv | round(1) }} kWh × Vertrauen {{ t.vertrauen }} × Wirkungsgrad {{ lade_wirkungsgrad }} − Verbrauch {{ verbrauch_tag_kwh | round(1) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
+            beste Auffüllung aus den Tagesbilanzen {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh = PV {{ t.pv | round(1) }} kWh × Vertrauen {{ t.vertrauen }} × Wirkungsgrad {{ lade_wirkungsgrad }} − Verbrauch {{ verbrauch_tag_kwh | round(1) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
             {%- if zellausgleich_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}).
           entity_id: !input helper_logbook_dummy
 

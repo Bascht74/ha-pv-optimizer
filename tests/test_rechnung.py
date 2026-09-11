@@ -365,3 +365,21 @@ def test_blockade_ohne_spitze(blueprint, tag, beendet, timer_tage_alt, erwartet)
     ctx = h.auswerten(bis="blockade_ohne_spitze")
     assert ctx["peak_timer_heute"] is (timer_tage_alt == 0)
     assert ctx["blockade_ohne_spitze"] is erwartet
+
+
+def test_horizont_beginnt_vor_sonnenaufgang_mit_heute(blueprint, tag):
+    """
+    Nach Mitternacht fuellt HEUTE die Batterie wieder auf, dunkle Folgetage (2/2/2) aendern daran nichts.
+    Von Hand: heute 17.25 kWh x 0.92 - 9.12 kWh = 6.75 kWh = 21.0 % von 32.15 kWh -> Ziel-Kandidat 69 -> 65.
+    Abends zaehlt nur noch morgen (dunkel) -> halten beim Ladestand.
+    """
+    nacht = szenario(blueprint, zeit(tag, 3, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
+    tage = nacht["prognose_tage"]
+    assert [t["name"] for t in tage] == ["heute", "morgen", "Tag 3"]
+    assert [t["vertrauen"] for t in tage] == [1.0, 1.0, 0.7]
+    assert tage[0]["pv"] == pytest.approx(17.25, abs=0.05) and tage[1]["pv"] == pytest.approx(2.0)
+    assert nacht["b_stern_pct"] == pytest.approx(21.0, abs=0.2)
+    assert nacht["f_soc"] == 65
+    abend = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
+    assert [t["name"] for t in abend["prognose_tage"]] == ["morgen", "Tag 3", "Tag 4"]
+    assert abend["f_soc"] == 85
