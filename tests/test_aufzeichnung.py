@@ -132,7 +132,7 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     Im September bindet die Untergrenze also nicht: Die Nacht fiel real nur auf 80 %.
     """
     from conftest import fake_entity
-    zs = _zeilen_von("dachterrasse_2026-09-04_bis_07.jsonl")
+    zs = _zeilen_von("dachterrasse_2026-09-04_bis_11.jsonl")
     abend = next(z for z in zs if z["zeit"].startswith("2026-09-06T21:00"))
     morgen = next(z for z in zs if z["zeit"].startswith("2026-09-07T00:00"))
     p50, p10 = _tagesprognose(morgen)
@@ -171,7 +171,7 @@ def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
     voll wird, wie die Prognose es zulaesst. Real hielt die Blockade an diesem Tag
     bis 13:00 bei 14 kWh Einspeisung, und die Batterie wurde nicht voll.
     """
-    ctx = _lauf(blueprint, "pv_2026-09-04_bis_07.jsonl", "2026-09-05T08:00")
+    ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-05T08:00")
     assert ctx["spitze_erwartet_w"] == pytest.approx(5776, abs=5)
     assert ctx["spitze_erwartet"] is False
     assert ctx["blockade_aktiv"] is False
@@ -181,8 +181,28 @@ def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
 
 def test_mit_erwarteter_spitze_bleibt_alles_wie_bisher(blueprint):
     """Dachterrasse, 06.09. 08:00: Spitze 6,1 kW >= 90 % von 6,5 kW -> Blockade und Drosselung wie zuvor."""
-    ctx = _lauf(blueprint, "dachterrasse_2026-09-04_bis_07.jsonl", "2026-09-06T08:00")
+    ctx = _lauf(blueprint, "dachterrasse_2026-09-04_bis_11.jsonl", "2026-09-06T08:00")
     assert ctx["spitze_erwartet_w"] == pytest.approx(6130, abs=5)
     assert ctx["spitze_erwartet"] is True
     assert ctx["blockade_aktiv"] is True
     assert ctx["target_p5"] < 100
+
+
+# --------------------------------------------------------------------------
+# Fall B an einem knappen Morgen: der Faktor entscheidet, und er lag richtig
+# --------------------------------------------------------------------------
+def test_fall_b_am_knappen_morgen(blueprint):
+    """
+    PV, 09.09. 08:30, Ladestand 39 %: Bedarf 12.6 kWh x 1.2 = 15.1 kWh gegen
+    Brutto-Ueberschuss 15.9 kWh - Puffer 1.0 kWh = 14.9 kWh -> Fall B. Der Tag
+    lieferte real 20.5 kWh statt 31.5 kWh P50; ohne Fall B waere die Batterie
+    bei rund 92 % stehen geblieben. Eine halbe Stunde vorher reichte es noch.
+    """
+    ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-09T08:30")
+    assert ctx["blockade_aktiv"] is False and ctx["spitze_erwartet"] is False
+    assert ctx["benoetigt_kwh"] == pytest.approx(12.55, abs=0.05)
+    assert ctx["brutto_ueberschuss_rest"] == pytest.approx(15.94, abs=0.05)
+    assert ctx["puffer_fall_b"] == pytest.approx(1.0)
+    assert ctx["fall_b_aktiv"] is True
+    vorher = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-09T08:00")
+    assert vorher["fall_b_aktiv"] is False
