@@ -3,6 +3,14 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.2.1
+
+Fixed
+- The discharge-floor message named the new floor as the value the SOC was compared
+  with, which reads as a contradiction when the floor is lowered: the write rule
+  compares with the higher of new floor and current register. The message now names
+  the register when that is the operand.
+
 ## V6.2.0
 
 Changed
