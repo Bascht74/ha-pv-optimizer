@@ -294,13 +294,13 @@ blueprint:
             Normalerweise 0, reine Statistik.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
-        helper_entlade_bilanz:
-          name: "Helfer: Entlade-Bilanz (JSON)"
+        helper_halten_bezug:
+          name: "Helfer: Netzbezug während Haltephase (kWh)"
           description: >-
-            input_text (max 255) für die Nachtbilanz der Entlade-Planung: Netzbezug, solange die Untergrenze hielt, und Einspeisestand beim
-            Vollwerden. Abends wird daraus der Speicherverlust gebucht. Optional, reine Statistik.
+            input_number, in dem der Netzbezug aufläuft, solange die Entlade-Untergrenze die Batterie nachts hält. Abends wird daraus der
+            Speicherverlust gebucht und der Wert genullt. Optional, reine Statistik.
           default: ""
-          selector: {"entity": {"domain": "input_text"}}
+          selector: {"entity": {"domain": "input_number"}}
         helper_timer_peak:
           name: "Timer: Peak-Shaving Hold"
           description: >-
@@ -1156,46 +1156,47 @@ action:
           entity_id: !input hausverbrauch_utility_sensor
         data:
           value: "0"
-      # ENTLADE-BILANZ: Netzbezug aufsummieren, solange die Untergrenze haelt.
-      # Nachts ohne PV ist der Slot-Verbrauch der Netzbezug; nur hier lesbar,
-      # weil der Zaehler gleich genullt wird. Die Kette laeuft in diesem Lauf
-      # nicht, deshalb eigene Variablen.
+      # NETZBEZUG IM HALTEN aufsummieren, solange die Untergrenze haelt. Nachts
+      # ohne PV ist der Slot-Verbrauch der Netzbezug; nur hier lesbar, weil der
+      # Zaehler gleich genullt wird. Gedeckelt auf die zurueckgehaltene Energie:
+      # mehr haette die Batterie auch ohne Grenze nicht liefern koennen. Die
+      # Kette laeuft in diesem Lauf nicht, deshalb eigene Variablen.
       - variables:
-          eb_helfer: !input helper_entlade_bilanz
-          eb_planung: !input solcast_morgen_sensor
-          eb_soc: !input battery_soc_sensor
-          eb_tou_min: !input default_tou_soc
-          eb_tou_1: !input wr_tou_1
-          eb_tou_2: !input wr_tou_2
-          eb_tou_3: !input wr_tou_3
-          eb_tou_4: !input wr_tou_4
-          eb_tou_5: !input wr_tou_5
-          eb_tou_6: !input wr_tou_6
-          eb_tou_ist: >
-            {{ [states(eb_tou_1) | float(20), states(eb_tou_2) | float(20), states(eb_tou_3) | float(20),
-                states(eb_tou_4) | float(20), states(eb_tou_5) | float(20), states(eb_tou_6) | float(20)] | min }}
-          eb_haelt: >
-            {{ eb_helfer != '' and eb_planung != '' and not is_state('sun.sun', 'above_horizon')
-               and eb_tou_ist > (eb_tou_min | float(20))
-               and (states(eb_soc) | float(100)) <= eb_tou_ist + 1 }}
+          hb_helfer: !input helper_halten_bezug
+          hb_planung: !input solcast_morgen_sensor
+          hb_soc: !input battery_soc_sensor
+          hb_tou_min: !input default_tou_soc
+          hb_tou_1: !input wr_tou_1
+          hb_tou_2: !input wr_tou_2
+          hb_tou_3: !input wr_tou_3
+          hb_tou_4: !input wr_tou_4
+          hb_tou_5: !input wr_tou_5
+          hb_tou_6: !input wr_tou_6
+          hb_pack_ah: !input pack_capacity_ah
+          hb_spannung: !input nominale_spannung
+          hb_bms1: !input bms1_temp_min_sensor
+          hb_bms2: !input bms2_temp_min_sensor
+          hb_bms3: !input bms3_temp_min_sensor
+          hb_tou_ist: >
+            {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
+                states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
+          hb_haelt: >
+            {{ hb_helfer != '' and hb_planung != '' and not is_state('sun.sun', 'above_horizon')
+               and hb_tou_ist > (hb_tou_min | float(20))
+               and (states(hb_soc) | float(100)) <= hb_tou_ist + 1 }}
       - if:
           - condition: template
-            value_template: "{{ eb_haelt }}"
+            value_template: "{{ hb_haelt }}"
         then:
           - variables:
-              eb_alt: >
-                {% set s = states(eb_helfer) %}
-                {{ s if s is mapping else (s | from_json if (s is string and s | length > 1 and s[0] == '{') else {}) }}
-              eb_neu: >
-                {% set d = {'halten_kwh': ((eb_alt.halten_kwh | default(0) | float(0)) + last_half_hour_kwh) | round(3),
-                            'grenze': [eb_alt.grenze | default(0) | float(0), eb_tou_ist] | max} %}
-                {% if eb_alt.export_voll is defined %}{% set d = dict(d, export_voll=eb_alt.export_voll) %}{% endif %}
-                {{ d | to_json }}
-          - action: input_text.set_value
+              hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
+              hb_zurueck_kwh: "{{ (hb_tou_ist - (hb_tou_min | float(20))) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000 }}"
+              hb_neu: "{{ [((states(hb_helfer) | float(0)) + last_half_hour_kwh), hb_zurueck_kwh] | min | round(3) }}"
+          - action: input_number.set_value
             target:
-              entity_id: "{{ eb_helfer }}"
+              entity_id: "{{ hb_helfer }}"
             data:
-              value: "{{ eb_neu }}"
+              value: "{{ hb_neu }}"
       - stop: "JSON-Hausverbrauchsprofil (kWh) aktualisiert und Zähler genullt."
 
   # ====================================================================
@@ -1206,7 +1207,7 @@ action:
       var_grid_export_kwh: !input grid_export_kwh_heute
       var_speicherverlust: !input speicherverlust_gesamt
       var_offener_verlust: !input helper_offener_verlust
-      var_entlade_bilanz: !input helper_entlade_bilanz
+      var_halten_bezug: !input helper_halten_bezug
       var_battery_soc: !input battery_soc_sensor
       var_wp_temp: !input wp_temp_sensor
       var_logbook_dummy: !input helper_logbook_dummy
@@ -2400,23 +2401,18 @@ action:
         {{ entlade_aktiv
            and ((f_soc - tou_ist) | abs) >= 5
            and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf }}
-      # ENTLADE-BILANZ aus dem Helfer: Netzbezug, solange die Untergrenze hielt,
-      # hoechste haltende Grenze, Einspeisestand beim Vollwerden.
-      entlade_bilanz: >
-        {% set s = states(var_entlade_bilanz) if var_entlade_bilanz != '' else '' %}
-        {{ s if s is mapping else (s | from_json if (s is string and s | length > 1 and s[0] == '{') else {}) }}
-      halten_kwh: "{{ entlade_bilanz.halten_kwh | default(0) | float(0) }}"
-      halten_grenze: "{{ entlade_bilanz.grenze | default(0) | float(0) }}"
-      # Schlagend heisst: Ladestand an der Untergrenze und Untergrenze ueber dem Minimum.
+      # NETZBEZUG IM HALTEN (Helfer, laeuft im update_json-Zweig auf, bereits auf
+      # die zurueckgehaltene Energie gedeckelt). Schlagend heisst: Ladestand an
+      # der Untergrenze, Untergrenze ueber dem Minimum.
+      halten_kwh: "{{ states(var_halten_bezug) | float(0) if var_halten_bezug != '' else 0 }}"
       halten_aktiv: "{{ entlade_aktiv and not is_day and tou_ist > (default_tou_soc | float(20)) and aktueller_soc <= tou_ist + 1 }}"
-      export_seit_voll_kwh: >
-        {% if entlade_bilanz.export_voll is defined and var_grid_export_kwh != '' %}
-          {{ [(states(var_grid_export_kwh) | float(0)) - (entlade_bilanz.export_voll | float(0)), 0] | max }}
-        {% else %}0{% endif %}
-      zurueckgehalten_kwh: "{{ [(halten_grenze - (default_tou_soc | float(20))) / 100 * batterie_kapazitaet, 0] | max }}"
-      # Unnoetig gehalten wurde nur, was nachts bezogen UND tags eingespeist wurde,
-      # hoechstens die zurueckgehaltene Energie.
-      halten_verlust_kwh: "{{ [halten_kwh, export_seit_voll_kwh, zurueckgehalten_kwh] | min }}"
+      zurueckgehalten_kwh: "{{ [(tou_ist - (default_tou_soc | float(20))) / 100 * batterie_kapazitaet, 0] | max }}"
+      export_heute_kwh: "{{ states(var_grid_export_kwh) | float(0) if var_grid_export_kwh != '' else 0 }}"
+      # Unnoetig gehalten wurde nur, was nachts bezogen UND tags eingespeist wurde.
+      # Deckel ist die ganze Tageseinspeisung, nicht erst die nach dem Vollwerden:
+      # mit tieferem Morgen-Ladestand haette die gedrosselte Ladung staerker
+      # geladen und diese Einspeisung aufgenommen.
+      halten_verlust_kwh: "{{ [halten_kwh, export_heute_kwh] | min }}"
 
   # DIAGNOSE-AUFZEICHNUNG (optional): existiert notify.pv_optimizer_aufzeichnung
   # (File-Integration, Einrichtung im Package-Kopf), haengt jeder Halbstundenlauf
@@ -2487,7 +2483,7 @@ action:
                  ('helper_max_soc_heute', var_max_soc_heute, {}),
                  ('speicherverlust_gesamt', var_speicherverlust, {}),
                  ('helper_offener_verlust', var_offener_verlust, {}),
-                 ('helper_entlade_bilanz', var_entlade_bilanz, {}),
+                 ('helper_halten_bezug', var_halten_bezug, {}),
                  ('helper_timer_peak', var_timer_peak, {}),
                  ('helper_timer_cooldown', var_timer_cooldown, {}),
                  ('helper_timer_wp_anlauf', var_timer_wp_anlauf, {}),
@@ -2570,9 +2566,8 @@ action:
                   'ziel_soc_eff': ziel_soc_eff, 'zellausgleich_faellig': zellausgleich_faellig, 'tage_seit_voll': tage_seit_voll,
                   'f_ziel': f_ziel | round(1), 'f_spill': f_spill | round(1), 'f_roh': f_roh | round(1), 'f_soc': f_soc,
                   'tou_ist': tou_ist, 'tou_schreiben': tou_schreiben,
-                  'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'halten_grenze': halten_grenze,
-                  'export_seit_voll_kwh': export_seit_voll_kwh | round(2), 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
-                  'halten_verlust_kwh': halten_verlust_kwh | round(2),
+                  'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
+                  'export_heute_kwh': export_heute_kwh, 'halten_verlust_kwh': halten_verlust_kwh | round(2),
                   'spitze_erwartet_w': spitze_erwartet_w | round(0), 'spitze_erwartet': spitze_erwartet,
                   'blockade_aktiv': blockade_aktiv, 'blockade_dyn_t': blockade_dyn_t, 'blockade_heute_beendet': blockade_heute_beendet,
                   'trend_aktiv': trend_aktiv, 'trend_faktor': trend_faktor | round(3), 'pv_abschlag': pv_abschlag | round(3),
@@ -2798,12 +2793,12 @@ action:
                 data:
                   value: "{{ [kandidat_kwh, 0] | max }}"
 
-          # ENTLADE-BILANZ ABRECHNEN: Hielt die Untergrenze nachts und wurde die
-          # Batterie tags voll, war das Halten unnoetig. Nicht voll: kein Verlust,
-          # nur Diagnose. Danach ist der Helfer frei fuer die kommende Nacht.
+          # NETZBEZUG IM HALTEN ABRECHNEN: Hielt die Untergrenze nachts und wurde
+          # die Batterie tags voll, war das Halten unnoetig. Nicht voll: kein
+          # Verlust, nur Diagnose. Danach ist der Helfer frei fuer die Nacht.
           - if:
               - condition: template
-                value_template: "{{ var_entlade_bilanz != '' }}"
+                value_template: "{{ var_halten_bezug != '' }}"
             then:
               - variables:
                   verlust_vorher: "{{ states(var_speicherverlust) | float(0) if var_speicherverlust != '' else 0 }}"
@@ -2819,8 +2814,8 @@ action:
                         data:
                           name: "PV Optimizer"
                           message: >-
-                            {{ bp_version }} Speicherverlust realisiert: {{ halten_verlust_kwh | round(2) }} kWh auf den Verlust-Zähler addiert (von {{ verlust_vorher | round(2) }} kWh auf {{ (verlust_vorher + halten_verlust_kwh) | round(2) }} kWh), da die Entlade-Untergrenze {{ halten_grenze | round(0) }} % die Batterie nachts hielt und sie heute trotzdem voll wurde.
-                            (Verlust = kleinster Wert aus Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh, Netzeinspeisung seit dem Vollwerden {{ export_seit_voll_kwh | round(2) }} kWh und zurückgehaltener Energie {{ zurueckgehalten_kwh | round(2) }} kWh = (Untergrenze {{ halten_grenze | round(0) }} % − Minimum {{ default_tou_soc | round(0) }} %) × Kapazität {{ batterie_kapazitaet | round(1) }} kWh.)
+                            {{ bp_version }} Speicherverlust realisiert: {{ halten_verlust_kwh | round(2) }} kWh auf den Verlust-Zähler addiert (von {{ verlust_vorher | round(2) }} kWh auf {{ (verlust_vorher + halten_verlust_kwh) | round(2) }} kWh), da die Entlade-Untergrenze die Batterie nachts hielt und sie heute trotzdem voll wurde.
+                            (Verlust = kleinerer Wert aus Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh, bereits gedeckelt auf die zurückgehaltene Energie, und Netzeinspeisung heute {{ export_heute_kwh | round(2) }} kWh.)
                           entity_id: !input helper_logbook_dummy
                       - action: input_number.set_value
                         target:
@@ -2835,13 +2830,13 @@ action:
                         data:
                           name: "PV Optimizer"
                           message: >-
-                            {{ bp_version }} Diagnose: Entlade-Planung zu mutig, die Untergrenze {{ halten_grenze | round(0) }} % war nachts schlagend und die Batterie wurde heute nicht voll, höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0) }} % < Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %. (Informativ: Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh.)
+                            {{ bp_version }} Diagnose: Entlade-Planung zu mutig, die Entlade-Untergrenze (zuletzt {{ tou_ist | round(0) }} %) war nachts schlagend und die Batterie wurde heute nicht voll, höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0) }} % < Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %. (Informativ: Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh.)
                           entity_id: !input helper_logbook_dummy
-              - action: input_text.set_value
+              - action: input_number.set_value
                 target:
-                  entity_id: "{{ var_entlade_bilanz }}"
+                  entity_id: "{{ var_halten_bezug }}"
                 data:
-                  value: "{}"
+                  value: 0
 
           - if:
               - condition: state
@@ -3474,17 +3469,6 @@ action:
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
-              # ENTLADE-BILANZ: Einspeisestand beim Vollwerden festhalten, nur beim
-              # ersten Mal am Tag - ein spaeterer Balancing-Start wuerde ihn verfaelschen.
-              - if:
-                  - condition: template
-                    value_template: "{{ var_entlade_bilanz != '' and var_grid_export_kwh != '' and entlade_bilanz.export_voll is not defined }}"
-                then:
-                  - action: input_text.set_value
-                    target:
-                      entity_id: "{{ var_entlade_bilanz }}"
-                    data:
-                      value: "{{ dict(entlade_bilanz, export_voll=(states(var_grid_export_kwh) | float(0))) | to_json }}"
               # SCHATTEN-BMS-TARE: HIER am START. Sobald die Zellspannung die
               # Balancing-Schwelle erreicht, ist die Batterie physikalisch voll
               # -> Tare hart auf die aktuellen Zählerstände, interner SOC = 100%.

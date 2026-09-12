@@ -386,26 +386,58 @@ def test_horizont_beginnt_vor_sonnenaufgang_mit_heute(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
-# Entlade-Bilanz: Verlust nur, was nachts bezogen UND tags eingespeist wurde
+# Netzbezug im Halten: Verlust nur, was nachts bezogen UND tags eingespeist wurde
 # --------------------------------------------------------------------------
-def _bilanz(text, export_heute):
+def _halten(bezug, export_heute):
     from conftest import fake_entity
-    e1 = fake_entity("helper_entlade_bilanz", "input_text"); e2 = fake_entity("grid_export_kwh_heute", "sensor")
-    return {e1: Zustand(e1, text), e2: Zustand(e2, str(export_heute))}
+    e1 = fake_entity("helper_halten_bezug", "input_number"); e2 = fake_entity("grid_export_kwh_heute", "sensor")
+    return {e1: Zustand(e1, str(bezug)), e2: Zustand(e2, str(export_heute))}
 
 
-@pytest.mark.parametrize("bilanz, export_heute, verlust, grund", [
-    ('{"halten_kwh": 3.0, "grenze": 65, "export_voll": 10.0}', 12.5, 2.5, "Einspeisung seit Vollwerden deckelt"),
-    ('{"halten_kwh": 1.0, "grenze": 65, "export_voll": 10.0}', 12.5, 1.0, "Netzbezug im Halten deckelt"),
-    ('{"halten_kwh": 3.0, "grenze": 65, "export_voll": 12.5}', 12.5, 0.0, "voll geworden, danach keine Einspeisung"),
-    ('{"halten_kwh": 0.0, "grenze": 65, "export_voll": 10.0}', 12.5, 0.0, "kein Verbrauch nach Erreichen der Grenze"),
-    ('{"halten_kwh": 20.0, "grenze": 25, "export_voll": 0.0}', 30.0, 1.6075, "zurueckgehaltene Energie (25-20) % x 32.15 kWh deckelt"),
-    ('{"halten_kwh": 3.0, "grenze": 65}', 12.5, 0.0, "nie voll geworden: kein Einspeisestand, kein Verlust"),
-    ('{}', 12.5, 0.0, "Helfer leer"),
+@pytest.mark.parametrize("bezug, export_heute, verlust, grund", [
+    (3.0, 12.5, 3.0, "Netzbezug im Halten deckelt"),
+    (20.0, 5.0, 5.0, "Tageseinspeisung deckelt"),
+    (3.0, 0.0, 0.0, "voll geworden ohne jede Einspeisung: nichts verloren"),
+    (0.0, 12.5, 0.0, "kein Verbrauch nach Erreichen der Grenze"),
 ])
-def test_halten_verlust_dreifacher_deckel(blueprint, tag, bilanz, export_heute, verlust, grund):
-    ctx = szenario(blueprint, zeit(tag, 20, 0), zustands_overrides=_bilanz(bilanz, export_heute)).auswerten(bis="halten_verlust_kwh")
+def test_halten_verlust_zweifacher_deckel(blueprint, tag, bezug, export_heute, verlust, grund):
+    ctx = szenario(blueprint, zeit(tag, 20, 0), zustands_overrides=_halten(bezug, export_heute)).auswerten(bis="halten_verlust_kwh")
     assert ctx["halten_verlust_kwh"] == pytest.approx(verlust, abs=0.001), grund
+
+
+def test_halten_verlust_ohne_helfer_null(blueprint, tag):
+    ctx = szenario(blueprint, zeit(tag, 20, 0), input_overrides={"helper_halten_bezug": ""}).auswerten(bis="halten_verlust_kwh")
+    assert ctx["halten_kwh"] == 0 and ctx["halten_verlust_kwh"] == 0
+
+
+def _update_json_zweig(blueprint, h, trigger_zeit):
+    """Loest die Variablen des update_json-Zweigs auf, wie der Lauf es taete (verschachtelte if-Zweige eingeschlossen)."""
+    ctx = {"trigger": {"id": "update_json", "now": trigger_zeit}}
+    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    def gehe(schritte):
+        for st in schritte:
+            if "variables" in st:
+                ctx.update(h._aufloesen(st["variables"], ctx))
+            elif "if" in st and h._aufloesen(st["if"][0]["value_template"], ctx):
+                gehe(st["then"])
+    gehe(block["then"])
+    return ctx
+
+
+@pytest.mark.parametrize("bisher, slot_kwh, soc, tou, erwartet", [
+    (2.0, 0.6, 65.0, 65, 2.6),        # Halten: Slot-Verbrauch kommt dazu
+    (14.2, 0.6, 65.0, 65, 14.4675),   # Deckel: (65-20) % x 32.15 kWh zurueckgehalten
+    (2.0, 0.6, 70.0, 65, None),       # Batterie entlaedt noch: kein Halten, nichts geschrieben
+])
+def test_netzbezug_im_halten_laeuft_im_update_json_zweig_auf(blueprint, tag, bisher, slot_kwh, soc, tou, erwartet):
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), str(tou)) for i in range(1, 7)}
+    e = fake_entity("helper_halten_bezug", "input_number"); tous[e] = Zustand(e, str(bisher))
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=soc, hausverbrauch_slot_kwh=slot_kwh, zustands_overrides=tous, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    assert ctx["hb_haelt"] is (erwartet is not None)
+    if erwartet is not None:
+        assert ctx["hb_neu"] == pytest.approx(erwartet, abs=0.001)
 
 
 @pytest.mark.parametrize("stunde, soc, tou, erwartet", [
