@@ -178,3 +178,21 @@ def test_direkte_entity_inputs_sind_pflichtfelder(blueprint):
     # Der Logbuch-Anker steht in der Pruefung selbst - ohne ihn kann sie nichts melden.
     optional_aber_direkt = sorted(direkt - pflicht_inputs)
     assert optional_aber_direkt == [], f"Direkt eingesetzt, aber nicht Pflicht: {optional_aber_direkt}"
+
+
+def test_jede_logbuch_meldung_beginnt_mit_der_lauf_kennung(blueprint):
+    """Version und Lauf-Kennung vorn: so findet man zur Meldung die Aufzeichnungszeile desselben Laufs."""
+    meldungen = []
+    def gehe(knoten):
+        if isinstance(knoten, dict):
+            if knoten.get("action") in ("logbook.log", "persistent_notification.create") and "message" in knoten.get("data", {}):
+                meldungen.append(knoten["data"]["message"])
+            for v in knoten.values():
+                gehe(v)
+        elif isinstance(knoten, list):
+            for x in knoten:
+                gehe(x)
+    gehe(blueprint["action"])
+    assert len(meldungen) > 30
+    falsch = [m[:60] for m in meldungen if not m.lstrip().startswith("{{ log_kopf }} ")]
+    assert falsch == [], falsch

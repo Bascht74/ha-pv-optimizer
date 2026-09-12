@@ -253,3 +253,5 @@ def test_zeilenarten_lauf_und_entscheidung(blueprint, tag):
     nachricht = h._aufloesen(ende["then"][0]["data"]["message"], ctx)
     zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
     assert zeile["art"] == "entscheidung" and zeile["rechnung"] == tick["rechnung"]
+    assert tick["kennung"] == zeile["kennung"] == ctx["lauf_kennung"]
+    assert ctx["log_kopf"] == f"{ctx['bp_version'][:-1]} · {ctx['lauf_kennung']}]"

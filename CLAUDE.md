@@ -101,10 +101,12 @@ Every code change ships with an English, GitHub-style release note (`Fixed` / `A
 
 Logbook messages follow one shape:
 
-`{{ bp_version }} <Zweig-Name>: <Handlung>. <Entscheidung + kompakter Grund>. (<Details>)`
+`{{ log_kopf }} <Zweig-Name>: <Handlung>. <Entscheidung + kompakter Grund>. (<Details>)`
+
+`log_kopf` rendert zu `[Vx.y.z · HH:MM:SS]`: Version plus Lauf-Kennung (siehe unten). `bp_version` allein steht nur noch in der Aufzeichnung.
 
 - **Ohne Klammern — Handlung und kompakter Grund.** Was der Zweig getan hat (inkl. Ladestrom-Änderung `X A → Y A`) und die Entscheidung mit den *beiden Vergleichswerten und ihrem Operator*, z. B. `Spätester Ladebeginn 13:30 Uhr, da Bedarf 11.4 kWh < Verfügbar 12.2 kWh`.
-- **In Klammern — die tragenden Zahlen, nicht der Rechenweg.** Je Vergleichswert die zwei bis drei Größen, aus denen er entsteht (`Bedarf = freie Ladekapazität 6.4 kWh von 32.2 kWh × Faktor 1.2; Verfügbar = Restüberschuss 15.9 kWh − Puffer 1.0 kWh`), keine Zwischenschritte, keine Erklärsätze, keine Zusätze wie „letzte Änderung vor X Min". Die vollständige Herleitung steht in der Diagnose-Aufzeichnung: Jeder Lauf, der ein Register ändert, schreibt dort eine Zeile (`art: entscheidung`) mit allen Eingangs- und Rechenwerten dieses Laufs. Logbuch und Aufzeichnung zusammen ergeben die Nachrechenbarkeit; ohne Aufzeichnung erinnert eine tägliche Diagnosezeile daran. Rein informative Zusätze mit `Informativ:` kennzeichnen und sparsam einsetzen.
+- **In Klammern — die tragenden Zahlen, nicht der Rechenweg.** Je Vergleichswert die zwei bis drei Größen, aus denen er entsteht (`Bedarf = freie Ladekapazität 6.4 kWh von 32.2 kWh × Faktor 1.2; Verfügbar = Restüberschuss 15.9 kWh − Puffer 1.0 kWh`), keine Zwischenschritte, keine Erklärsätze, keine Zusätze wie „letzte Änderung vor X Min". Die vollständige Herleitung steht in der Diagnose-Aufzeichnung: Jeder Lauf, der ein Register ändert, schreibt dort eine Zeile (`art: entscheidung`) mit allen Eingangs- und Rechenwerten dieses Laufs. Die Verbindung ist die Lauf-Kennung: Jede Meldung beginnt mit `{{ log_kopf }}` = `[Vx.y.z · HH:MM:SS]` (Startzeit des Laufs), jede Aufzeichnungszeile desselben Laufs trägt sie als `kennung`. Logbuch und Aufzeichnung zusammen ergeben die Nachrechenbarkeit; ohne Aufzeichnung erinnert eine tägliche Diagnosezeile daran. Rein informative Zusätze mit `Informativ:` kennzeichnen und sparsam einsetzen.
 - **Das ausgerechnete Ergebnis** eines Vergleichswerts zeigen (`= 11.4 kWh`), damit die Klammer zur Zahl im Satz passt.
 - **Die Parameter aufnehmen, die der Zweig in seinen Conditions prüft**, außer rein logische/triviale (Monat, Uhrzeit, `is_day`) — es sei denn, so ein Parameter ist der Hauptcharakter der Meldung.
 - **Bezugsgröße nennen, wenn ein Wert sonst mehrdeutig ist** (z. B. `freie Ladekapazität 6.4 kWh von 32.2 kWh` klärt, worauf sich „frei" bezieht). Fallweise entscheiden.
@@ -126,7 +128,7 @@ Logbook messages follow one shape:
   - **„Cooldown"** nicht im Log-Text (englisch) → nur „Nachlauf-Timer".
 - **Kein doppeltes Verb bei Mehrfach-Wertwechsel.** Bei Ziel + Hysterese nur EIN Verb (fürs Ziel: angehoben/zurückgestellt), die Hysterese als Wert in Klammer ohne eigenes Verb (nicht „…angehoben (Hysterese angepasst)").
 - **Optionale Klammer-Zusätze: Satz-Punkt ans Ende** (nach dem `{% endif %}`), nicht in die bedingte Klammer — sonst fehlt bei aktivem Zweig der Schlusspunkt.
-- **Keine technischen Interna.** Interne Modus-/Statusnamen (`fall_b_max`, Registerbezeichner o. Ä.) gehören nicht in die Meldung.
+- **Keine technischen Interna.** Interne Modus-/Statusnamen (`fall_b_max`, Registerbezeichner o. Ä.), Zählwerke der Rechnung („19 von 22 Zeitfenstern", „Zeitverteilung", „JSON", „Helfer-Entität") gehören nicht in die Meldung. Was der Nutzer nicht einstellen oder beobachten kann, nützt ihm im Logbuch nichts.
 - **Nichts loggen, was ohnehin immer gilt.** Wenn eine Meldung nur im Änderungsfall geschrieben wird, nicht zusätzlich „Änderungsfilter passiert" schreiben — das ist per Definition erfüllt.
 - **Änderungsbeträge mit Vorzeichen** (`+34.0 A`, `−20.0 A`), damit die Richtung erkennbar ist; überall dort, wo eine Differenz genannt wird.
 - **Wertwechsel als „von X auf Y" ausschreiben** (`von 54.400 V auf 56.000 V angehoben`, `Ladestrom von 8 A auf 0 A`), nicht als `X → Y`, wenn es in einem Fließtext-Satz mit Verb (angehoben/gesetzt/gedrosselt/zurückgesetzt/gestoppt) steht. Keine doppelte Nennung des Zielwerts (nicht „auf 200 A angehoben (0 A → 200 A)").

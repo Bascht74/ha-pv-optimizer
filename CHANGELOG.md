@@ -3,6 +3,21 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.6.0
+
+Added
+- Every logbook message starts with the run key `[Vx.y.z · HH:MM:SS]`, the start time of the
+  run that made the decision; every recording line of that run carries the same key as
+  `kennung`. The message and the line with the values behind it can now be matched
+  directly instead of by nearby timestamps.
+- `README.md` documents installation, the logbook pattern and the three recording line
+  types.
+
+Changed
+- Counting figures of the calculation ("19 of 22 slots usable", "time distribution",
+  "highest slot minus house load") no longer appear in logbook messages; the profile
+  message speaks of the consumption profile instead of the JSON helper.
+
 ## V6.5.0
 
 Added
