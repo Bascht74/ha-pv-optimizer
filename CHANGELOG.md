@@ -20,6 +20,14 @@ Logbuch-Meldung trägt ihn.
   the consumption profile. The recording carries the estimates of every run next to the
   real times: the moment the battery became full and, per half hour, whether the floor
   holds, so plan and outcome can be compared from the file.
+- Optional wallbox coupling (section 11, two entity fields from the evcc integration): the
+  charging energy of the loadpoints per half hour stays out of the consumption profile and the
+  live anchoring, and the open charging demand of the connected cars is taken from the earliest
+  surplus slots before the battery is planned, so charge window, Fall B and blockade see only
+  what the cars leave. The package template carries the sum sensors and the utility meter.
+- Development tool `tools/optimizer_vergleich.py`: builds evcc-optimizer requests from recorded
+  runs and prints the optimizer's charge start, full time and night minimum next to the
+  blueprint's values for the same run, as a second opinion on the planning.
 
 ### Changed
 - The house-load profile is anchored to the running half hour: from 15 minutes into the

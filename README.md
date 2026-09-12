@@ -24,15 +24,22 @@ keine Zusatz-Software.
 
 ## Installation
 
-1. **Package anlegen:** `pv-steuerung.yaml_` nach `packages/` kopieren (Endung `.yaml`), die zwei
+1. **Package anlegen:** `pv-steuerung.yaml_` nach `packages/` kopieren (Endung `.yaml`), die
    Stellen `<HIER EINTRAGEN>` füllen, Home Assistant neu starten. Es legt alle Helfer an, die der
-   Blueprint erwartet.
+   Blueprint erwartet. Ohne Wallbox die mit „Nur mit Wallbox“ markierten Blöcke löschen.
 2. **Blueprint importieren:** Rohdatei-URL dieser Datei auf `main`
    (`https://raw.githubusercontent.com/Bascht74/ha-pv-optimizer/main/PV-Ladesteuerung.yaml`).
    Updates: Blueprint erneut importieren, GitHub liefert die Datei bis zu 5 Minuten aus dem Cache.
 3. **Automation anlegen** und die Felder zuweisen. Pflichtfelder prüft der Blueprint beim Start
    selbst und nennt fehlende im Logbuch. Optionale Felder (Wärmepumpe, dritter Akku-Pack,
-   Solcast-Folgetage, Diagnose-Helfer) bleiben leer, wenn nicht gebraucht.
+   Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
+
+**Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
+Rest. Zwei optionale Felder aus der evcc-Integration: die Ladeenergie der Ladepunkte je Halbstunde
+(Utility-Meter, bleibt aus dem Verbrauchsprofil heraus) und der offene Ladebedarf der angesteckten
+Autos (geht vom heutigen PV-Überschuss ab, bevor Ladefenster, Fall B und Blockade gerechnet werden).
+evcc selbst darf die Batterie nicht steuern: „Entladung der Hausbatterie … verhindern“ und
+„Entladung ins Stromnetz zulassen“ aus, kein Netzladen-Limit für die Batterie.
 
 Jeder Merge nach `main` ist sofort live; das zugehörige Release
 (`V<MAJOR>.<MINOR>.<PATCH>`) dokumentiert, was läuft. Änderungen stehen in `CHANGELOG.md`.
@@ -59,7 +66,7 @@ schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.j
 |---|---|---|
 | `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`), darunter die geplanten Zeiten `plan_voll_um`, `fallb_voll_um`, `untergrenze_um` und die reale Vollzeit `voll_real_um`; `halten_aktiv` markiert, ab wann die Untergrenze real hält |
 | `entscheidung` | nach jedem Lauf, der ein Register, den Modus oder einen Timer geändert hat | dasselbe, mit den Werten genau dieses Laufs |
-| `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde, Halte-Lage der Entlade-Untergrenze, Register |
+| `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox) und Wallbox-Ladung, Halte-Lage der Entlade-Untergrenze, Register |
 
 Die `kennung` jeder Zeile ist die Lauf-Kennung aus dem Logbuch: Zur Meldung `[V6.6.0 · 08:30:02]`
 gehört die Zeile mit `"kennung": "08:30:02"` und `"art": "entscheidung"`. Ohne Aufzeichnung
@@ -75,3 +82,12 @@ rechnen ihn durch dieselbe Variablenkette.
 `pip install -r requirements-dev.txt && pytest -q` rendert die Variablenkette des Blueprints
 außerhalb von Home Assistant gegen synthetische Szenarien und gegen die aufgezeichneten Läufe.
 Arbeitsregeln, Prüfliste und Log-Konvention stehen in `CLAUDE.md`. Lizenz: Apache 2.0.
+
+**Zweitmeinung vom evcc-Optimizer:** `tools/optimizer_vergleich.py` baut aus aufgezeichneten Läufen
+die Eingaben des [evcc-Optimizers](https://github.com/evcc-io/optimizer) (Prognose je Slot, gelerntes
+Verbrauchsprofil, Kapazität, Ladestand, Grenzen, feste Preise), schickt sie an seine Schnittstelle
+(Add-on, Port 7050) und stellt seinen Fahrplan neben die Werte des Blueprints: Ladebeginn und
+Vollzeit gegen `plan_voll_um` / `fallb_voll_um`, das nächtliche Ladestand-Minimum gegen `f_soc`.
+Ohne Preise lädt der Optimizer so früh wie möglich; der Blueprint hält die Batterie absichtlich
+bis Sonnenuntergang minus Ladevorlauf zurück. Der Vergleich zeigt, wo die Planung, nicht die Daten
+auseinanderliegen — beide rechnen mit demselben Profil.

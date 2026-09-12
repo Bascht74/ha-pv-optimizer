@@ -681,6 +681,24 @@ blueprint:
             Gewicht 0–1 der mittleren Solcast-Prognose (P50) gegenüber der vorsichtigen (P10) für die Tagesbilanzen. 0,5 = Mittelwert. Kleiner = vorsichtiger, größer = mutiger; zu hoch gehaltene Batterie speist ein, zu tiefe kauft nachts nach.
           default: 0.5
           selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
+    sec_wallbox:
+      name: "11 – Wallbox / evcc (Optional)"
+      description: >-
+        Nur mit Wallbox. Die Ladung der Autos wird aus dem Hausverbrauch herausgerechnet, ihr offener Ladebedarf vom PV-Überschuss abgezogen, den der Blueprint für die Batterie einplant — die Autos laden zuerst.
+      collapsed: true
+      input:
+        wallbox_kwh_sensor:
+          name: "Wallbox-Ladung halbstündlich (kWh)"
+          description: >-
+            Utility-Meter über die Ladeenergie aller Ladepunkte (evcc: „Charge Total Import“, bei mehreren Ladepunkten über einen Summen-Sensor, Vorlage im Package). Der Blueprint nullt ihn jede halbe Stunde zusammen mit dem Hausverbrauch-Zähler.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
+        ev_restbedarf_sensor:
+          name: "Autos: offener Ladebedarf (kWh)"
+          description: >-
+            Energie, die die angesteckten Autos bis zu ihrem Ladeziel noch aufnehmen (evcc: „Charge Remaining Energy“, bei mehreren Ladepunkten summiert). Sie geht vom heutigen PV-Überschuss ab, bevor die Batterie eingeplant wird.
+          default: ""
+          selector: {"entity": {"domain": "sensor"}}
 trigger_variables:
   tv_battery_soc: !input battery_soc_sensor
   t_cooldown: !input helper_timer_cooldown
@@ -1089,6 +1107,7 @@ action:
       - variables:
           var_hausverbrauch_json: !input hausverbrauch_json_text
           var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
+          var_wallbox_kwh: !input wallbox_kwh_sensor
           # Die Halbstunde, die mit dem Trigger geendet hat: Trigger 14:00 -> Slot
           # 13:30-14:00, Index aus (Trigger - 15 Min). Basis ist trigger.now, nicht
           # now(): mode: queued kann den Lauf minutenlang verzoegern, der Zaehler
@@ -1131,8 +1150,10 @@ action:
               entity_id: !input helper_logbook_dummy
           - stop: "JSON-Slot übersprungen: Helfer ungültig, warte auf Wiederherstellung oder Mitternacht."
       - variables:
-          # Lese verbrauchte Energie der letzten 30 Min DIREKT in kWh (keine Watt-Umrechnung mehr)
-          last_half_hour_kwh: "{{ states(var_hausverbrauch_kwh) | float(0) }}"
+          # Slot-Verbrauch in kWh ohne die Wallbox: die Autos sind tageweise da
+          # oder nicht, ihr Verbrauch wuerde das Profil verfaelschen.
+          wallbox_slot_kwh: "{{ (states(var_wallbox_kwh) | float(0)) if var_wallbox_kwh != '' else 0 }}"
+          last_half_hour_kwh: "{{ [(states(var_hausverbrauch_kwh) | float(0)) - wallbox_slot_kwh, 0] | max }}"
           # KALTSTART-WERT: geclampter Messwert (0.05-0.6 kWh), schützt vor Ausreißer-Vergiftung.
           # Greift nur noch beim Mitternachts-Lauf mit ungültigem Helfer (siehe Gate oben).
           kaltstart_kwh: "{{ [[last_half_hour_kwh, 0.05] | max, 0.6] | min }}"
@@ -1164,6 +1185,15 @@ action:
           entity_id: !input hausverbrauch_utility_sensor
         data:
           value: "0"
+      - if:
+          - condition: template
+            value_template: "{{ var_wallbox_kwh != '' }}"
+        then:
+          - action: utility_meter.calibrate
+            target:
+              entity_id: "{{ var_wallbox_kwh }}"
+            data:
+              value: "0"
       # NETZBEZUG IM HALTEN aufsummieren, solange die Untergrenze haelt. Nachts
       # ohne PV ist der Slot-Verbrauch der Netzbezug; nur hier lesbar, weil der
       # Zaehler gleich genullt wird. Gedeckelt auf die zurueckgehaltene Energie:
@@ -1210,7 +1240,7 @@ action:
             data:
               message: >-
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
-                    'slot_kwh': last_half_hour_kwh | round(3), 'halten': hb_lage, 'soc': states(hb_soc) | float(0),
+                    'slot_kwh': last_half_hour_kwh | round(3), 'wallbox_kwh': wallbox_slot_kwh | round(3), 'halten': hb_lage, 'soc': states(hb_soc) | float(0),
                     'tou_ist': hb_tou_ist, 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
                     'halten_bezug_kwh': (states(hb_helfer) | float(0)) if hb_helfer != '' else none} | to_json }}
       - if:
@@ -1246,6 +1276,8 @@ action:
       var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
       var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
+      var_wallbox_kwh: !input wallbox_kwh_sensor
+      var_ev_restbedarf: !input ev_restbedarf_sensor
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
@@ -1571,7 +1603,9 @@ action:
       haus_live_kwh: >
         {% set m = now().minute % 30 %}
         {% set idx = now().hour * 2 + (1 if now().minute >= 30 else 0) %}
-        {% set gemessen = states(var_hausverbrauch_kwh) | float(-1) if var_hausverbrauch_kwh != '' else -1 %}
+        {% set roh = states(var_hausverbrauch_kwh) | float(-1) if var_hausverbrauch_kwh != '' else -1 %}
+        {% set wb = (states(var_wallbox_kwh) | float(0)) if var_wallbox_kwh != '' else 0 %}
+        {% set gemessen = ([roh - wb, 0] | max) if roh >= 0 else -1 %}
         {% if m >= 15 and gemessen >= 0 %}
           {{ [gemessen / (m / 30), (json_profil[idx] | float(0.2)) * 3] | min | round(3) }}
         {% else %}-1{% endif %}
@@ -1809,8 +1843,11 @@ action:
   # NEU: ZEITANTEILIGE HALBSTUNDEN-SCHLEIFE (Ladezeit + Defizit)
   # ====================================================================
   - variables:
+      # Offener Ladebedarf der Autos (kWh). Sie laden zuerst: der Ueberschuss der
+      # naechsten Slots geht an sie, bis er gedeckt ist, erst der Rest an die Batterie.
+      ev_bedarf_kwh: "{{ ([states(var_ev_restbedarf) | float(0), 0] | max) if var_ev_restbedarf != '' else 0 }}"
       slot_daten: >
-        {% set ns = namespace(alle=[]) %}
+        {% set ns = namespace(alle=[], ev=ev_bedarf_kwh | float(0)) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -1830,6 +1867,11 @@ action:
                  Ladestrom: ein Aufschlag auf die Ampere wirkt auch in Slots,
                  in denen die PV limitiert und mehr Strom nichts bringt. #}
               {% set netto = (blend * (pv_abschlag | float(1.0)) - haus_kwh) * anteil %}
+              {% if netto > 0 and ns.ev > 0 %}
+                {% set an_auto = [netto, ns.ev] | min %}
+                {% set netto = netto - an_auto %}
+                {% set ns.ev = ns.ev - an_auto %}
+              {% endif %}
               {# Alle Slots chronologisch sammeln [netto, stunden]; erst danach
                  aggregieren, damit "aufholbarer Nachladebedarf" bestimmt werden
                  kann (siehe unten). #}
@@ -2551,6 +2593,8 @@ action:
              ('pv_power_sensor', var_pv_power, {}),
              ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
              ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
+             ('wallbox_kwh_sensor', var_wallbox_kwh, {}),
+             ('ev_restbedarf_sensor', var_ev_restbedarf, {}),
              ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
              ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
              ('solcast_current_sensor', var_pv_forecast, {}),
@@ -2660,7 +2704,7 @@ action:
               'plan_voll_um': plan_voll_um, 'fallb_voll_um': fallb_voll_um, 'untergrenze_um': untergrenze_um, 'untergrenze_wirksam': untergrenze_wirksam,
               'voll_real_um': ((states[var_batterie_heute_voll].last_changed | as_local).strftime('%H:%M')
                                if (is_state(var_batterie_heute_voll, 'on') and states[var_batterie_heute_voll] is not none and states[var_batterie_heute_voll].last_changed is not none) else ''),
-              'haus_live_kwh': haus_live_kwh,
+              'haus_live_kwh': haus_live_kwh, 'ev_bedarf_kwh': ev_bedarf_kwh | round(2),
             },
             'entitaeten': ns.liste} | to_json }}
         {% endif %}
@@ -3665,7 +3709,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ log_kopf }} Prio 2 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
-                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.) Voraussichtlich voll {{ fallb_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
+                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.) Voraussichtlich voll {{ fallb_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
               # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
@@ -3836,7 +3880,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ log_kopf }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
-                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ab_t > 0.05 %} + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh, Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, − Puffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh. Bis Ladebeginn {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung und Lastspitzen-Kappung.) Voraussichtlich voll {{ plan_voll_um }}.
+                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ab_t > 0.05 %} + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}, Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, − Puffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh. Bis Ladebeginn {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung und Lastspitzen-Kappung.) Voraussichtlich voll {{ plan_voll_um }}.
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3919,7 +3963,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ log_kopf }} Prio 7 (Dynamische Ladung): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt ({{ '%+.0f' | format(diff | float(0)) }} A), da Bedarf {{ benoetigt_kwh | round(1) }} kWh bis zum Ladefensterende mit {{ amp_basis_13 | round(0) }} A + {{ regler_offset_a }} A Regelabweichung gedeckt wird
-                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV, Ladevorlauf {{ ladevorlauf_text }}). Voraussichtlich voll {{ plan_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
+                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}, Ladevorlauf {{ ladevorlauf_text }}). Voraussichtlich voll {{ plan_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

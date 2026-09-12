@@ -540,3 +540,41 @@ def test_voll_um_liegt_im_ladefenster(blueprint, tag):
         assert _re.fullmatch(r"um \d\d:\d\d Uhr", ctx[k]), ctx[k]
     plan = ctx["plan_voll_um"][3:8]; voll = ctx["fallb_voll_um"][3:8]
     assert "10:00" < voll <= plan <= "21:00", (voll, plan)
+
+
+# --------------------------------------------------------------------------
+# Wallbox / evcc: Autos laden zuerst, ihre Ladung gehoert nicht ins Profil
+# --------------------------------------------------------------------------
+def test_auto_bedarf_geht_vom_ueberschuss_der_ersten_slots_ab(blueprint, tag):
+    from conftest import fake_entity
+    e = fake_entity("ev_restbedarf_sensor", "sensor")
+    ohne = szenario(blueprint, zeit(tag, 10, 0)).auswerten(bis="brutto_ueberschuss_rest")
+    mit = szenario(blueprint, zeit(tag, 10, 0), zustands_overrides={e: Zustand(e, "5.0")}).auswerten(bis="brutto_ueberschuss_rest")
+    assert ohne["ev_bedarf_kwh"] == 0 and mit["ev_bedarf_kwh"] == 5.0
+    assert mit["brutto_ueberschuss_rest"] == pytest.approx(ohne["brutto_ueberschuss_rest"] - 5.0, abs=0.01)
+    # Die fruehesten Slots tragen den Abzug, der letzte bleibt unveraendert.
+    assert mit["rest_slots"][-1][0] == ohne["rest_slots"][-1][0]
+    assert mit["rest_slots"][0][0] < ohne["rest_slots"][0][0]
+    # Bedarf ueber dem ganzen Ueberschuss: nichts fuer die Batterie, kein negativer Slot, kein Nachladebedarf daraus.
+    viel = szenario(blueprint, zeit(tag, 10, 0), zustands_overrides={e: Zustand(e, "99")}).auswerten(bis="brutto_ueberschuss_rest")
+    assert viel["brutto_ueberschuss_rest"] == 0 and viel["rest_slots"] == [] and viel["defizit_kwh"] == ohne["defizit_kwh"]
+    # Ohne zugewiesenes Feld: kein Abzug.
+    leer = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": ""}).auswerten(bis="brutto_ueberschuss_rest")
+    assert leer["ev_bedarf_kwh"] == 0 and leer["brutto_ueberschuss_rest"] == ohne["brutto_ueberschuss_rest"]
+
+
+def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
+    from conftest import fake_entity
+    wb = fake_entity("wallbox_kwh_sensor", "sensor")
+    h = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
+    assert ctx["wallbox_slot_kwh"] == 0.6 and ctx["last_half_hour_kwh"] == pytest.approx(0.3)
+    # Zeitversatz der Zaehler: nie negativ.
+    h2 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.2, zustands_overrides={wb: Zustand(wb, "0.5")}, trigger_id="update_json")
+    assert _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))["last_half_hour_kwh"] == 0
+    # Live-Anschluss: 0.9 kWh nach 20 Minuten, davon 0.6 Wallbox -> 0.3 / (20/30) = 0.45 kWh je Slot.
+    live = szenario(blueprint, zeit(tag, 14, 20), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}).auswerten(bis="haus_live_kwh")
+    assert live["haus_live_kwh"] == pytest.approx(0.45, abs=0.005)
+    # Ohne Feld: der volle Zaehler.
+    h3 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": ""}, trigger_id="update_json")
+    assert _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))["last_half_hour_kwh"] == pytest.approx(0.9)
