@@ -53,8 +53,10 @@ def test_aufzeichnung_erfasst_jeden_input(blueprint, tag):
     konfig_inputs = set(definitionen) - entity_inputs
 
     # Jeder belegte Entity-Input steht drin, leere (Pack 3) nicht.
-    belegt = {n for n in entity_inputs if h.inputs[n] != ""}
+    belegt = {n for n in entity_inputs if h.inputs[n] not in ("", [])}
     assert {e["input"] for e in aufz["entitaeten"]} == belegt
+    # Mehrfachauswahl: ein Eintrag je gewaehlter Entitaet
+    assert sum(1 for e in aufz["entitaeten"] if e["input"] == "wallbox_kwh_sensor") == len(h.inputs["wallbox_kwh_sensor"])
     # Jeder Konfigurationswert steht drin und ist der unveraenderte Input - nicht ein
     # spaeter umgerechneter Wert derselben Variablen.
     assert set(aufz["konfiguration"]) == konfig_inputs
@@ -228,7 +230,8 @@ def test_aufzeichnung_traegt_die_rechenwerte(blueprint, tag):
     aufz = aufzeichnen(h, blueprint)
     r = aufz["rechnung"]
     for k in ("f_soc", "tou_ist", "tou_schreiben", "halten_aktiv", "halten_verlust_kwh", "prognose_tage",
-              "target_p5", "fall_b_aktiv", "blockade_aktiv", "spitze_erwartet", "trend_faktor", "benoetigt_kwh"):
+              "target_p5", "fall_b_aktiv", "blockade_aktiv", "spitze_erwartet", "trend_faktor", "benoetigt_kwh",
+              "plan_voll_um", "fallb_voll_um", "untergrenze_um", "haus_live_kwh"):
         assert k in r, k
     assert r["f_soc"] == ctx["f_soc"] and r["target_p5"] == ctx["target_p5"]
 

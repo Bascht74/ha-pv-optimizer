@@ -453,8 +453,9 @@ def test_slot_zeile_der_aufzeichnung(blueprint, tag):
                  input_overrides={"helper_halten_bezug": ""}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
     block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
-    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"]))
-    nachricht = h._aufloesen(schritt["then"][0]["data"]["message"], ctx)
+    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"])
+                   and "'slot'" in str(st["then"]))
+    nachricht = h._aufloesen(next(a for a in schritt["then"] if a.get("action") == "notify.send_message")["data"]["message"], ctx)
     zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
     assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
     assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
@@ -486,3 +487,213 @@ def test_trend_zusatz_nur_wenn_der_realitaets_check_kuerzt(blueprint, tag):
         assert ctx["trend_log_addon"].startswith("Realitäts-Check kürzt")
     else:
         assert ctx["trend_log_addon"] == ""
+
+
+# --------------------------------------------------------------------------
+# Live-Anschluss des Verbrauchsprofils
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("minute, slot_kwh, erwartet_slot0", [
+    (20, 0.6, 0.57),    # 0.6 kWh in 20 min -> 0.9 kWh/Slot, gedeckelt auf 3 x 0.19 = 0.57
+    (20, 0.2, 0.30),    # 0.2 kWh in 20 min -> 0.30 kWh/Slot, unter dem Deckel
+    (10, 0.6, None),    # unter 15 Minuten: kein Anschluss, reines Profil
+])
+def test_verbrauchsprofil_live_anschluss(blueprint, tag, minute, slot_kwh, erwartet_slot0):
+    ctx = szenario(blueprint, zeit(tag, 10, minute), hausverbrauch_slot_kwh=slot_kwh).auswerten()
+    idx = 20
+    rein = ctx["json_profil"]; live = ctx["json_profil_live"]
+    if erwartet_slot0 is None:
+        assert ctx["haus_live_kwh"] == -1 and live == rein
+    else:
+        assert live[idx] == pytest.approx(erwartet_slot0, abs=0.005)
+        # Auslauf ueber vier Slots: Gewichte 1, 3/4, 1/2, 1/4, danach reines Profil
+        for k, w in ((1, 0.75), (2, 0.5), (3, 0.25)):
+            assert live[idx + k] == pytest.approx(rein[idx + k] * (1 - w) + erwartet_slot0 * w, abs=0.005)
+        assert live[idx + 4] == rein[idx + 4] and live[idx - 1] == rein[idx - 1]
+        assert ctx["verbrauch_tag_kwh"] == pytest.approx(sum(map(float, rein)), abs=0.001)
+
+
+# --------------------------------------------------------------------------
+# Voraussichtliche Zeiten: voll (Plan / voller Strom) und Untergrenze erreicht
+# --------------------------------------------------------------------------
+def test_untergrenze_um_aus_dem_profil(blueprint, tag):
+    """21:00, Ladestand 60 %, Register 50 %: 10 % von 32.15 kWh = 3.215 kWh / 0.19 kWh je Slot = 16.9 Slots -> 05:27."""
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "50") for i in range(1, 7)}
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert ctx["untergrenze_um"] == "um 05:27 Uhr"
+    assert ctx["untergrenze_text"] == "Untergrenze 50 % voraussichtlich um 05:27 Uhr erreicht."
+    # Ladestand an der Grenze, dunkle Folgetage -> halten bei 50, nichts zu schreiben, Grenze ist jetzt erreicht
+    tief = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert tief["untergrenze_wirksam"] == 50 and tief["untergrenze_um"] == "jetzt" and tief["untergrenze_text"] == ""
+    # Register 50, Plan liegt darunter und wird geschrieben: die Schaetzung gilt fuer die neue Grenze
+    neu = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert neu["tou_schreiben"] is True and neu["f_soc"] < 50
+    assert neu["untergrenze_wirksam"] == neu["f_soc"] and neu["untergrenze_um"].startswith("um 0")
+    tag_ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert tag_ctx["untergrenze_um"] == "" and tag_ctx["untergrenze_text"] == "", "tags keine Schaetzung"
+
+
+def test_voll_um_liegt_im_ladefenster(blueprint, tag):
+    """Plan-Vollzeit = Fensterende minus Vorlauf; bei vollem Strom frueher oder gleich, beide vor Sonnenuntergang."""
+    import re as _re
+    ctx = szenario(blueprint, zeit(tag, 10, 0), soc=85.0).auswerten(bis="fallb_voll_um")
+    for k in ("plan_voll_um", "fallb_voll_um"):
+        assert _re.fullmatch(r"um \d\d:\d\d Uhr", ctx[k]), ctx[k]
+    plan = ctx["plan_voll_um"][3:8]; voll = ctx["fallb_voll_um"][3:8]
+    assert "10:00" < voll <= plan <= "21:00", (voll, plan)
+
+
+# --------------------------------------------------------------------------
+# Wallbox / evcc: Autos laden zuerst, ihre Ladung gehoert nicht ins Profil
+# --------------------------------------------------------------------------
+def test_auto_bedarf_geht_vom_ueberschuss_der_ersten_slots_ab(blueprint, tag):
+    from conftest import fake_entity
+    e = fake_entity("ev_restbedarf_sensor", "sensor")
+    ohne = szenario(blueprint, zeit(tag, 10, 0)).auswerten(bis="brutto_ueberschuss_rest")
+    mit = szenario(blueprint, zeit(tag, 10, 0), zustands_overrides={e: Zustand(e, "5.0")}).auswerten(bis="brutto_ueberschuss_rest")
+    assert ohne["ev_bedarf_kwh"] == 0 and mit["ev_bedarf_kwh"] == 5.0
+    assert mit["brutto_ueberschuss_rest"] == pytest.approx(ohne["brutto_ueberschuss_rest"] - 5.0, abs=0.01)
+    # Die fruehesten Slots tragen den Abzug, der letzte bleibt unveraendert.
+    assert mit["rest_slots"][-1][0] == ohne["rest_slots"][-1][0]
+    assert mit["rest_slots"][0][0] < ohne["rest_slots"][0][0]
+    # Bedarf ueber dem ganzen Ueberschuss: nichts fuer die Batterie, kein negativer Slot, kein Nachladebedarf daraus.
+    viel = szenario(blueprint, zeit(tag, 10, 0), zustands_overrides={e: Zustand(e, "99")}).auswerten(bis="brutto_ueberschuss_rest")
+    assert viel["brutto_ueberschuss_rest"] == 0 and viel["rest_slots"] == [] and viel["defizit_kwh"] == ohne["defizit_kwh"]
+    # Ohne zugewiesenes Feld: kein Abzug.
+    leer = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": []}).auswerten(bis="brutto_ueberschuss_rest")
+    assert leer["ev_bedarf_kwh"] == 0 and leer["brutto_ueberschuss_rest"] == ohne["brutto_ueberschuss_rest"]
+    # Zwei Ladepunkte: die Werte werden addiert, ein fehlender Sensor zaehlt 0.
+    e2 = "sensor.ladepunkt_2_rest"
+    zwei = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": [e, e2, "sensor.gibt_es_nicht"]},
+                    zustands_overrides={e: Zustand(e, "5.0"), e2: Zustand(e2, "2.5")}).auswerten(bis="ev_bedarf_kwh")
+    assert zwei["ev_bedarf_kwh"] == 7.5
+
+
+def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
+    from conftest import fake_entity
+    wb = fake_entity("wallbox_kwh_sensor", "sensor")
+    h = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
+    assert ctx["wallbox_slot_kwh"] == 0.6 and ctx["last_half_hour_kwh"] == pytest.approx(0.3)
+    # Zeitversatz der Zaehler: nie negativ.
+    h2 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.2, zustands_overrides={wb: Zustand(wb, "0.5")}, trigger_id="update_json")
+    assert _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))["last_half_hour_kwh"] == 0
+    # Live-Anschluss: 0.9 kWh nach 20 Minuten, davon 0.6 Wallbox -> 0.3 / (20/30) = 0.45 kWh je Slot.
+    live = szenario(blueprint, zeit(tag, 14, 20), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}).auswerten(bis="haus_live_kwh")
+    assert live["haus_live_kwh"] == pytest.approx(0.45, abs=0.005)
+    # Ohne Feld: der volle Zaehler.
+    h3 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": []}, trigger_id="update_json")
+    assert _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))["last_half_hour_kwh"] == pytest.approx(0.9)
+    # Zwei Wallboxen: Summe, und beide Zaehler werden genullt.
+    wb2 = "sensor.wallbox_2_halbstuendlich"
+    h4 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": [wb, wb2]},
+                  zustands_overrides={wb: Zustand(wb, "0.2"), wb2: Zustand(wb2, "0.3")}, trigger_id="update_json")
+    ctx4 = _update_json_zweig(blueprint, h4, zeit(tag, 14, 0))
+    assert ctx4["wallbox_slot_kwh"] == pytest.approx(0.5) and ctx4["last_half_hour_kwh"] == pytest.approx(0.4) and ctx4["wallbox_liste"] == [wb, wb2]
+
+
+# --------------------------------------------------------------------------
+# Zweitmeinung des evcc-Optimizers: Anfrage und Lesen der Antwort
+# --------------------------------------------------------------------------
+def _optimizer_zweig(blueprint, h, antwort=None):
+    """Loest die Variablen des Optimizer-Laufs auf; die Antwort des rest_command wird vorgegeben."""
+    ctx = h.auswerten()
+    ctx["trigger"] = {"id": "optimizer_vergleich", "now": h.jetzt}
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "optimizer_vergleich" in str(st["if"]))
+    innen = block["then"][0]["then"]
+    for st in innen:
+        if "variables" in st:
+            for k, v in st["variables"].items():
+                ctx[k] = h._aufloesen(v, ctx)
+        elif st.get("response_variable") == "opt_antwort" and antwort is not None:
+            ctx["opt_antwort"] = antwort
+    zeile = next(st for st in innen if st.get("action") == "notify.send_message")
+    return ctx, json.loads(h.render(zeile["data"]["message"], ctx))
+
+
+def test_optimizer_anfrage_aus_dem_lauf(blueprint, tag):
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
+    ctx, _ = _optimizer_zweig(blueprint, h, antwort={"status": 200, "content": {}})
+    a = ctx["opt_anfrage"]; a = a if isinstance(a, dict) else json.loads(a)
+    ts, bat = a["time_series"], a["batteries"][0]
+    assert len(ts["ft"]) == len(ts["gt"]) == len(ts["dt"]) == 48 and set(ts["dt"]) == {1800}
+    assert bat["s_capacity"] == pytest.approx(ctx["batterie_kapazitaet"] * 1000)
+    assert bat["s_initial"] == pytest.approx(0.6 * bat["s_capacity"])
+    assert bat["s_min"] == pytest.approx(ctx["default_tou_soc"] / 100 * bat["s_capacity"])
+    assert set(ts["gt"]) == {190.0}                      # Profil 0.19 kWh je Slot in Wh
+    assert all(f == 0 for f in ts["ft"][:6])             # 21:00 - 00:00 keine PV
+    morgen = float(h.states.tabelle[h.inputs["solcast_morgen_sensor"]].state)
+    assert sum(ts["ft"]) / 1000 == pytest.approx(morgen, rel=0.02)   # Tagesform von heute auf morgen skaliert
+    assert ts["p_N"][0] == pytest.approx(0.0003) and ts["p_E"][0] == pytest.approx(0.00008)
+    assert a["strategy"]["charging_strategy"] == "attenuate_feedin_peaks"
+
+
+def test_optimizer_antwort_wird_in_zeiten_uebersetzt(blueprint, tag):
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
+    kap = h.auswerten(bis="batterie_kapazitaet")["batterie_kapazitaet"] * 1000
+    # Laden ab Slot 22 (08:00), Ladestand 100 % erstmals am Ende von Slot 26 -> voll um 10:30; Nacht-Minimum 45 %
+    soc = [kap * 0.6] * 4 + [kap * 0.45] * 18 + [kap * 0.7] * 4 + [kap] * 22
+    laden = [0.0] * 22 + [800.0] * 8 + [0.0] * 18
+    antwort = {"status": 200, "content": {"status": "Optimal", "batteries": [{"state_of_charge": soc, "charging_power": laden}]}}
+    ctx, zeile = _optimizer_zweig(blueprint, h, antwort=antwort)
+    o = ctx["opt_auswertung"]; o = o if isinstance(o, dict) else json.loads(o)
+    assert o["status"] == "Optimal" and o["laedt_ab"] == "08:00" and o["voll_um"] == "10:30" and o["nacht_min_soc"] == 45.0
+    assert len(o["soc_verlauf"]) == 48 and o["soc_verlauf"][0] == 60.0
+    assert zeile["art"] == "optimizer" and zeile["kennung"] == ctx["lauf_kennung"]
+    assert zeile["blueprint"]["f_soc"] == ctx["f_soc"] and zeile["blueprint"]["aktueller_soc"] == 60.0
+    assert zeile["anfrage"]["strategie"] == "attenuate_feedin_peaks" and zeile["anfrage"]["verbrauch_kwh"] == pytest.approx(0.19 * 48, abs=0.01)
+    # Keine Antwort (rest_command fehlgeschlagen): Zeile kommt trotzdem, mit leerem Fahrplan
+    ctx2, zeile2 = _optimizer_zweig(blueprint, h, antwort=None)
+    assert zeile2["optimizer"]["status"] == "keine Antwort" and zeile2["optimizer"]["voll_um"] is None
+
+
+def test_temperaturprofil_lernt_in_zehntelgrad(blueprint, tag):
+    from conftest import fake_entity
+    t = fake_entity("aussentemperatur_sensor", "sensor"); helfer = fake_entity("temperatur_json_text", "input_text")
+    # Leerer Helfer: Erstbelegung mit dem Messwert in allen 48 Slots
+    h = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={t: Zustand(t, "12.0")}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
+    assert ctx["tp_mess"] == 12.0 and ctx["tp_mittel"] is None
+    neu = ctx["tp_neu"] if isinstance(ctx["tp_neu"], list) else json.loads(ctx["tp_neu"])
+    assert neu == [120] * 48
+    # Bestehendes Profil 10.0 Grad, Messung 12.0 -> Slot 13:30-14:00 (Index 27): 100 x 6/7 + 120 / 7 = 102.9 -> 103
+    h2 = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={t: Zustand(t, "12.0"), helfer: Zustand(helfer, json.dumps([100] * 48))}, trigger_id="update_json")
+    ctx2 = _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))
+    neu2 = ctx2["tp_neu"] if isinstance(ctx2["tp_neu"], list) else json.loads(ctx2["tp_neu"])
+    assert neu2[27] == 103 and neu2[26] == 100 and len(json.dumps(neu2, separators=(",", ":"))) <= 255
+    assert ctx2["tp_mittel"] == 10.0
+    # Kaeltester Fall passt in den Helfer: 48 x "-123," = 240 Zeichen
+    assert len(json.dumps([-123] * 48, separators=(",", ":"))) <= 255
+    # Ohne Sensor: kein Wert, kein Schreiben
+    h3 = szenario(blueprint, zeit(tag, 14, 0), input_overrides={"aussentemperatur_sensor": ""}, trigger_id="update_json")
+    ctx3 = _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))
+    assert ctx3["tp_mess"] is None and "tp_neu" not in ctx3
+
+
+def test_wetter_zeile_haelt_24_stunden_je_quelle_fest(blueprint, tag):
+    import datetime as _dt
+    from conftest import fake_entity
+    t = fake_entity("aussentemperatur_sensor", "sensor")
+    q1, q2 = "weather.open_meteo", "weather.dwd"
+    jetzt = zeit(tag, 14, 0)
+    h = szenario(blueprint, jetzt, zustands_overrides={t: Zustand(t, "12.0")}, input_overrides={"wetter_prognose_entities": [q1, q2]}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, jetzt)
+    assert ctx["wetter_liste"] == [q1, q2]
+    # Stundenprognose ab 12:00 (zwei Stunden alt) bis uebermorgen; nur q1 hat geantwortet
+    start = jetzt.replace(minute=0) - _dt.timedelta(hours=2)
+    fc = [{"datetime": (start + _dt.timedelta(hours=i)).isoformat(), "temperature": 10.0 + i * 0.5} for i in range(48)]
+    ctx["wetter_antwort"] = {q1: {"forecast": fc}}
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "update_json" in str(st["if"]))
+    def finde(schritte):
+        for st in schritte:
+            if st.get("action") == "notify.send_message" and "'wetter'" in st["data"]["message"]:
+                return st["data"]["message"]
+            if "then" in st:
+                r = finde(st["then"])
+                if r: return r
+    zeile = json.loads(h.render(finde(block["then"]), ctx))
+    assert zeile["art"] == "wetter" and zeile["aussen_temp"] == 12.0 and zeile["kennung"] == ctx["lauf_kennung"]
+    # Erster Wert ist die laufende Stunde 14:00 (Index 2 -> 11.0 Grad), dann 24 Stunden
+    assert zeile["quellen"][q1]["von"].startswith(f"{tag.isoformat()}T14:00") and len(zeile["quellen"][q1]["temp"]) == 24
+    assert zeile["quellen"][q1]["temp"][0] == 11.0 and zeile["quellen"][q1]["temp"][-1] == pytest.approx(22.5)
+    assert zeile["quellen"][q2] == {"von": None, "temp": []}

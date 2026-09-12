@@ -10,6 +10,43 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.7.0] - 2026-09-12
+
+### Added
+- Charging messages say when the battery is expected to be full: the time-based charge
+  and the morning blockade name the end of the planned charge window, Fall B and peak
+  shaving the moment the free capacity is covered at full current. The sunset message
+  and the discharge-floor message say when the floor is expected to be reached, from
+  the consumption profile. The recording carries the estimates of every run next to the
+  real times: the moment the battery became full and, per half hour, whether the floor
+  holds, so plan and outcome can be compared from the file.
+- Optional wallbox coupling (section 11, two multi-select entity fields from the evcc
+  integration): the charging energy of the loadpoints per half hour stays out of the
+  consumption profile and the live anchoring, and the open charging demand of the connected
+  cars is taken from the earliest surplus slots before the battery is planned, so charge
+  window, Fall B and blockade see only what the cars leave. The package template carries one
+  utility meter per loadpoint.
+- Second opinion from the evcc optimizer: with the add-on address in the new optional text
+  field, an hourly run posts the forecast, the learned profile and the battery state to the
+  optimizer through a rest_command from the package and records its schedule (charge start,
+  full time, night minimum, SOC curve) next to the blueprint's plan values as an `optimizer`
+  line. Diagnosis only, the run touches no register.
+- Optional outdoor-temperature sensor, recorded per half hour in the `slot` line so the
+  consumption can later be evaluated against temperature; with the optional helper
+  "Temperaturprofil (JSON)" the profile run also learns the mean temperature per half hour,
+  groundwork for a temperature correction of the consumption profile.
+- Optional multi-select of weather entities: every half hour the profile run records each
+  source's hourly temperature forecast for the next 24 hours as a `wetter` line next to the
+  measured outdoor temperature, so the most accurate source for the site can be picked from
+  data before it feeds a correction.
+
+### Changed
+- The house-load profile is anchored to the running half hour: from 15 minutes into the
+  slot the measured consumption is projected to the full slot (capped at three times the
+  profile) and fades into the profile over four slots. Demand, Fall B, blockade and the
+  expected export peak use this live profile; the daily total for the discharge planning
+  and the profile learning stay on the pure profile.
+
 ## [V6.6.0] - 2026-09-12
 
 ### Added
@@ -549,7 +586,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...HEAD
+[V6.7.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...V6.7.0
 [V6.6.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.5.0...V6.6.0
 [V6.5.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.4.0...V6.5.0
 [V6.4.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.3.0...V6.4.0

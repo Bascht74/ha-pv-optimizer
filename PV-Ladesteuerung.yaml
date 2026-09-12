@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.6.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.7.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -190,6 +190,18 @@ blueprint:
             Ein Utility-Meter-Sensor, der den Hausverbrauch je Halbstunde zählt. Daraus lernt der Blueprint dein typisches Verbrauchsprofil und kann abschätzen, wie viel Energie du bis Tagesende noch brauchst.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
+        aussentemperatur_sensor:
+          name: "Außentemperatur (°C, optional)"
+          description: >-
+            Nur für die Aufzeichnung: wird je Halbstunde neben dem Hausverbrauch festgehalten, damit sich später auswerten lässt, wie stark der Verbrauch mit der Temperatur steigt. Steuert nichts.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        wetter_prognose_entities:
+          name: "Wetter-Prognose Temperatur (optional, mehrere)"
+          description: >-
+            Nur für die Aufzeichnung: Wetter-Entitäten (z. B. Open-Meteo, DWD, Met.no), deren Stundenprognose der Temperatur je Halbstunde festgehalten wird, um die genaueste Quelle für diesen Standort zu bestimmen. Steuert nichts.
+          default: []
+          selector: {"entity": {"domain": "weather", "multiple": true}}
     sec_solcast:
       name: "4 – Solcast-Prognose (Pflicht)"
       description: >-
@@ -347,6 +359,12 @@ blueprint:
           name: "Helfer: Verbrauchsprofil (JSON)"
           description: >-
             input_text, in dem der Blueprint dein halbstündliches Verbrauchsprofil als JSON ablegt. Es lernt sich über die Zeit selbst an — anfangs ist es leer, das ist normal.
+          default: ""
+          selector: {"entity": {"domain": "input_text"}}
+        temperatur_json_text:
+          name: "Helfer: Temperaturprofil (JSON, optional)"
+          description: >-
+            input_text, in dem der Blueprint die mittlere Außentemperatur je Halbstunde ablegt (braucht den Außentemperatur-Sensor). Nur Aufzeichnung, Vorbereitung für eine Temperaturkorrektur des Verbrauchsprofils.
           default: ""
           selector: {"entity": {"domain": "input_text"}}
         eingriff_dauer_sensor:
@@ -681,6 +699,30 @@ blueprint:
             Gewicht 0–1 der mittleren Solcast-Prognose (P50) gegenüber der vorsichtigen (P10) für die Tagesbilanzen. 0,5 = Mittelwert. Kleiner = vorsichtiger, größer = mutiger; zu hoch gehaltene Batterie speist ein, zu tiefe kauft nachts nach.
           default: 0.5
           selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
+    sec_wallbox:
+      name: "11 – Wallbox / evcc (Optional)"
+      description: >-
+        Nur mit Wallbox. Die Ladung der Autos wird aus dem Hausverbrauch herausgerechnet, ihr offener Ladebedarf vom PV-Überschuss abgezogen, den der Blueprint für die Batterie einplant — die Autos laden zuerst.
+      collapsed: true
+      input:
+        wallbox_kwh_sensor:
+          name: "Wallbox-Ladung halbstündlich (kWh)"
+          description: >-
+            Je Ladepunkt ein Utility-Meter über dessen Ladeenergie (evcc: „Charge Total Import“, Vorlage im Package). Mehrere auswählbar, die Werte werden addiert. Der Blueprint nullt sie jede halbe Stunde zusammen mit dem Hausverbrauch-Zähler.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
+        ev_restbedarf_sensor:
+          name: "Autos: offener Ladebedarf (kWh)"
+          description: >-
+            Je Ladepunkt die Energie, die das angesteckte Auto bis zu seinem Ladeziel noch aufnimmt (evcc: „Charge Remaining Energy“). Mehrere auswählbar, die Werte werden addiert und gehen vom heutigen PV-Überschuss ab, bevor die Batterie eingeplant wird.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
+        optimizer_url:
+          name: "evcc-Optimizer: Adresse (optional)"
+          description: >-
+            Adresse des evcc-Optimizer-Add-ons, z. B. http://localhost:7050. Wenn gesetzt, holt der Blueprint stündlich dessen Batterie-Fahrplan als Zweitmeinung in die Diagnose-Aufzeichnung (braucht rest_command aus dem Package). Steuert nichts.
+          default: ""
+          selector: {"text": {}}
 trigger_variables:
   tv_battery_soc: !input battery_soc_sensor
   t_cooldown: !input helper_timer_cooldown
@@ -702,6 +744,10 @@ trigger:
     platform: time_pattern
     minutes: "/5"
     id: monitoring_5min
+  # Zweitmeinung des evcc-Optimizers: zu einer Minute, in der sonst kein Lauf faellt.
+  - platform: time_pattern
+    minutes: "12"
+    id: optimizer_vergleich
   - alias: "Trigger: Zellspannungs-Schwelle erreicht (Top-Balancing sofort fangen)"
     platform: template
     value_template: >
@@ -835,7 +881,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.6.0]"
+      bp_version: "[V6.7.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1089,6 +1135,8 @@ action:
       - variables:
           var_hausverbrauch_json: !input hausverbrauch_json_text
           var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
+          var_wallbox_kwh: !input wallbox_kwh_sensor
+          wallbox_liste: "{{ var_wallbox_kwh if (var_wallbox_kwh is iterable and var_wallbox_kwh is not string) else ([var_wallbox_kwh] if var_wallbox_kwh else []) }}"
           # Die Halbstunde, die mit dem Trigger geendet hat: Trigger 14:00 -> Slot
           # 13:30-14:00, Index aus (Trigger - 15 Min). Basis ist trigger.now, nicht
           # now(): mode: queued kann den Lauf minutenlang verzoegern, der Zaehler
@@ -1131,8 +1179,13 @@ action:
               entity_id: !input helper_logbook_dummy
           - stop: "JSON-Slot übersprungen: Helfer ungültig, warte auf Wiederherstellung oder Mitternacht."
       - variables:
-          # Lese verbrauchte Energie der letzten 30 Min DIREKT in kWh (keine Watt-Umrechnung mehr)
-          last_half_hour_kwh: "{{ states(var_hausverbrauch_kwh) | float(0) }}"
+          # Slot-Verbrauch in kWh ohne die Wallbox: die Autos sind tageweise da
+          # oder nicht, ihr Verbrauch wuerde das Profil verfaelschen.
+          wallbox_slot_kwh: >
+            {% set ns = namespace(s=0.0) %}
+            {% for e in wallbox_liste %}{% set ns.s = ns.s + (states(e) | float(0)) %}{% endfor %}
+            {{ ns.s | round(4) }}
+          last_half_hour_kwh: "{{ [(states(var_hausverbrauch_kwh) | float(0)) - wallbox_slot_kwh, 0] | max }}"
           # KALTSTART-WERT: geclampter Messwert (0.05-0.6 kWh), schützt vor Ausreißer-Vergiftung.
           # Greift nur noch beim Mitternachts-Lauf mit ungültigem Helfer (siehe Gate oben).
           kaltstart_kwh: "{{ [[last_half_hour_kwh, 0.05] | max, 0.6] | min }}"
@@ -1164,6 +1217,81 @@ action:
           entity_id: !input hausverbrauch_utility_sensor
         data:
           value: "0"
+      - if:
+          - condition: template
+            value_template: "{{ wallbox_liste | length > 0 }}"
+        then:
+          - action: utility_meter.calibrate
+            target:
+              entity_id: "{{ wallbox_liste }}"
+            data:
+              value: "0"
+      # TEMPERATURPROFIL (nur Aufzeichnung): gleitender Mittelwert der Aussentemperatur
+      # je Halbstunde, gespeichert in ganzen Zehntelgrad, damit 48 Werte samt
+      # Minuszeichen in die 255 Zeichen des input_text passen.
+      - variables:
+          tp_sensor: !input aussentemperatur_sensor
+          tp_helfer: !input temperatur_json_text
+          tp_mess: "{{ (states(tp_sensor) | float(none)) if tp_sensor != '' else none }}"
+          tp_alt: >
+            {% set j = states(tp_helfer) if tp_helfer != '' else '' %}
+            {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
+            {% elif j is string and j | length > 20 and j[0] == '[' %}{{ j | from_json }}
+            {% else %}[]{% endif %}
+          tp_mittel: "{{ ((tp_alt[h_index] | float(0)) / 10) | round(1) if tp_alt | length == 48 else none }}"
+      - if:
+          - condition: template
+            value_template: "{{ tp_helfer != '' and tp_mess is not none }}"
+        then:
+          - variables:
+              tp_neu: >
+                {% set basis = tp_alt if tp_alt | length == 48 else [(tp_mess * 10) | round(0) | int] * 48 %}
+                {% set ns = namespace(l=[]) %}
+                {% for i in range(48) %}
+                  {% set ns.l = ns.l + [(((basis[i] | float(0)) * 6 / 7 + tp_mess * 10 / 7) | round(0) | int) if i == h_index else (basis[i] | float(0)) | round(0) | int] %}
+                {% endfor %}
+                {{ ns.l | to_json }}
+          - action: input_text.set_value
+            target:
+              entity_id: "{{ tp_helfer }}"
+            data:
+              value: "{{ tp_neu }}"
+      # WETTERPROGNOSEN (nur Aufzeichnung): je gewaehlter weather-Entitaet die
+      # Temperatur der naechsten 24 Stunden, damit sich spaeter die genaueste Quelle
+      # gegen den Aussenfuehler bestimmen laesst. Ein Aufruf fuer alle Entitaeten.
+      - variables:
+          wetter_roh: !input wetter_prognose_entities
+          wetter_liste: "{{ wetter_roh if (wetter_roh is iterable and wetter_roh is not string) else ([wetter_roh] if wetter_roh else []) }}"
+      - if:
+          - condition: template
+            value_template: "{{ wetter_liste | length > 0 and states.notify.pv_optimizer_aufzeichnung is not none }}"
+        then:
+          - action: weather.get_forecasts
+            continue_on_error: true
+            target:
+              entity_id: "{{ wetter_liste }}"
+            data:
+              type: hourly
+            response_variable: wetter_antwort
+          - action: notify.send_message
+            target:
+              entity_id: notify.pv_optimizer_aufzeichnung
+            data:
+              message: >-
+                {% set ns = namespace(q=[]) %}
+                {% for e in wetter_liste %}
+                  {% set fc = (wetter_antwort[e].forecast if (wetter_antwort is defined and e in wetter_antwort) else []) %}
+                  {% set n2 = namespace(t=[], von=none) %}
+                  {% for f in fc %}
+                    {% if n2.t | length < 24 and (as_datetime(f.datetime) | as_local) >= now() - timedelta(minutes=59) %}
+                      {% if n2.von is none %}{% set n2.von = (as_datetime(f.datetime) | as_local).isoformat() %}{% endif %}
+                      {% set n2.t = n2.t + [f.temperature | float(none)] %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set ns.q = ns.q + [[e, {'von': n2.von, 'temp': n2.t}]] %}
+                {% endfor %}
+                {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'wetter',
+                    'aussen_temp': tp_mess, 'quellen': dict(ns.q)} | to_json }}
       # NETZBEZUG IM HALTEN aufsummieren, solange die Untergrenze haelt. Nachts
       # ohne PV ist der Slot-Verbrauch der Netzbezug; nur hier lesbar, weil der
       # Zaehler gleich genullt wird. Gedeckelt auf die zurueckgehaltene Energie:
@@ -1210,7 +1338,8 @@ action:
             data:
               message: >-
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
-                    'slot_kwh': last_half_hour_kwh | round(3), 'halten': hb_lage, 'soc': states(hb_soc) | float(0),
+                    'slot_kwh': last_half_hour_kwh | round(3), 'wallbox_kwh': wallbox_slot_kwh | round(3), 'halten': hb_lage,
+                    'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': states(hb_soc) | float(0),
                     'tou_ist': hb_tou_ist, 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
                     'halten_bezug_kwh': (states(hb_helfer) | float(0)) if hb_helfer != '' else none} | to_json }}
       - if:
@@ -1246,6 +1375,16 @@ action:
       var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
       var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
+      var_wallbox_kwh: !input wallbox_kwh_sensor
+      var_ev_restbedarf: !input ev_restbedarf_sensor
+      var_aussentemperatur: !input aussentemperatur_sensor
+      var_temperatur_json: !input temperatur_json_text
+      var_wetter_prognose: !input wetter_prognose_entities
+      var_optimizer_url: !input optimizer_url
+      # Mehrfachauswahl liefert eine Liste, ein leeres Feld je nach HA-Version "" oder [].
+      wallbox_liste: "{{ var_wallbox_kwh if (var_wallbox_kwh is iterable and var_wallbox_kwh is not string) else ([var_wallbox_kwh] if var_wallbox_kwh else []) }}"
+      ev_liste: "{{ var_ev_restbedarf if (var_ev_restbedarf is iterable and var_ev_restbedarf is not string) else ([var_ev_restbedarf] if var_ev_restbedarf else []) }}"
+      wetter_liste: "{{ var_wetter_prognose if (var_wetter_prognose is iterable and var_wetter_prognose is not string) else ([var_wetter_prognose] if var_wetter_prognose else []) }}"
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
@@ -1562,6 +1701,41 @@ action:
           {{ default_arr }}
         {% endif %}
 
+      # LIVE-ANSCHLUSS: Der laufende Slot wird aus der Messung hochgerechnet und
+      # laeuft ueber vier Slots ins Profil aus (Gewichte 1, 3/4, 1/2, 1/4). Erst ab
+      # 15 Minuten im Slot, sonst ist die Hochrechnung Rauschen; gedeckelt auf das
+      # Dreifache des Profils, damit ein kurzer Spitzenverbraucher den Ladestrom
+      # nicht fuer eine Stunde hochreisst. Tagessumme und Profil-Lernen bleiben
+      # auf dem reinen Profil.
+      haus_live_kwh: >
+        {% set m = now().minute % 30 %}
+        {% set idx = now().hour * 2 + (1 if now().minute >= 30 else 0) %}
+        {% set roh = states(var_hausverbrauch_kwh) | float(-1) if var_hausverbrauch_kwh != '' else -1 %}
+        {% set nswb = namespace(s=0.0) %}
+        {% for e in wallbox_liste %}{% set nswb.s = nswb.s + (states(e) | float(0)) %}{% endfor %}
+        {% set wb = nswb.s %}
+        {% set gemessen = ([roh - wb, 0] | max) if roh >= 0 else -1 %}
+        {% if m >= 15 and gemessen >= 0 %}
+          {{ [gemessen / (m / 30), (json_profil[idx] | float(0.2)) * 3] | min | round(3) }}
+        {% else %}-1{% endif %}
+      json_profil_live: >
+        {% if (haus_live_kwh | float(-1)) < 0 %}
+          {{ json_profil }}
+        {% else %}
+          {% set idx = now().hour * 2 + (1 if now().minute >= 30 else 0) %}
+          {% set ns = namespace(l=[]) %}
+          {% for i in range(48) %}
+            {% set k = (i - idx) % 48 %}
+            {% if k < 4 %}
+              {% set w = (4 - k) / 4 %}
+              {% set ns.l = ns.l + [((json_profil[i] | float(0.2)) * (1 - w) + (haus_live_kwh | float(0)) * w) | round(3)] %}
+            {% else %}
+              {% set ns.l = ns.l + [json_profil[i]] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.l }}
+        {% endif %}
+
       # Erwartete Einspeisespitze heute (W): hoechster Prognose-Slot minus Hausverbrauch
       # desselben Slots, P50 ohne Abschlag. Die Blockade faellt nur, wenn selbst die
       # mittlere Prognose keine Spitze nahe der Peak-Shaving-Schwelle hergibt.
@@ -1570,7 +1744,7 @@ action:
         {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
           {% set t = as_datetime(s.period_start) | as_local %}
           {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
-          {% set w = (s.pv_estimate | float(0)) * 1000 - (json_profil[idx] | float(0.2)) * 2000 %}
+          {% set w = (s.pv_estimate | float(0)) * 1000 - (json_profil_live[idx] | float(0.2)) * 2000 %}
           {% if w > ns.best %}{% set ns.best = w %}{% endif %}
         {% endfor %}
         {{ ns.best }}
@@ -1590,7 +1764,7 @@ action:
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
               {% set blend = (stunde.pv_estimate * (blend_p50_anteil | float(0.5)) + stunde.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {% set haus_kwh = json_profil[h_index] | float(0.2) %}
+              {% set haus_kwh = json_profil_live[h_index] | float(0.2) %}
               {% set netto = blend - haus_kwh %}
               {% set ns.val = ns.val + netto %}
             {% endif %}
@@ -1685,7 +1859,7 @@ action:
                  blossen Ertrag wuerde die Daemmerungsslots mitnehmen und die
                  Fenstermitte um Stunden verschieben. #}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {% if blend > (json_profil[h_index] | float(0.2)) %}
+              {% if blend > (json_profil_live[h_index] | float(0.2)) %}
                 {% if ns.erste is none %}{% set ns.erste = s_start %}{% endif %}
                 {% set ns.letzte = s_start %}
               {% endif %}
@@ -1693,7 +1867,7 @@ action:
                  fuer das Ladefensterende - bewusst inklusive der bereits
                  abgelaufenen Zeitfenster, sonst wandert der Bezug mit, sobald
                  die Mittagsspitze vorbei ist. #}
-              {% set netto_kw = (blend - (json_profil[h_index] | float(0.2))) / 0.5 %}
+              {% set netto_kw = (blend - (json_profil_live[h_index] | float(0.2))) / 0.5 %}
               {% if netto_kw > ns.pmax %}{% set ns.pmax = netto_kw %}{% endif %}
               {% if s_start < slot_start %}
                 {% set ns.blend_bisher = ns.blend_bisher + blend %}
@@ -1778,8 +1952,14 @@ action:
   # NEU: ZEITANTEILIGE HALBSTUNDEN-SCHLEIFE (Ladezeit + Defizit)
   # ====================================================================
   - variables:
+      # Offener Ladebedarf der Autos (kWh). Sie laden zuerst: der Ueberschuss der
+      # naechsten Slots geht an sie, bis er gedeckt ist, erst der Rest an die Batterie.
+      ev_bedarf_kwh: >
+        {% set ns = namespace(s=0.0) %}
+        {% for e in ev_liste %}{% set ns.s = ns.s + ([states(e) | float(0), 0] | max) %}{% endfor %}
+        {{ ns.s | round(3) }}
       slot_daten: >
-        {% set ns = namespace(alle=[]) %}
+        {% set ns = namespace(alle=[], ev=ev_bedarf_kwh | float(0)) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
         {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
@@ -1794,15 +1974,20 @@ action:
               {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
               {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {% set haus_kwh = json_profil[h_index] | float(0.2) %}
+              {% set haus_kwh = json_profil_live[h_index] | float(0.2) %}
               {# Der Abschlag trifft die erwartete PV, nicht spaeter den
                  Ladestrom: ein Aufschlag auf die Ampere wirkt auch in Slots,
                  in denen die PV limitiert und mehr Strom nichts bringt. #}
               {% set netto = (blend * (pv_abschlag | float(1.0)) - haus_kwh) * anteil %}
+              {% if netto > 0 and ns.ev > 0 %}
+                {% set an_auto = [netto, ns.ev] | min %}
+                {% set netto = netto - an_auto %}
+                {% set ns.ev = ns.ev - an_auto %}
+              {% endif %}
               {# Alle Slots chronologisch sammeln [netto, stunden]; erst danach
                  aggregieren, damit "aufholbarer Nachladebedarf" bestimmt werden
                  kann (siehe unten). #}
-              {% set ns.alle = ns.alle + [[netto | round(4), (0.5 * anteil) | round(4)]] %}
+              {% set ns.alle = ns.alle + [[netto | round(4), (0.5 * anteil) | round(4), s_start.isoformat()]] %}
             {% endif %}
           {% endfor %}
         {% endif %}
@@ -1822,7 +2007,7 @@ action:
             {% set ns3.stunden = ns3.stunden + h %}
             {# Netto-Ueberschuss je Slot (kWh) + Slot-Laenge (h) fuer die
                Ladestrom-Simulation. Nur Slots mit echtem Ueberschuss. #}
-            {% set ns3.netto_liste = ns3.netto_liste + [[n, h]] %}
+            {% set ns3.netto_liste = ns3.netto_liste + [[n, h, ns.alle[i][2]]] %}
           {% elif i < nsl.last_pos %}
             {% set ns3.defizit = ns3.defizit + (n | abs) %}
           {% endif %}
@@ -1926,6 +2111,37 @@ action:
         {% endif %}
         {{ ns.gefunden }}
       sim_ampere_min: "{{ [ sim_a_vorlauf | int(0), sim_a_fenster | int(0) ] | max }}"
+      # Wann die Batterie nach Plan voll ist: Ende des gekuerzten Ladefensters.
+      # Der erste Slot ist der laufende und beginnt jetzt, alle weiteren am Slotstart.
+      plan_voll_um: >
+        {% set ns = namespace(ges=0.0) %}
+        {% for s in sim_slots_fenster %}{% set ns.ges = ns.ges + (s[1] | float(0)) %}{% endfor %}
+        {% set ziel = [ ns.ges - (var_ladevorlauf | float(1.0)), 0.5 ] | max %}
+        {% set ns2 = namespace(t=0.0, ende=none) %}
+        {% for s in sim_slots_fenster %}
+          {% set h = s[1] | float(0) %}
+          {% if ns2.ende is none and h > 0 and ns2.t + h >= ziel %}
+            {% set start = now() if loop.first else (as_datetime(s[2]) | as_local) %}
+            {% set ns2.ende = start + timedelta(hours=(ziel - ns2.t)) %}
+          {% endif %}
+          {% set ns2.t = ns2.t + h %}
+        {% endfor %}
+        {{ ('um ' ~ ns2.ende.strftime('%H:%M') ~ ' Uhr') if ns2.ende is not none else 'nicht vor Sonnenuntergang' }}
+      # Wann die Batterie bei vollem Ladestrom voll waere: kumulierter Ueberschuss,
+      # je Slot gedeckelt durch die Ladeleistung, erreicht die freie Kapazitaet.
+      fallb_voll_um: >
+        {% set pmax_kwh_h = (max_ampere | float(140)) * (nominale_spannung | float(51.2)) / 1000 %}
+        {% set ns = namespace(kum=0.0, ende=none) %}
+        {% for s in rest_slots %}
+          {% set h = s[1] | float(0) %}
+          {% set lade = [s[0] | float(0), pmax_kwh_h * h] | min %}
+          {% if ns.ende is none and lade > 0 and ns.kum + lade >= freie_kwh %}
+            {% set start = now() if loop.first else (as_datetime(s[2]) | as_local) %}
+            {% set ns.ende = start + timedelta(hours=(h * (freie_kwh - ns.kum) / lade)) %}
+          {% endif %}
+          {% set ns.kum = ns.kum + lade %}
+        {% endfor %}
+        {{ ('um ' ~ ns.ende.strftime('%H:%M') ~ ' Uhr') if ns.ende is not none else 'nicht vor Sonnenuntergang' }}
       # Roh-Leistung OHNE Faktor (W). Faktor kommt je Prio dazu.
       # verf_stunden <= 0 -> 999999 erzwingt später "auf Max".
       noetige_leistung_roh: >
@@ -1938,7 +2154,7 @@ action:
   - variables:
       h_index_now: "{{ now().hour * 2 + (1 if now().minute >= 30 else 0) }}"
       # Haus-Profil ist kWh/Halbstunde -> für Momentan-Watt * 2000
-      haus_aktuell_w: "{{ (json_profil[h_index_now] | float(0.2)) * 2000 }}"
+      haus_aktuell_w: "{{ (json_profil_live[h_index_now] | float(0.2)) * 2000 }}"
       prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
 
       # Ziel-Strom Prio 7: Slot-Simulation (kleinster Strom, der den Bedarf real
@@ -2208,7 +2424,7 @@ action:
             {% if s_start > now() and s_start.date() == now().date() %}
               {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
               {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {% set haus_kwh = json_profil[h_index] | float(0.2) %}
+              {% set haus_kwh = json_profil_live[h_index] | float(0.2) %}
               {# Abschlag auf den Blend und erst danach der Hausverbrauch - wie in
                  Prio 7. Andersherum wuerde der Abschlag den Hausverbrauch mitkuerzen
                  und den Ueberschuss um Hausverbrauch x (1 - Abschlag) zu hoch ansetzen. #}
@@ -2406,6 +2622,31 @@ action:
         {{ entlade_aktiv
            and ((f_soc - tou_ist) | abs) >= 5
            and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf }}
+      # Wann die Batterie die Untergrenze erreicht: Energie ueber der nach diesem
+      # Lauf wirksamen Grenze gegen das Verbrauchsprofil ab jetzt (laufender Slot
+      # anteilig), hoechstens 12 h. Nur nachts, tags laedt die PV dagegen.
+      untergrenze_wirksam: "{{ f_soc if tou_schreiben else tou_ist }}"
+      untergrenze_um: >
+        {% set frei = (aktueller_soc - untergrenze_wirksam) / 100 * batterie_kapazitaet %}
+        {% if is_day %}{{ '' }}
+        {% elif frei <= 0 %}{{ 'jetzt' }}
+        {% else %}
+          {% set idx = now().hour * 2 + (1 if now().minute >= 30 else 0) %}
+          {% set rest_anteil = 1 - (now().minute % 30) / 30 %}
+          {% set ns = namespace(e=frei, ende=none) %}
+          {% for k in range(24) %}
+            {% set v = (json_profil[(idx + k) % 48] | float(0.2)) * (rest_anteil if k == 0 else 1) %}
+            {% if ns.ende is none and v > 0 and ns.e <= v %}
+              {% set slot_start = now() if k == 0 else (now().replace(minute=(0 if now().minute < 30 else 30), second=0, microsecond=0) + timedelta(minutes=30 * k)) %}
+              {% set ns.ende = slot_start + timedelta(hours=(0.5 * (rest_anteil if k == 0 else 1)) * ns.e / v) %}
+            {% endif %}
+            {% set ns.e = ns.e - v %}
+          {% endfor %}
+          {{ ('um ' ~ ns.ende.strftime('%H:%M') ~ ' Uhr') if ns.ende is not none else 'nicht in den nächsten 12 Stunden' }}
+        {% endif %}
+      untergrenze_text: >-
+        {{ ('Untergrenze ' ~ (untergrenze_wirksam | round(0)) ~ ' % voraussichtlich ' ~ untergrenze_um ~ ' erreicht.')
+           if (untergrenze_um not in ['', 'jetzt']) else '' }}
       # NETZBEZUG IM HALTEN (Helfer, laeuft im update_json-Zweig auf, bereits auf
       # die zurueckgehaltene Energie gedeckelt). Schlagend heisst: Ladestand an
       # der Untergrenze, Untergrenze ueber dem Minimum.
@@ -2464,6 +2705,8 @@ action:
              ('pv_power_sensor', var_pv_power, {}),
              ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
              ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
+             ('aussentemperatur_sensor', var_aussentemperatur, {}),
+             ('temperatur_json_text', var_temperatur_json, {}),
              ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
              ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
              ('solcast_current_sensor', var_pv_forecast, {}),
@@ -2502,8 +2745,12 @@ action:
              ('bms2_temp_max_sensor', var_bms2_temp_max, {}),
              ('bms3_temp_max_sensor', var_bms3_temp_max, {}),
            ] %}
+        {% set nse = namespace(l=ents) %}
+        {% for x in wallbox_liste %}{% set nse.l = nse.l + [('wallbox_kwh_sensor', x, {})] %}{% endfor %}
+        {% for x in ev_liste %}{% set nse.l = nse.l + [('ev_restbedarf_sensor', x, {})] %}{% endfor %}
+        {% for x in wetter_liste %}{% set nse.l = nse.l + [('wetter_prognose_entities', x, {})] %}{% endfor %}
         {% set ns = namespace(liste=[]) %}
-        {% for name, e, attrs in ents if e != '' %}
+        {% for name, e, attrs in nse.l if e != '' %}
           {% set z = states[e] %}
           {% set ns.liste = ns.liste + [{'input': name, 'state': states(e),
                'last_changed': z.last_changed.isoformat() if z is not none else none,
@@ -2553,6 +2800,7 @@ action:
               'fallback_max_soc': fallback_max_soc,
               'fallback_min_kwh': fallback_min_kwh,
               'min_reststunden': aufz_min_reststunden,
+              'optimizer_url': var_optimizer_url,
             },
             'rechnung': {
               'is_day': is_day, 'modus': aktueller_modus, 'aktueller_ladestrom': aktueller_ladestrom,
@@ -2570,6 +2818,10 @@ action:
               'freie_kwh': freie_kwh | round(2), 'defizit_kwh': defizit_kwh | round(2), 'benoetigt_kwh': benoetigt_kwh | round(2),
               'verf_stunden': verf_stunden, 'brutto_ueberschuss_rest': brutto_ueberschuss_rest | round(2),
               'fall_b_aktiv': fall_b_aktiv, 'sim_ampere_min': sim_ampere_min, 'amp_basis_13': amp_basis_13 | round(1), 'target_p5': target_p5,
+              'plan_voll_um': plan_voll_um, 'fallb_voll_um': fallb_voll_um, 'untergrenze_um': untergrenze_um, 'untergrenze_wirksam': untergrenze_wirksam,
+              'voll_real_um': ((states[var_batterie_heute_voll].last_changed | as_local).strftime('%H:%M')
+                               if (is_state(var_batterie_heute_voll, 'on') and states[var_batterie_heute_voll] is not none and states[var_batterie_heute_voll].last_changed is not none) else ''),
+              'haus_live_kwh': haus_live_kwh, 'ev_bedarf_kwh': ev_bedarf_kwh | round(2),
             },
             'entitaeten': ns.liste} | to_json }}
         {% endif %}
@@ -2589,6 +2841,108 @@ action:
           message: >-
             {% set z = aufz_zeile if aufz_zeile is mapping else (aufz_zeile | from_json) %}
             {{ dict(z, art='lauf') | to_json }}
+
+  # ZWEITMEINUNG: stuendlich den Batterie-Fahrplan des evcc-Optimizers holen und
+  # neben die eigenen Werte in die Aufzeichnung schreiben. Reine Diagnose: der
+  # Lauf endet mit stop, bevor ein Register angefasst wird. Preise sind Konstanten,
+  # nur ihr Verhaeltnis zaehlt; die Strategie glaettet Einspeisespitzen und
+  # entspricht damit Blockade plus gedrosselter Ladung.
+  - if:
+      - condition: trigger
+        id: optimizer_vergleich
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ var_optimizer_url != '' and aufz_aktiv }}"
+        then:
+          - variables:
+              opt_strategie: attenuate_feedin_peaks
+              opt_preis_bezug: 0.30
+              opt_preis_einspeisung: 0.08
+              opt_start: "{{ now().replace(minute=(0 if now().minute < 30 else 30), second=0, microsecond=0).isoformat() }}"
+              # Eingabe des Optimizers in Wh je Halbstunde, 24 Stunden ab dem laufenden Slot.
+              # Morgen liegt nur als Tagessumme vor: Tagesform von heute, auf morgen skaliert.
+              opt_anfrage: >
+                {% set jetzt = now() %}
+                {% set start = as_datetime(opt_start) | as_local %}
+                {% set heute = namespace(k=[0.0] * 48, summe=0.0) %}
+                {% for sl in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+                  {% set t = as_datetime(sl.period_start) | as_local %}
+                  {% if t.date() == jetzt.date() %}
+                    {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
+                    {% set kwh = (sl.pv_estimate | float(0)) * 0.5 %}
+                    {% set heute.k = heute.k[:idx] + [kwh] + heute.k[idx + 1:] %}
+                    {% set heute.summe = heute.summe + kwh %}
+                  {% endif %}
+                {% endfor %}
+                {% set morgen = (states(var_solcast_morgen) | float(-1)) if var_solcast_morgen != '' else -1 %}
+                {% set skala = (morgen / heute.summe) if (morgen >= 0 and heute.summe > 0) else 1.0 %}
+                {% set ns = namespace(ft=[], gt=[]) %}
+                {% for k in range(48) %}
+                  {% set t = start + timedelta(minutes=30 * k) %}
+                  {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
+                  {% set f = heute.k[idx] * (1.0 if t.date() == jetzt.date() else skala) %}
+                  {% set ns.ft = ns.ft + [(f * 1000) | round(1)] %}
+                  {% set ns.gt = ns.gt + [((json_profil[idx] | float(0.2)) * 1000) | round(1)] %}
+                {% endfor %}
+                {% set kap = batterie_kapazitaet * 1000 %}
+                {% set pmax = (max_ampere | float(140)) * (nominale_spannung | float(51.2)) %}
+                {{ {'strategy': {'charging_strategy': opt_strategie},
+                    'batteries': [{'s_capacity': kap, 's_min': (default_tou_soc | float(20)) / 100 * kap, 's_max': kap,
+                                   's_initial': aktueller_soc / 100 * kap, 'c_min': 0, 'c_max': pmax, 'd_max': pmax,
+                                   'p_a': opt_preis_bezug / 1000, 'charge_from_grid': false, 'discharge_to_grid': false}],
+                    'time_series': {'dt': [1800] * 48, 'gt': ns.gt, 'ft': ns.ft,
+                                    'p_N': [opt_preis_bezug / 1000] * 48, 'p_E': [opt_preis_einspeisung / 1000] * 48},
+                    'eta_c': 0.95, 'eta_d': 0.95} | to_json }}
+          - action: rest_command.pv_optimizer_zweitmeinung
+            continue_on_error: true
+            data:
+              url: "{{ var_optimizer_url }}"
+              payload: "{{ opt_anfrage }}"
+            response_variable: opt_antwort
+          - variables:
+              # Fahrplan lesen: erster Ladeschritt, Vollzeit, Ladestand-Minimum der
+              # ersten PV-freien Strecke von mindestens sechs Stunden (die Nacht).
+              opt_auswertung: >
+                {% set a = opt_anfrage if opt_anfrage is mapping else (opt_anfrage | from_json) %}
+                {% set inhalt = opt_antwort.content if (opt_antwort is defined and opt_antwort.content is mapping) else {} %}
+                {% set bats = inhalt.batteries | default([]) %}
+                {% set bat = bats[0] if bats | length > 0 else {} %}
+                {% set kap = a.batteries[0].s_capacity %}
+                {% set start = as_datetime(opt_start) | as_local %}
+                {% set nss = namespace(l=[]) %}
+                {% for v in bat.state_of_charge | default([]) %}{% set nss.l = nss.l + [(v | float(0)) * 100 / kap] %}{% endfor %}
+                {% set soc = nss.l %}
+                {% set laden = bat.charging_power | default([]) %}
+                {% set ft = a.time_series.ft %}
+                {% set ns = namespace(laedt=none, voll=none, nacht=none, k=0) %}
+                {% for w in laden %}{% if ns.laedt is none and w > 1 %}{% set ns.laedt = (start + timedelta(minutes=30 * loop.index0)).strftime('%H:%M') %}{% endif %}{% endfor %}
+                {% for v in soc %}{% if ns.voll is none and v >= 99 %}{% set ns.voll = (start + timedelta(minutes=30 * loop.index)).strftime('%H:%M') %}{% endif %}{% endfor %}
+                {% for k in range(ft | length) %}
+                  {% if ns.nacht is none and ft[k] <= 0 and (k == 0 or ft[k - 1] > 0) %}
+                    {% set ns2 = namespace(e=k) %}
+                    {% for j in range(k, ft | length) %}{% if ns2.e == j and ft[j] <= 0 %}{% set ns2.e = j + 1 %}{% endif %}{% endfor %}
+                    {% if ns2.e - k >= 12 and soc | length >= ns2.e %}{% set ns.nacht = soc[k:ns2.e] | min | round(1) %}{% endif %}
+                  {% endif %}
+                {% endfor %}
+                {{ {'status': inhalt.status | default('keine Antwort'), 'laedt_ab': ns.laedt, 'voll_um': ns.voll,
+                    'nacht_min_soc': ns.nacht, 'soc_verlauf': soc | map('round', 1) | list} | to_json }}
+          - action: notify.send_message
+            target:
+              entity_id: notify.pv_optimizer_aufzeichnung
+            data:
+              message: >-
+                {% set a = opt_anfrage if opt_anfrage is mapping else (opt_anfrage | from_json) %}
+                {% set o = opt_auswertung if opt_auswertung is mapping else (opt_auswertung | from_json) %}
+                {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'optimizer',
+                    'optimizer': o,
+                    'blueprint': {'aktueller_soc': aktueller_soc, 'plan_voll_um': plan_voll_um, 'fallb_voll_um': fallb_voll_um,
+                                  'fall_b_aktiv': fall_b_aktiv, 'blockade_aktiv': blockade_aktiv, 'f_soc': f_soc, 'tou_ist': tou_ist,
+                                  'untergrenze_um': untergrenze_um, 'ev_bedarf_kwh': ev_bedarf_kwh},
+                    'anfrage': {'start': opt_start, 'strategie': opt_strategie, 'preis_bezug': opt_preis_bezug,
+                                'preis_einspeisung': opt_preis_einspeisung, 'pv_kwh': ((a.time_series.ft | sum) / 1000) | round(2),
+                                'verbrauch_kwh': ((a.time_series.gt | sum) / 1000) | round(2), 's_min_pct': default_tou_soc} } | to_json }}
+      - stop: "Zweitmeinung des Optimizers aufgezeichnet; dieser Lauf steuert nichts."
 
   - if:
       - condition: template
@@ -2613,6 +2967,7 @@ action:
             {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
+            {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
             (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem der beiden anderen, auf volle 5 % abgerundet.
             Auffüllung aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
             {%- if zellausgleich_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
@@ -2904,7 +3259,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A (Maximum) geöffnet.{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  message: "{{ log_kopf }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A (Maximum) geöffnet.{{ (' ' ~ untergrenze_text) if untergrenze_text else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3573,7 +3928,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ log_kopf }} Prio 2 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
-                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.){{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
+                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.) Voraussichtlich voll {{ fallb_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
               # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
@@ -3708,7 +4063,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %}{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Fehleinschätzung der Prognose: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Fehleinschätzung der Prognose: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3744,7 +4099,7 @@ action:
                   name: "PV Optimizer"
                   message: >
                     {{ log_kopf }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
-                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ab_t > 0.05 %} + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh, Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, − Puffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh. Bis Ladebeginn {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung und Lastspitzen-Kappung.)
+                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ab_t > 0.05 %} + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}, Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, − Puffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh. Bis Ladebeginn {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung und Lastspitzen-Kappung.) Voraussichtlich voll {{ plan_voll_um }}.
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3827,7 +4182,7 @@ action:
                       name: "PV Optimizer"
                       message: >
                         {{ log_kopf }} Prio 7 (Dynamische Ladung): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt ({{ '%+.0f' | format(diff | float(0)) }} A), da Bedarf {{ benoetigt_kwh | round(1) }} kWh bis zum Ladefensterende mit {{ amp_basis_13 | round(0) }} A + {{ regler_offset_a }} A Regelabweichung gedeckt wird
-                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV, Ladevorlauf {{ ladevorlauf_text }}).{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
+                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}, Ladevorlauf {{ ladevorlauf_text }}). Voraussichtlich voll {{ plan_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

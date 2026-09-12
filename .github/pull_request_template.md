@@ -71,3 +71,4 @@ Für jede Verhaltensänderung:
 - [ ] Jede Log-Meldung nennt die Operanden genau der Bedingung, über die ihr Zweig entschieden hat
 - [ ] Texte auf Länge geprüft: Kommentarblöcke max. ~6 Zeilen, `description:` unter 300 Zeichen
 - [ ] UI-Texte mit einem CommonMark-Parser gegengelesen, falls `name:` mit einer Ziffer beginnt
+- [ ] `CHANGELOG.md`: Sektion `## [Vx.y.z] - YYYY-MM-DD` der Arbeitsversion mit `### Added/Changed/Removed/Fixed` geschrieben, Link-Referenz ergänzt, `[Unreleased]` weitergestellt

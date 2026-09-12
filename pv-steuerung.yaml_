@@ -10,6 +10,10 @@
 #           ist nur die Sicherung fuer den Fall, dass ein Lauf ausfaellt.
 #   2. binary_sensor "Ladesteuerung Eingriff Aktiv"
 #        -> die number-Entitaet des maximalen Ladestroms und deren Maximalwert
+#   3. Nur mit Wallbox: je Ladepunkt die Quelle des Utility-Meters
+#        wallbox_N_halbstuendlich (evcc "Charge Total Import"). Ohne Wallbox
+#        diese Zaehler loeschen. Der offene Ladebedarf braucht keinen Helfer,
+#        die evcc-Sensoren "Charge Remaining Energy" werden direkt ausgewaehlt.
 #           (derselbe Wert wie der Blueprint-Input "Maximaler Ladestrom").
 #
 # Alles andere ist standortunabhaengig. Nach dem Einbinden ueber packages:
@@ -75,6 +79,10 @@ input_text:
     name: "Hausverbrauch Profil JSON"
     max: 255
     icon: mdi:code-json
+  temperatur_json_profil:             # -> Helfer: Temperaturprofil (JSON, optional)
+    name: "Temperatur Profil JSON"
+    max: 255
+    icon: mdi:thermometer-lines
   akku_100_prozent_tage:              # -> Helfer: 100-%-Tage-Liste
     # Muss ein input_text sein: ein Sensor-State kaeme als Python-Repr mit
     # einfachen Quotes zurueck, kein gueltiges JSON.
@@ -155,6 +163,21 @@ utility_meter:
     cycle: daily
     net_consumption: false
     delta_values: false
+  # Nur mit Wallbox (Sektion 11): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
+  # vom Blueprint zusammen mit dem Hausverbrauch-Zaehler genullt. Beide im Feld
+  # "Wallbox-Ladung halbstuendlich" auswaehlen; ohne Wallbox loeschen.
+  wallbox_1_halbstuendlich:
+    source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 1 "Charge Total Import", kWh, steigend
+    name: "Wallbox 1 Halbstündlich"
+    cycle: daily
+    net_consumption: false
+    delta_values: false
+  wallbox_2_halbstuendlich:
+    source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 2 "Charge Total Import"
+    name: "Wallbox 2 Halbstündlich"
+    cycle: daily
+    net_consumption: false
+    delta_values: false
   # Auswertung des Verlust-Zaehlers nach Zeitraum, fuer das Dashboard.
   speicherverlust_heute:
     source: input_number.speicherverlust_gesamt
@@ -184,7 +207,6 @@ template:
           {% set maximum = 350 %}                                        {# <HIER EINTRAGEN>: Maximaler Ladestrom #}
           {% set limit = states('number.<HIER EINTRAGEN>') | float(maximum) %}  {# Stellgroesse max. Ladestrom #}
           {{ limit < maximum and is_state('sun.sun', 'above_horizon') }}
-
 sensor:
   - platform: history_stats           # -> Diagnose: Eingriffsdauer heute
     name: "Ladesteuerung Eingriff Dauer Heute"
@@ -194,3 +216,14 @@ sensor:
     type: time
     start: "{{ now().replace(hour=0, minute=0, second=0) }}"
     end: "{{ now() }}"
+
+# Zweitmeinung des evcc-Optimizers (Feld "evcc-Optimizer: Adresse"). Adresse und
+# Anfrage kommen aus dem Blueprint, hier ist nichts einzutragen. Die Antwort landet
+# in der Diagnose-Aufzeichnung (art: optimizer).
+rest_command:
+  pv_optimizer_zweitmeinung:
+    url: "{{ url }}/optimize/charge-schedule"
+    method: post
+    content_type: "application/json"
+    payload: "{{ payload if payload is string else (payload | to_json) }}"
+    timeout: 120

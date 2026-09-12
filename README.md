@@ -24,18 +24,38 @@ keine Zusatz-Software.
 
 ## Installation
 
-1. **Package anlegen:** `pv-steuerung.yaml_` nach `packages/` kopieren (Endung `.yaml`), die zwei
+1. **Package anlegen:** `pv-steuerung.yaml_` nach `packages/` kopieren (Endung `.yaml`), die
    Stellen `<HIER EINTRAGEN>` füllen, Home Assistant neu starten. Es legt alle Helfer an, die der
-   Blueprint erwartet.
+   Blueprint erwartet. Ohne Wallbox die mit „Nur mit Wallbox“ markierten Blöcke löschen.
 2. **Blueprint importieren:** Rohdatei-URL dieser Datei auf `main`
    (`https://raw.githubusercontent.com/Bascht74/ha-pv-optimizer/main/PV-Ladesteuerung.yaml`).
    Updates: Blueprint erneut importieren, GitHub liefert die Datei bis zu 5 Minuten aus dem Cache.
 3. **Automation anlegen** und die Felder zuweisen. Pflichtfelder prüft der Blueprint beim Start
    selbst und nennt fehlende im Logbuch. Optionale Felder (Wärmepumpe, dritter Akku-Pack,
-   Solcast-Folgetage, Diagnose-Helfer) bleiben leer, wenn nicht gebraucht.
+   Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
 
-Jeder Merge nach `main` ist sofort live; das zugehörige Release
-(`V<MAJOR>.<MINOR>.<PATCH>`) dokumentiert, was läuft. Änderungen stehen in `CHANGELOG.md`.
+**Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
+Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
+Utility-Meter über dessen Ladeenergie (bleibt aus dem Verbrauchsprofil heraus, Vorlage im Package)
+und je Ladepunkt der offene Ladebedarf „Charge Remaining Energy“ (geht vom heutigen PV-Überschuss
+ab, bevor Ladefenster, Fall B und Blockade gerechnet werden). evcc selbst darf die Batterie nicht
+steuern: „Entladung der Hausbatterie … verhindern“ und „Entladung ins Stromnetz zulassen“ aus.
+
+**Zweitmeinung vom evcc-Optimizer:** Mit der Adresse des Optimizer-Add-ons im Feld „evcc-Optimizer:
+Adresse“ holt der Blueprint stündlich (Minute 12) dessen Batterie-Fahrplan über `rest_command` aus dem
+Package und schreibt ihn als Zeile `optimizer` in die Aufzeichnung, neben Ladebeginn, Vollzeit und
+Untergrenze des Blueprints für denselben Lauf. Eingaben sind die Solcast-Prognose je Slot, das
+gelernte Verbrauchsprofil, Kapazität, Ladestand und Grenzen, feste Preise (30 ct Bezug, 8 ct
+Einspeisung, nur das Verhältnis zählt) und die Strategie „Einspeisespitzen glätten“, die der
+Blockade plus gedrosselter Ladung entspricht. Reine Diagnose, steuert nichts.
+
+**Außentemperatur (Sektion 3, optional):** wird je Halbstunde in die `slot`-Zeile geschrieben, damit
+sich der Verbrauch nach Temperatur auswerten lässt. Mit dem optionalen Helfer „Temperaturprofil
+(JSON)“ lernt der Blueprint dazu die mittlere Temperatur je Halbstunde, Vorbereitung für eine
+spätere Temperaturkorrektur des Verbrauchsprofils. Im Feld „Wetter-Prognose Temperatur“ lassen sich
+mehrere Wetter-Entitäten wählen (Open-Meteo, DWD, Met.no); ihre Stundenprognose der nächsten 24 Stunden
+landet je Halbstunde in einer Zeile `wetter`, damit sich die genaueste Quelle für den Standort gegen den
+Außenfühler bestimmen lässt. Alles steuert nichts.
 
 ## Logbuch und Diagnose-Aufzeichnung
 
@@ -57,9 +77,11 @@ schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.j
 
 | `art` | wann | Inhalt |
 |---|---|---|
-| `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`) |
+| `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`), darunter die geplanten Zeiten `plan_voll_um`, `fallb_voll_um`, `untergrenze_um` und die reale Vollzeit `voll_real_um`; `halten_aktiv` markiert, ab wann die Untergrenze real hält |
 | `entscheidung` | nach jedem Lauf, der ein Register, den Modus oder einen Timer geändert hat | dasselbe, mit den Werten genau dieses Laufs |
-| `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde, Halte-Lage der Entlade-Untergrenze, Register |
+| `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox) und Wallbox-Ladung, Halte-Lage der Entlade-Untergrenze, Register |
+| `wetter` | jede halbe Stunde, nur mit Wetter-Entitäten | je Quelle die Temperaturprognose der nächsten 24 Stunden neben dem gemessenen Außenfühler |
+| `optimizer` | stündlich, nur mit Optimizer-Adresse | Fahrplan des evcc-Optimizers (Ladebeginn, Vollzeit, Nacht-Minimum, Ladestand-Verlauf) neben den Werten des Blueprints für denselben Lauf |
 
 Die `kennung` jeder Zeile ist die Lauf-Kennung aus dem Logbuch: Zur Meldung `[V6.6.0 · 08:30:02]`
 gehört die Zeile mit `"kennung": "08:30:02"` und `"art": "entscheidung"`. Ohne Aufzeichnung
