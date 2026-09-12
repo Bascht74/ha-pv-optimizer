@@ -42,7 +42,7 @@ jobs:
           if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
             echo "Tag $version existiert bereits"; exit 1
           fi
-          awk -v v="## $version" '$0 == v {f=1; next} /^## / {f=0} f' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          awk -v v="$version" 'BEGIN{gsub(/\./,"\\.",v); re="^## \\[?" v "\\]?( |$)"} $0 ~ re {f=1; next} /^## / {f=0} f' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
           test -s notes.md || { echo "CHANGELOG.md hat keine Sektion $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Release $version:"; cat notes.md

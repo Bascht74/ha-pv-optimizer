@@ -1,11 +1,18 @@
 # Changelog
 
-All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
-`blueprint.name` and in `bp_version`, and every log message carries it.
+Alle nennenswerten Änderungen an `PV-Ladesteuerung.yaml`. Das Format folgt
+[Keep a Changelog](https://keepachangelog.com/de/1.1.0/), die Versionsnummern dem Schema
+`V<MAJOR>.<MINOR>.<PATCH>` aus `CLAUDE.md` (PATCH: kein Verhaltenswechsel, MINOR: neue Funktion
+oder gewollte Verhaltensänderung, MAJOR: bestehende Instanzen brauchen Handarbeit). Jede Version
+wird mit dem Merge nach `main` sofort produktiv; das Datum ist der Tag des Merges, der zugleich
+das GitHub-Release erzeugt. Der Versionsstempel steht in `blueprint.name` und `bp_version`, jede
+Logbuch-Meldung trägt ihn.
 
-## V6.6.0
+## [Unreleased]
 
-Added
+## [V6.6.0] - 2026-09-12
+
+### Added
 - Every logbook message starts with the run key `[Vx.y.z · HH:MM:SS]`, the start time of the
   run that made the decision; every recording line of that run carries the same key as
   `kennung`. The message and the line with the values behind it can now be matched
@@ -13,14 +20,14 @@ Added
 - `README.md` documents installation, the logbook pattern and the three recording line
   types.
 
-Changed
+### Changed
 - Counting figures of the calculation ("19 of 22 slots usable", "time distribution",
   "highest slot minus house load") no longer appear in logbook messages; the profile
   message speaks of the consumption profile instead of the JSON helper.
 
-## V6.5.0
+## [V6.5.0] - 2026-09-12
 
-Added
+### Added
 - The diagnostic recording gets a line for every run that changed a register, mode or
   timer (art: entscheidung), in addition to the half-hourly line (art: lauf). A logbook
   decision can thus always be recomputed from the values of the very run that made it,
@@ -28,16 +35,16 @@ Added
 - Without the recording entity a daily diagnosis at sunset says that today's decisions
   cannot be recomputed and where the setup is described.
 
-Changed
+### Changed
 - Logbook messages name the action, the decision with both compared values and the two
   or three figures that carry it; the full derivation moved to the recording. The five
   longest messages (time-based charge, Fall B, morning blockade, peak shaving, discharge
   floor) shrink to roughly a third. The forecast-blend add-on appears only when the
   reality check actually cuts the forecast, the house-load add-on is gone.
 
-## V6.4.0
+## [V6.4.0] - 2026-09-12
 
-Added
+### Added
 - The storage-loss counter now also books the night side of the discharge planning:
   when the floor held the battery at night and the battery still reached full the next
   day, the smaller of grid import during the hold (capped at the energy held back) and
@@ -50,30 +57,36 @@ Added
   consumption and hold state, so a day and the night-side loss can be recomputed
   from the file alone, helper or not.
 
-Changed
+### Changed
 - The recording is written after the variable chain instead of in the middle of it,
   which is what makes the decision values available to it.
 
-## V6.3.0
+## [V6.3.0] - 2026-09-12
 
-Changed
+### Changed
 - The discharge planning starts its forecast horizon with the day whose PV ends the
   night: today's forecast between midnight and sunrise, tomorrow's otherwise. Before,
   the second half of every night was planned with a horizon shifted by one day, so the
   floor jumped at midnight and again at sunrise, and the register writes clustered in
   the early morning. The confidence weights follow the forecast distance as before.
 
-## V6.2.1
+## [V6.2.1] - 2026-09-11
 
-Fixed
+### Fixed
 - The discharge-floor message named the new floor as the value the SOC was compared
   with, which reads as a contradiction when the floor is lowered: the write rule
   compares with the higher of new floor and current register. The message now names
   the register when that is the operand.
 
-## V6.2.0
+## [V6.2.0] - 2026-09-08
 
-Changed
+### Added
+- Forecast misjudgements are recorded in both directions: the peak-shaving message
+  notes when a peak arrives on a day the forecast had ruled out (no morning
+  blockade), with the values that made the decision; at sunset a diagnosis is
+  logged when the morning blockade ran but the export never crossed the threshold.
+
+### Changed
 - The discharge floor is written to the ToU registers only once the SOC is within
   2 points of it, instead of 10. The floor only acts when the SOC reaches it, so an
   earlier write changes nothing and gets rewritten by the next forecast update.
@@ -81,13 +94,7 @@ Changed
   resolution, and rounding down is the direction that discharges rather than exports.
   Holding at the current SOC stays exact.
 
-Added
-- Forecast misjudgements are recorded in both directions: the peak-shaving message
-  notes when a peak arrives on a day the forecast had ruled out (no morning
-  blockade), with the values that made the decision; at sunset a diagnosis is
-  logged when the morning blockade ran but the export never crossed the threshold.
-
-Fixed
+### Fixed
 - Log add-ons (forecast blend, house load, temperature limit, forecast uncertainty)
   were glued to the preceding sentence without a space: Home Assistant strips the
   leading space of a rendered variable, so the space now lives in the message.
@@ -95,24 +102,24 @@ Fixed
   while the written value was rounded down; it now shows one decimal and states the
   rounding.
 
-## V6.1.2
+## [V6.1.2] - 2026-09-07
 
-Fixed
+### Fixed
 - Two comments still referred to a "Prio 8" that no longer exists since the
   priorities were renumbered; they now name the Prio 7 condition and the Prio 7
   charge they describe. No behaviour change.
 
-## V6.1.1
+## [V6.1.1] - 2026-09-07
 
-Fixed
+### Fixed
 - On days without an expected export peak the time-based charge stays throttled.
   The previous version raised it to the maximum current there; the battery would
   then sit at 100 % for hours, while the throttle exists to reach full as late as
   the forecast allows. Only the morning blockade depends on the expected peak.
 
-## V6.1.0
+## [V6.1.0] - 2026-09-07
 
-Changed
+### Changed
 - The morning blockade and the throttled top-up of the time-based charge apply
   only on days with an expected export peak: the highest forecast slot minus the
   house load of that slot must reach 90 % of the peak-shaving threshold. Both
@@ -121,9 +128,9 @@ Changed
   could have taken, so the battery charges at full current from the first sun.
   The peak is read from the forecast array already in use, no new input.
 
-## V6.0.0
+## [V6.0.0] - 2026-09-07
 
-Added
+### Added
 - Discharge planning with a dynamic ToU minimum SOC. Each run derives the floor
   from the cumulative net balance of up to three forecast days (Solcast tomorrow,
   day 3, day 4 as new optional inputs; PV damped per day and reduced by charging
@@ -138,7 +145,13 @@ Added
   full charge lands on the last day of a sunny stretch and never comes from the
   grid.
 
-Removed
+### Changed
+- The stored-loss booking compares the night's low against the current ToU
+  floor instead of the fixed minimum.
+- The sunset warning about a battery that did not fill is suppressed while the
+  planning target is below 100 %; staying below it is then intended.
+
+### Removed
 - The winter forced grid charge, whole: its three triggers, the priority branch
   that held the charge current, the midnight safety resets of the grid-charge
   switch, and the inputs for the grid-charge switch, the grid-charge current, the
@@ -152,15 +165,9 @@ Removed
   the blueprint loads; the cooldown timer input stays and is now named
   "Zellausgleich-Nachlauf".
 
-Changed
-- The stored-loss booking compares the night's low against the current ToU
-  floor instead of the fixed minimum.
-- The sunset warning about a battery that did not fill is suppressed while the
-  planning target is below 100 %; staying below it is then intended.
+## [V5.10.3] - 2026-09-04
 
-## V5.10.3
-
-Fixed
+### Fixed
 - The heat-pump entity fields can be left empty on a site without a heat pump.
   They were inserted directly into action targets, and Home Assistant refuses to
   load an automation with an empty target ("expected 'all' or 'none'"), so the
@@ -169,18 +176,18 @@ Fixed
   The logbook anchor and the grid-charge current join the mandatory-field list,
   as both are used directly.
 
-## V5.10.2
+## [V5.10.2] - 2026-09-04
 
-Fixed
+### Fixed
 - The diagnostic recording writes again. The Solcast forecast attribute carries
   its slot starts as datetime objects, which the template JSON encoder rejects;
   the whole line was lost with a render error. Slot starts are now written as
   ISO strings, and the test harness rejects datetime objects the same way Home
   Assistant does, so the case is covered.
 
-## V5.10.1
+## [V5.10.1] - 2026-09-04
 
-Fixed
+### Fixed
 - The half-hour consumption slot is derived from the trigger time, not from the
   clock at execution. The queued automation can delay the half-hour run by
   minutes; from 15 minutes on, the measured energy landed in the following slot
@@ -191,9 +198,9 @@ Fixed
   a raise. The remaining fallbacks on computed current values could never apply
   and are removed; each current quantity now has a single default.
 
-## V5.10.0
+## [V5.10.0] - 2026-09-04
 
-Added
+### Added
 - Optional diagnostic recording. When an entity named
   `notify.pv_optimizer_aufzeichnung` exists (File integration), every half-hour run
   appends one JSON line with all input values: configuration, entity states with
@@ -202,7 +209,13 @@ Added
   later export cannot reproduce a decision. Without the entity nothing happens;
   no new input field. The test harness rebuilds a run from such a line.
 
-Fixed
+### Changed
+- The automation queue holds 20 runs instead of 10. With 21 triggers, several of
+  which fire in bursts, and single runs that can take up to 50 s through the
+  restart grace period, the Modbus retry and the heat-pump read-back loops, ten
+  slots filled up and everything beyond was dropped without a trace in the log.
+
+### Fixed
 - The daily housekeeping no longer depends on the inverter answering. The Modbus
   retry ends the run when the connection stays down, and the helper resets came
   after it: a midnight outage left "full today" and the blockade marker set for
@@ -219,15 +232,20 @@ Fixed
   first block that reads a measurement. It sat behind the housekeeping blocks,
   which had already worked with substitute values by the time it stopped the run.
 
-Changed
-- The automation queue holds 20 runs instead of 10. With 21 triggers, several of
-  which fire in bursts, and single runs that can take up to 50 s through the
-  restart grace period, the Modbus retry and the heat-pump read-back loops, ten
-  slots filled up and everything beyond was dropped without a trace in the log.
+## [V5.9.0] - 2026-09-04
 
-## V5.9.0
+### Added
+- Prio 8 and Fall B report the running half-hour's house consumption against the
+  learned profile when it lies well above it. The reality check covers the PV side
+  only, so an unplanned large load ate the same surplus without appearing in the log.
 
-Fixed
+### Changed
+- The morning blockade applies the forecast haircut to the blend rather than to the
+  surplus, so house load is no longer discounted along with it. The latest start came
+  out too high by house load times one minus the haircut - the same order as the margin
+  the branch decides on, since it always picks the tightest workable start.
+
+### Fixed
 - The reality check compares like with like across the running half-hour slot. The
   daily counter already includes the elapsed part of the current slot while the
   forecast sum leaves it out, so the denominator was too small and the ratio too
@@ -248,28 +266,17 @@ Fixed
   the decision line, which switches to two decimals at a narrow margin. Cut to one
   decimal, the printed calculation could reverse the comparison it was meant to show.
 
-Added
-- Prio 8 and Fall B report the running half-hour's house consumption against the
-  learned profile when it lies well above it. The reality check covers the PV side
-  only, so an unplanned large load ate the same surplus without appearing in the log.
+## V5.8.2 - 2026-08-22
 
-Changed
-- The morning blockade applies the forecast haircut to the blend rather than to the
-  surplus, so house load is no longer discounted along with it. The latest start came
-  out too high by house load times one minus the haircut - the same order as the margin
-  the branch decides on, since it always picks the tightest workable start.
-
-## V5.8.2
-
-Changed
+### Changed
 - blend_p50_anteil back to 0.5, weighting P50 and P10 equally again. With the
   quadratic discount removed the weighting carries the forecast uncertainty alone, and
   at 0.333 it plans so far below the yield a wide P10/P50 band delivers that Fall B
   escalates while the remaining window still covers the demand.
 
-## V5.8.1
+## V5.8.1 - 2026-08-19
 
-Fixed
+### Fixed
 - The safety-cap branch no longer reacts to a momentary sensor dropout: packs_online
   carries no debounce, so a single missing reading pulls the temperature limit down to
   the emergency current, which the branch writes straight to the register. It now acts
@@ -282,9 +289,9 @@ Fixed
   tug-of-war between them.
 - A missing space in the Fall B log entry ran two words together.
 
-## V5.8.0
+## V5.8.0 - 2026-08-17
 
-Changed
+### Changed
 - The forecast blend is weighted by the internal parameter blend_p50_anteil (0.333 by
   default) instead of averaging P50 and P10 equally, and the separate uncertainty
   discount on the PV side is gone: it was blend/P50, applied to the very blend it was
@@ -300,32 +307,40 @@ Changed
   reality check leaves the forecast untouched on most days, and no entry would
   otherwise say what the expected yield rests on.
 
-## V5.7.2
+## V5.7.2 - 2026-08-15
 
-Fixed
+### Fixed
 - Fall B's decision line names the right quantity when the charging lead shrinks to
   zero. With a lead of zero hours the two figures are separated by the charging window
   alone, so the entry names the window and the actual reason: the late slots deliver
   too little to sustain the charge current.
 
-## V5.7.1
+## V5.7.1 - 2026-08-09
 
-Fixed
-- The safety-cap branch no longer fires at night. The setpoint sits at maximum then by
-  design and no charge current flows, so the cap protects nothing while overwriting the
-  night value and filling the log whenever the BMS drops out after sunset. It engages
-  again at sunrise, well before any meaningful yield.
-
-Changed
+### Changed
 - The decision line of the blockade and Fall B entries switches to two decimals
   when the two figures lie less than 0.1 kWh apart. Rounded to one, a genuine
   difference printed as the same number on both sides of the operator and read
   as a contradiction; rounding one side up and the other down would have hidden
   the same problem behind a gap wider than the real one.
 
-## V5.7.0
+### Fixed
+- The safety-cap branch no longer fires at night. The setpoint sits at maximum then by
+  design and no charge current flows, so the cap protects nothing while overwriting the
+  night value and filling the log whenever the BMS drops out after sunset. It engages
+  again at sunrise, well before any meaningful yield.
 
-Fixed
+## V5.7.0 - 2026-08-03
+
+### Changed
+- The blockade log entry closes each calculation with its result, omits the
+  factor cap and the top-up term where they do not apply, marks the named time
+  when it sits at the configured upper limit, and states the surplus expected
+  before charging begins on the same basis as the figure it is compared with.
+  The previous total was uncorrected while the figure beside it was not, so the
+  difference between them invited a wrong reading.
+
+### Fixed
 - The mode bypass in Prio 8 no longer overrides the no-lowering threshold. The
   bypass exists so a single pass can regulate through after another branch has
   written, but it released lowering as well, so every peak-shaving episode ended
@@ -339,17 +354,9 @@ Fixed
   coincide regularly. Once the timer really runs, the blockade steps aside as
   before.
 
-Changed
-- The blockade log entry closes each calculation with its result, omits the
-  factor cap and the top-up term where they do not apply, marks the named time
-  when it sits at the configured upper limit, and states the surplus expected
-  before charging begins on the same basis as the figure it is compared with.
-  The previous total was uncorrected while the figure beside it was not, so the
-  difference between them invited a wrong reading.
+## V5.6.1 - 2026-08-02
 
-## V5.6.1
-
-Fixed
+### Fixed
 - Prio 8 no longer writes the register when the target already matches the current
   setpoint. The mode bypass releases the hysteresis whenever another branch wrote
   last, but it never asked whether anything actually changes, so the result was a
@@ -361,13 +368,9 @@ Fixed
   fallback stops the runtime early and the branch runs in that case as well, where
   that reason was simply wrong.
 
-## V5.6.0
+## V5.6.0 - 2026-08-02
 
-Fixed
-- The BMS-offline warning and logbook message no longer claim charging continues
-  below the cap when the current actually sits above it.
-
-Added
+### Added
 - A safety-cap branch heads the cascade and returns the charge current to the active
   safety limit whenever the setpoint sits above it. The limit only capped the targets
   the other branches compute, so it took effect solely when one of them wrote anyway:
@@ -375,15 +378,19 @@ Added
   needs a 20 A gap, so a smaller overhang stayed in place indefinitely with cell
   voltages and temperatures unmonitored.
 
-Changed
+### Changed
 - Fall B writes the capped maximum instead of the raw one. It holds its value until
   sunset, so with the BMS offline it would have charged at full current for the rest
   of the day, and it would have fought the new branch for the register on every
   five-minute cycle.
 
-## V5.5.1
+### Fixed
+- The BMS-offline warning and logbook message no longer claim charging continues
+  below the cap when the current actually sits above it.
 
-Fixed
+## V5.5.1 - 2026-08-01
+
+### Fixed
 - The heat-pump lockout branches no longer overwrite the charge mode while it reads
   "blockade". Exit detection for the morning blockade keys on the stored mode, so any
   branch that overwrites it mid-blockade leaves the exit unregistered: the daily marker
@@ -391,9 +398,9 @@ Fixed
   "already running" state that shields it from the two-hour minimum. Peak shaving is
   unaffected because it clears the blockade in the same run, before the cascade writes.
 
-## V5.5.0
+## V5.5.0 - 2026-07-31
 
-Changed
+### Changed
 - Prio 8 raises the setpoint by 10 A immediately, or by 5 A after an hour without a
   write. This reverts the immediate 5 A rule: with the charging window narrowing
   through the afternoon, the target climbs fast enough to clear the 10 A threshold on
@@ -405,16 +412,9 @@ Changed
   morning can still move, and "latest" read as a commitment that was then not kept. The
   input keeps its name, since that one really is a hard limit.
 
-## V5.4.0
+## V5.4.0 - 2026-07-30
 
-Fixed
-- The Fall B message quoted the surplus of the entire remaining window while the
-  decision was made on the shortened one, which read like a contradiction:
-  available above needed, yet escalating. It now states the figures the decision
-  rests on, and adds what would be available through to the end of the day.
-- Durations appeared as raw hour values in log messages instead of readable ones.
-
-Changed
+### Changed
 - Fall B now checks against a shortened charging lead, half an hour less than
   Prio 8 plans with. Without that gap it fires every afternoon: the moment Prio 8
   can no longer meet the lead, the Fall B condition is met as well, even though
@@ -426,21 +426,16 @@ Changed
   Putting it on the Prio 8 side would charge faster than needed on days where
   output continues well into the evening.
 
-## V5.3.0
+### Fixed
+- The Fall B message quoted the surplus of the entire remaining window while the
+  decision was made on the shortened one, which read like a contradiction:
+  available above needed, yet escalating. It now states the figures the decision
+  rests on, and adds what would be available through to the end of the day.
+- Durations appeared as raw hour values in log messages instead of readable ones.
 
-Fixed
-- Peak shaving no longer undercuts the Prio 8 charge target. It sits ahead of Prio 8 in
-  the cascade and derived its value from the step logic alone, so it could set its own
-  step even when Prio 8 wanted a higher current in the same run. The step logic is
-  unchanged, it just cannot pull the value down any more - both branches want surplus
-  in the battery, and the higher value serves both.
-- The heat-pump watchdog waits two minutes after the last timer change. The runtime
-  branch sets the target back immediately, but the heat pump adopts it with a delay, so
-  the watchdog read the old value in the same run and reported a safety reset that had
-  not happened. For its actual purpose - a value still wrong hours later, or a timer
-  lost across a restart - the delay is irrelevant.
+## V5.3.0 - 2026-07-29
 
-Changed
+### Changed
 - The hot-water boost only blocks Prio 8 while enough charging time remains afterwards.
   A long boost consumed the entire charging lead and left the battery idle through the
   best part of the afternoon. If the boost outlasts the time available beyond the
@@ -452,32 +447,44 @@ Changed
   with reduced ones, so it held on to output that was never going to arrive. The Prio 7
   log message names the applied haircut and where it comes from.
 
-## V5.2.0
+### Fixed
+- Peak shaving no longer undercuts the Prio 8 charge target. It sits ahead of Prio 8 in
+  the cascade and derived its value from the step logic alone, so it could set its own
+  step even when Prio 8 wanted a higher current in the same run. The step logic is
+  unchanged, it just cannot pull the value down any more - both branches want surplus
+  in the battery, and the higher value serves both.
+- The heat-pump watchdog waits two minutes after the last timer change. The runtime
+  branch sets the target back immediately, but the heat pump adopts it with a delay, so
+  the watchdog read the old value in the same run and reported a safety reset that had
+  not happened. For its actual purpose - a value still wrong hours later, or a timer
+  lost across a restart - the delay is irrelevant.
 
-Changed
+## V5.2.0 - 2026-07-29
+
+### Changed
 - The morning blockade now applies the same charging window and charging lead as
   Prio 8. It summed surplus through to the last slot of the day and granted itself the
   full day, so dusk slots that cannot sustain the charge current counted as available
   and the latest start time sat too late.
 
-## V5.1.1
+## V5.1.1 - 2026-07-29
 
-Fixed
-- The mandatory-field check reported the half-hourly house-consumption input as
-  unassigned on every run. The variable was only defined inside the JSON-profile
-  block and undefined everywhere else; it is now assigned with the other inputs, so
-  the check sees the value that was there all along.
-
-Changed
+### Changed
 - The mandatory-field check now sits directly before the priority cascade instead of
   aborting the run ahead of the midnight maintenance, the loss tracking and the
   watchdog branches. A missing field stops the charge-current control, which is the
   part that would otherwise regulate on substitute values, and leaves the
   housekeeping intact.
 
-## V5.1.0
+### Fixed
+- The mandatory-field check reported the half-hourly house-consumption input as
+  unassigned on every run. The variable was only defined inside the JSON-profile
+  block and undefined everywhere else; it is now assigned with the other inputs, so
+  the check sees the value that was there all along.
 
-Changed
+## V5.1.0 - 2026-07-29
+
+### Changed
 - The charging window now ends where forecast output drops below 15 % of the day's
   peak instead of running to the last slot with any output at all. Dusk slots cover
   demand on paper while almost nothing reaches the battery, which held the charge
@@ -498,16 +505,9 @@ Changed
   the charge anyway, and it fills the battery as early as possible instead of
   dropping the lead the moment it gets tight.
 
-## V5.0.0
+## V5.0.0 - 2026-07-29
 
-Fixed
-- Section headings rendered as "1." throughout: Home Assistant renders blueprint names
-  as Markdown, and both "1." and "1)" open an ordered list, each section being its own
-  block. They now use a separator Markdown ignores.
-- The Deye availability check no longer reports an unassigned entity field as an outage,
-  which would mask the actual cause.
-
-Added
+### Added
 - New input "PV-Erzeugung heute (kWh)" feeding a reality check on the forecast: measured
   daily yield is compared against the forecast blend for the elapsed part of the day, and
   the ratio lowers the expected yield of the remaining slots. It applies from the midpoint
@@ -518,7 +518,7 @@ Added
 - A startup check names unassigned mandatory entity fields and stops the run instead of
   regulating on substitute values.
 
-Changed
+### Changed
 - Forecast haircuts now reduce expected PV yield per slot instead of multiplying the
   simulated charge current. Forecast uncertainty and reality check express the same thing
   - yield will fall short of the planned blend - so the larger haircut wins rather than
@@ -538,6 +538,30 @@ Changed
 - Durations are entered as HH:MM:SS like the other duration fields rather than as a
   decimal number of hours.
 
-Removed
+### Removed
 - Input "Sicherheitsfaktor für Ungeplantes", replaced by "Ladevorlauf". Together with the
   new mandatory PV yield input, existing instances need reconfiguration.
+
+### Fixed
+- Section headings rendered as "1." throughout: Home Assistant renders blueprint names
+  as Markdown, and both "1." and "1)" open an ordered list, each section being its own
+  block. They now use a separator Markdown ignores.
+- The Deye availability check no longer reports an unassigned entity field as an outage,
+  which would mask the actual cause.
+
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...HEAD
+[V6.6.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.5.0...V6.6.0
+[V6.5.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.4.0...V6.5.0
+[V6.4.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.3.0...V6.4.0
+[V6.3.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.2.1...V6.3.0
+[V6.2.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.2.0...V6.2.1
+[V6.2.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.1.2...V6.2.0
+[V6.1.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.1.1...V6.1.2
+[V6.1.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.1.0...V6.1.1
+[V6.1.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.0.0...V6.1.0
+[V6.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V5.10.3...V6.0.0
+[V5.10.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V5.10.2...V5.10.3
+[V5.10.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V5.10.1...V5.10.2
+[V5.10.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V5.10.0...V5.10.1
+[V5.10.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V5.9.0...V5.10.0
+[V5.9.0]: https://github.com/Bascht74/ha-pv-optimizer/releases/tag/V5.9.0
