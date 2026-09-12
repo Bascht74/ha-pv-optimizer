@@ -12,7 +12,8 @@ wurden: Die zwei Kopfzeilen der File-Integration, Testsendungen und ein Zeitstem
 Präfix vor dem `{` werden beim Einlesen übersprungen.
 
 Die Zeilen des Steuerlaufs tragen `"art": "lauf"` (Halbstundentakt) oder `"art": "entscheidung"`
-(Laufende nach einem Registerwechsel, zusaetzlich zum Takt). Daneben stehen kurze Slot-Zeilen des Profil-Laufs
+(Laufende nach einem Registerwechsel, zusaetzlich zum Takt). Jede Zeile traegt die `kennung` ihres
+Laufs (Startzeit HH:MM:SS), dieselbe wie vorn in den Logbuch-Meldungen dieses Laufs. Daneben stehen kurze Slot-Zeilen des Profil-Laufs
 (`"art": "slot"`: Slot-Verbrauch, Halte-Lage, Register); der Loader nimmt nur Zeilen mit
 `entitaeten` als Lauf, die Slot-Zeilen sind fuer die Nachrechnung der Nachtbilanz da.
 

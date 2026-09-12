@@ -22,8 +22,12 @@
 # gehoert zur Wechselrichter-Anbindung des Standorts, nicht in dieses Package.
 #
 # Optional: Diagnose-Aufzeichnung. Existiert notify.pv_optimizer_aufzeichnung,
-# haengt der Blueprint jede halbe Stunde eine JSON-Zeile mit allen Eingangs-
-# werten an - ohne diese Entitaet passiert nichts. Sie laesst sich NICHT per
+# schreibt der Blueprint JSON-Zeilen mit allen Eingangs- und Rechenwerten: je
+# halbe Stunde (art: lauf), nach jedem Lauf, der etwas geschrieben hat (art:
+# entscheidung), und je halbe Stunde den Slot-Verbrauch (art: slot). Die
+# Kennung [Vx.y.z · HH:MM:SS] vorn in jeder Logbuch-Meldung steht als "kennung"
+# in den Zeilen desselben Laufs. Ohne diese Entitaet passiert nichts, das
+# Logbuch meldet das einmal taeglich. Sie laesst sich NICHT per
 # YAML anlegen (die File-Integration kennt nur noch Config-Entries), sondern
 # nur ueber die Oberflaeche:
 #   1. Einstellungen -> Geraete & Dienste -> Integration hinzufuegen -> "File"

@@ -398,7 +398,7 @@ def test_halten_verlust_ohne_helfer_null(blueprint, tag):
 
 def _update_json_zweig(blueprint, h, trigger_zeit):
     """Loest die Variablen des update_json-Zweigs auf, wie der Lauf es taete (verschachtelte if-Zweige eingeschlossen)."""
-    ctx = h.auswerten(bis="bp_version")   # globale Variablen vor dem Zweig, wie im Lauf
+    ctx = h.auswerten(bis="log_kopf")   # globale Variablen vor dem Zweig, wie im Lauf
     ctx["trigger"] = {"id": "update_json", "now": trigger_zeit}
     block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
     def wahr(bedingungen):
@@ -459,6 +459,7 @@ def test_slot_zeile_der_aufzeichnung(blueprint, tag):
     assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
     assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
     assert zeile["halten_bezug_kwh"] is None and "entitaeten" not in zeile
+    assert zeile["kennung"] == ctx["lauf_kennung"]
     assert ctx["hb_lage"] is True and ctx["hb_haelt"] is False
 
 
