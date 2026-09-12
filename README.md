@@ -52,7 +52,10 @@ Blockade plus gedrosselter Ladung entspricht. Reine Diagnose, steuert nichts.
 **Außentemperatur (Sektion 3, optional):** wird je Halbstunde in die `slot`-Zeile geschrieben, damit
 sich der Verbrauch nach Temperatur auswerten lässt. Mit dem optionalen Helfer „Temperaturprofil
 (JSON)“ lernt der Blueprint dazu die mittlere Temperatur je Halbstunde, Vorbereitung für eine
-spätere Temperaturkorrektur des Verbrauchsprofils. Beides steuert nichts.
+spätere Temperaturkorrektur des Verbrauchsprofils. Im Feld „Wetter-Prognose Temperatur“ lassen sich
+mehrere Wetter-Entitäten wählen (Open-Meteo, DWD, Met.no); ihre Stundenprognose der nächsten 24 Stunden
+landet je Halbstunde in einer Zeile `wetter`, damit sich die genaueste Quelle für den Standort gegen den
+Außenfühler bestimmen lässt. Alles steuert nichts.
 
 ## Logbuch und Diagnose-Aufzeichnung
 
@@ -77,6 +80,7 @@ schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.j
 | `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`), darunter die geplanten Zeiten `plan_voll_um`, `fallb_voll_um`, `untergrenze_um` und die reale Vollzeit `voll_real_um`; `halten_aktiv` markiert, ab wann die Untergrenze real hält |
 | `entscheidung` | nach jedem Lauf, der ein Register, den Modus oder einen Timer geändert hat | dasselbe, mit den Werten genau dieses Laufs |
 | `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox) und Wallbox-Ladung, Halte-Lage der Entlade-Untergrenze, Register |
+| `wetter` | jede halbe Stunde, nur mit Wetter-Entitäten | je Quelle die Temperaturprognose der nächsten 24 Stunden neben dem gemessenen Außenfühler |
 | `optimizer` | stündlich, nur mit Optimizer-Adresse | Fahrplan des evcc-Optimizers (Ladebeginn, Vollzeit, Nacht-Minimum, Ladestand-Verlauf) neben den Werten des Blueprints für denselben Lauf |
 
 Die `kennung` jeder Zeile ist die Lauf-Kennung aus dem Logbuch: Zur Meldung `[V6.6.0 · 08:30:02]`

@@ -196,6 +196,12 @@ blueprint:
             Nur für die Aufzeichnung: wird je Halbstunde neben dem Hausverbrauch festgehalten, damit sich später auswerten lässt, wie stark der Verbrauch mit der Temperatur steigt. Steuert nichts.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
+        wetter_prognose_entities:
+          name: "Wetter-Prognose Temperatur (optional, mehrere)"
+          description: >-
+            Nur für die Aufzeichnung: Wetter-Entitäten (z. B. Open-Meteo, DWD, Met.no), deren Stundenprognose der Temperatur je Halbstunde festgehalten wird, um die genaueste Quelle für diesen Standort zu bestimmen. Steuert nichts.
+          default: []
+          selector: {"entity": {"domain": "weather", "multiple": true}}
     sec_solcast:
       name: "4 – Solcast-Prognose (Pflicht)"
       description: >-
@@ -1250,6 +1256,42 @@ action:
               entity_id: "{{ tp_helfer }}"
             data:
               value: "{{ tp_neu }}"
+      # WETTERPROGNOSEN (nur Aufzeichnung): je gewaehlter weather-Entitaet die
+      # Temperatur der naechsten 24 Stunden, damit sich spaeter die genaueste Quelle
+      # gegen den Aussenfuehler bestimmen laesst. Ein Aufruf fuer alle Entitaeten.
+      - variables:
+          wetter_roh: !input wetter_prognose_entities
+          wetter_liste: "{{ wetter_roh if (wetter_roh is iterable and wetter_roh is not string) else ([wetter_roh] if wetter_roh else []) }}"
+      - if:
+          - condition: template
+            value_template: "{{ wetter_liste | length > 0 and states.notify.pv_optimizer_aufzeichnung is not none }}"
+        then:
+          - action: weather.get_forecasts
+            continue_on_error: true
+            target:
+              entity_id: "{{ wetter_liste }}"
+            data:
+              type: hourly
+            response_variable: wetter_antwort
+          - action: notify.send_message
+            target:
+              entity_id: notify.pv_optimizer_aufzeichnung
+            data:
+              message: >-
+                {% set ns = namespace(q=[]) %}
+                {% for e in wetter_liste %}
+                  {% set fc = (wetter_antwort[e].forecast if (wetter_antwort is defined and e in wetter_antwort) else []) %}
+                  {% set n2 = namespace(t=[], von=none) %}
+                  {% for f in fc %}
+                    {% if n2.t | length < 24 and (as_datetime(f.datetime) | as_local) >= now() - timedelta(minutes=59) %}
+                      {% if n2.von is none %}{% set n2.von = (as_datetime(f.datetime) | as_local).isoformat() %}{% endif %}
+                      {% set n2.t = n2.t + [f.temperature | float(none)] %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set ns.q = ns.q + [[e, {'von': n2.von, 'temp': n2.t}]] %}
+                {% endfor %}
+                {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'wetter',
+                    'aussen_temp': tp_mess, 'quellen': dict(ns.q)} | to_json }}
       # NETZBEZUG IM HALTEN aufsummieren, solange die Untergrenze haelt. Nachts
       # ohne PV ist der Slot-Verbrauch der Netzbezug; nur hier lesbar, weil der
       # Zaehler gleich genullt wird. Gedeckelt auf die zurueckgehaltene Energie:
@@ -1337,10 +1379,12 @@ action:
       var_ev_restbedarf: !input ev_restbedarf_sensor
       var_aussentemperatur: !input aussentemperatur_sensor
       var_temperatur_json: !input temperatur_json_text
+      var_wetter_prognose: !input wetter_prognose_entities
       var_optimizer_url: !input optimizer_url
       # Mehrfachauswahl liefert eine Liste, ein leeres Feld je nach HA-Version "" oder [].
       wallbox_liste: "{{ var_wallbox_kwh if (var_wallbox_kwh is iterable and var_wallbox_kwh is not string) else ([var_wallbox_kwh] if var_wallbox_kwh else []) }}"
       ev_liste: "{{ var_ev_restbedarf if (var_ev_restbedarf is iterable and var_ev_restbedarf is not string) else ([var_ev_restbedarf] if var_ev_restbedarf else []) }}"
+      wetter_liste: "{{ var_wetter_prognose if (var_wetter_prognose is iterable and var_wetter_prognose is not string) else ([var_wetter_prognose] if var_wetter_prognose else []) }}"
       var_battery_power: !input battery_power_sensor
       var_pv_power: !input pv_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
@@ -2704,6 +2748,7 @@ action:
         {% set nse = namespace(l=ents) %}
         {% for x in wallbox_liste %}{% set nse.l = nse.l + [('wallbox_kwh_sensor', x, {})] %}{% endfor %}
         {% for x in ev_liste %}{% set nse.l = nse.l + [('ev_restbedarf_sensor', x, {})] %}{% endfor %}
+        {% for x in wetter_liste %}{% set nse.l = nse.l + [('wetter_prognose_entities', x, {})] %}{% endfor %}
         {% set ns = namespace(liste=[]) %}
         {% for name, e, attrs in nse.l if e != '' %}
           {% set z = states[e] %}

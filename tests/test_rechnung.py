@@ -453,8 +453,9 @@ def test_slot_zeile_der_aufzeichnung(blueprint, tag):
                  input_overrides={"helper_halten_bezug": ""}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
     block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
-    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"]))
-    nachricht = h._aufloesen(schritt["then"][0]["data"]["message"], ctx)
+    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"])
+                   and "'slot'" in str(st["then"]))
+    nachricht = h._aufloesen(next(a for a in schritt["then"] if a.get("action") == "notify.send_message")["data"]["message"], ctx)
     zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
     assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
     assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
@@ -667,3 +668,32 @@ def test_temperaturprofil_lernt_in_zehntelgrad(blueprint, tag):
     h3 = szenario(blueprint, zeit(tag, 14, 0), input_overrides={"aussentemperatur_sensor": ""}, trigger_id="update_json")
     ctx3 = _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))
     assert ctx3["tp_mess"] is None and "tp_neu" not in ctx3
+
+
+def test_wetter_zeile_haelt_24_stunden_je_quelle_fest(blueprint, tag):
+    import datetime as _dt
+    from conftest import fake_entity
+    t = fake_entity("aussentemperatur_sensor", "sensor")
+    q1, q2 = "weather.open_meteo", "weather.dwd"
+    jetzt = zeit(tag, 14, 0)
+    h = szenario(blueprint, jetzt, zustands_overrides={t: Zustand(t, "12.0")}, input_overrides={"wetter_prognose_entities": [q1, q2]}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, jetzt)
+    assert ctx["wetter_liste"] == [q1, q2]
+    # Stundenprognose ab 12:00 (zwei Stunden alt) bis uebermorgen; nur q1 hat geantwortet
+    start = jetzt.replace(minute=0) - _dt.timedelta(hours=2)
+    fc = [{"datetime": (start + _dt.timedelta(hours=i)).isoformat(), "temperature": 10.0 + i * 0.5} for i in range(48)]
+    ctx["wetter_antwort"] = {q1: {"forecast": fc}}
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "update_json" in str(st["if"]))
+    def finde(schritte):
+        for st in schritte:
+            if st.get("action") == "notify.send_message" and "'wetter'" in st["data"]["message"]:
+                return st["data"]["message"]
+            if "then" in st:
+                r = finde(st["then"])
+                if r: return r
+    zeile = json.loads(h.render(finde(block["then"]), ctx))
+    assert zeile["art"] == "wetter" and zeile["aussen_temp"] == 12.0 and zeile["kennung"] == ctx["lauf_kennung"]
+    # Erster Wert ist die laufende Stunde 14:00 (Index 2 -> 11.0 Grad), dann 24 Stunden
+    assert zeile["quellen"][q1]["von"].startswith(f"{tag.isoformat()}T14:00") and len(zeile["quellen"][q1]["temp"]) == 24
+    assert zeile["quellen"][q1]["temp"][0] == 11.0 and zeile["quellen"][q1]["temp"][-1] == pytest.approx(22.5)
+    assert zeile["quellen"][q2] == {"von": None, "temp": []}

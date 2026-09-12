@@ -35,6 +35,10 @@ Logbuch-Meldung trägt ihn.
   consumption can later be evaluated against temperature; with the optional helper
   "Temperaturprofil (JSON)" the profile run also learns the mean temperature per half hour,
   groundwork for a temperature correction of the consumption profile.
+- Optional multi-select of weather entities: every half hour the profile run records each
+  source's hourly temperature forecast for the next 24 hours as a `wetter` line next to the
+  measured outdoor temperature, so the most accurate source for the site can be picked from
+  data before it feeds a correction.
 
 ### Changed
 - The house-load profile is anchored to the running half hour: from 15 minutes into the
