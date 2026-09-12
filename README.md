@@ -41,6 +41,12 @@ und je Ladepunkt der offene Ladebedarf „Charge Remaining Energy“ (geht vom h
 ab, bevor Ladefenster, Fall B und Blockade gerechnet werden). evcc selbst darf die Batterie nicht
 steuern: „Entladung der Hausbatterie … verhindern“ und „Entladung ins Stromnetz zulassen“ aus.
 
+**Entlade-Untergrenze und Wechselrichter:** Der Blueprint schreibt die Untergrenze in die sechs
+ToU-Register des Deye. Fällt der Ladestand nachts trotzdem mehr als drei Punkte darunter, während die
+Batterie entlädt, hält der Wechselrichter die Grenze nicht (Zeitsteuerung aus, oder seine eigene
+Ladestand-Anzeige weicht vom Sensor ab). Das Logbuch meldet das einmal je Nacht; die Grenze wird dann
+nicht nachgezogen.
+
 **Zweitmeinung vom evcc-Optimizer:** Mit der Adresse des Optimizer-Add-ons im Feld „evcc-Optimizer:
 Adresse“ holt der Blueprint stündlich (Minute 12) dessen Batterie-Fahrplan über `rest_command` aus dem
 Package und schreibt ihn als Zeile `optimizer` in die Aufzeichnung, neben Ladebeginn, Vollzeit und

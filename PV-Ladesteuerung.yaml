@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.7.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.8.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -734,6 +734,8 @@ trigger_variables:
   tv_schwelle_peak_shaving: !input schwelle_peak_shaving
   tv_schwelle_wp_boost: !input schwelle_wp_boost
   tv_wp_kompressor: !input wp_kompressor_sensor
+  tv_battery_power: !input battery_power_sensor
+  tv_wr_tou_1: !input wr_tou_1
 
 trigger:
   - alias: "Trigger: JSON Profil pflegen (Alle 30 Min)"
@@ -748,6 +750,15 @@ trigger:
   - platform: time_pattern
     minutes: "12"
     id: optimizer_vergleich
+  # Untergrenze nicht gehalten: Ladestand deutlich unter dem Register und die
+  # Batterie entlaedt trotzdem. Feuert nur beim Eintritt, also einmal je Nacht.
+  - alias: "Trigger: Entlade-Untergrenze wird nicht gehalten (10 Min entprellt)"
+    platform: template
+    value_template: >
+      {{ (states(tv_battery_soc) | float(100)) < (states(tv_wr_tou_1) | float(0)) - 3
+         and (states(tv_battery_power) | float(0)) > 100 }}
+    for: "00:10:00"
+    id: untergrenze_verletzt
   - alias: "Trigger: Zellspannungs-Schwelle erreicht (Top-Balancing sofort fangen)"
     platform: template
     value_template: >
@@ -881,7 +892,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.7.0]"
+      bp_version: "[V6.8.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -2618,10 +2629,18 @@ action:
             states(var_wr_tou_4) | float(20), states(var_wr_tou_5) | float(20), states(var_wr_tou_6) | float(20)] | max }}
       # Geschrieben wird nur, wenn es wirken kann: Aenderung ab 5 Punkten und der
       # Ladestand hoechstens tou_schreib_vorlauf Punkte ueber der hoeheren der beiden Grenzen.
+      # Halten (Ladestand unter der gewuenschten Grenze) erst, wenn die Batterie
+      # entlaedt - beim Laden gibt es nichts zu halten. Liegt der Ladestand schon
+      # unter dem Register, haelt der Wechselrichter nicht; nachziehen gaebe das
+      # Halten nur auf (Diagnose ueber den Trigger untergrenze_verletzt).
+      halten_fall: "{{ f_roh > aktueller_soc }}"
+      unter_register: "{{ aktueller_soc < tou_ist - 1.5 }}"
       tou_schreiben: >
         {{ entlade_aktiv
            and ((f_soc - tou_ist) | abs) >= 5
-           and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf }}
+           and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf
+           and (not halten_fall or batterie_leistung > 100)
+           and not (f_soc < tou_ist and unter_register) }}
       # Wann die Batterie die Untergrenze erreicht: Energie ueber der nach diesem
       # Lauf wirksamen Grenze gegen das Verbrauchsprofil ab jetzt (laufender Slot
       # anteilig), hoechstens 12 h. Nur nachts, tags laedt die PV dagegen.
@@ -2860,8 +2879,10 @@ action:
               opt_preis_bezug: 0.30
               opt_preis_einspeisung: 0.08
               opt_start: "{{ now().replace(minute=(0 if now().minute < 30 else 30), second=0, microsecond=0).isoformat() }}"
-              # Eingabe des Optimizers in Wh je Halbstunde, 24 Stunden ab dem laufenden Slot.
-              # Morgen liegt nur als Tagessumme vor: Tagesform von heute, auf morgen skaliert.
+              # Eingabe des Optimizers in Wh je Halbstunde, 24 Stunden ab dem laufenden Slot,
+              # mit derselben Prognose wie der Blueprint: heute die P10/P50-Mischung samt
+              # Realitaets-Check, morgen die vertraute Tagessumme der Entlade-Planung in der
+              # Tagesform von heute.
               opt_anfrage: >
                 {% set jetzt = now() %}
                 {% set start = as_datetime(opt_start) | as_local %}
@@ -2870,12 +2891,14 @@ action:
                   {% set t = as_datetime(sl.period_start) | as_local %}
                   {% if t.date() == jetzt.date() %}
                     {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
-                    {% set kwh = (sl.pv_estimate | float(0)) * 0.5 %}
+                    {% set a = blend_p50_anteil | float(0.5) %}
+                    {% set kwh = ((sl.pv_estimate | float(0)) * a + (sl.pv_estimate10 | float(0)) * (1 - a)) * 0.5 * (pv_abschlag | float(1.0)) %}
                     {% set heute.k = heute.k[:idx] + [kwh] + heute.k[idx + 1:] %}
                     {% set heute.summe = heute.summe + kwh %}
                   {% endif %}
                 {% endfor %}
-                {% set morgen = (states(var_solcast_morgen) | float(-1)) if var_solcast_morgen != '' else -1 %}
+                {% set morgen_tage = prognose_tage | selectattr('name', 'eq', 'morgen') | list %}
+                {% set morgen = (morgen_tage[0].pv | float(-1)) if morgen_tage | length > 0 else -1 %}
                 {% set skala = (morgen / heute.summe) if (morgen >= 0 and heute.summe > 0) else 1.0 %}
                 {% set ns = namespace(ft=[], gt=[]) %}
                 {% for k in range(48) %}
@@ -2941,8 +2964,22 @@ action:
                                   'untergrenze_um': untergrenze_um, 'ev_bedarf_kwh': ev_bedarf_kwh},
                     'anfrage': {'start': opt_start, 'strategie': opt_strategie, 'preis_bezug': opt_preis_bezug,
                                 'preis_einspeisung': opt_preis_einspeisung, 'pv_kwh': ((a.time_series.ft | sum) / 1000) | round(2),
-                                'verbrauch_kwh': ((a.time_series.gt | sum) / 1000) | round(2), 's_min_pct': default_tou_soc} } | to_json }}
+                                'verbrauch_kwh': ((a.time_series.gt | sum) / 1000) | round(2), 's_min_pct': default_tou_soc,
+                                'p50_anteil_heute': blend_p50_anteil | float(0.5), 'pv_abschlag': pv_abschlag | round(3)} } | to_json }}
       - stop: "Zweitmeinung des Optimizers aufgezeichnet; dieser Lauf steuert nichts."
+
+  # UNTERGRENZE NICHT GEHALTEN: einmal je Eintritt melden, Register stehen lassen.
+  - if:
+      - condition: trigger
+        id: untergrenze_verletzt
+    then:
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: >-
+            {{ log_kopf }} Entlade-Untergrenze: Register bleibt auf {{ tou_ist | round(0) }} %, der Wechselrichter hält die Grenze nicht, da Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ tou_ist | round(0) }} % − 3 % bei Entladung {{ batterie_leistung | round(0) }} W seit 10 Minuten.
+          entity_id: !input helper_logbook_dummy
+      - stop: "Untergrenze nicht gehalten gemeldet; dieser Lauf steuert nichts."
 
   - if:
       - condition: template
@@ -2964,7 +3001,7 @@ action:
           name: "PV Optimizer"
           message: >-
             {{ log_kopf }} Entlade-Untergrenze: Netz-Ladeziele (ToU 1–6) von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
-            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % und die Batterie deshalb gehalten wird
+            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}

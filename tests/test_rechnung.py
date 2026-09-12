@@ -291,12 +291,54 @@ def test_untergrenze_liegt_auf_dem_5er_raster(blueprint, tag):
     assert ctx["f_soc"] == 83
 
 
-def test_halten_wird_sofort_geschrieben(blueprint, tag):
-    """Dezember: Untergrenze 90 liegt ueber dem Ladestand 85 -> Grenze = 85, Ladestand steht per Definition daran."""
-    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
-    assert ctx["f_roh"] == pytest.approx(90.0)
-    assert ctx["f_soc"] == 85
-    assert ctx["tou_schreiben"] is True
+def _leistung(watt):
+    from conftest import fake_entity
+    e = fake_entity("battery_power_sensor", "sensor")
+    return {e: Zustand(e, str(watt))}
+
+
+def test_halten_wird_erst_beim_entladen_geschrieben(blueprint, tag):
+    """Dezember: Untergrenze 90 ueber dem Ladestand 85 -> Grenze = 85. Geschrieben, sobald die Batterie entlaedt; beim Laden nicht."""
+    laedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
+    assert laedt["f_roh"] == pytest.approx(90.0) and laedt["f_soc"] == 85 and laedt["halten_fall"] is True
+    assert laedt["batterie_leistung"] == -1500 and laedt["tou_schreiben"] is False
+    entlaedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320)}).auswerten(bis="tou_schreiben")
+    assert entlaedt["tou_schreiben"] is True
+    # Kein Halten-Fall (Plan 75 unter dem Ladestand 77): Schreiben haengt nicht an der Entladung
+    plan = szenario(blueprint, zeit(tag, 21, 0), soc=77.0, prognose_tage_kwh=(15, 5, 5), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
+    assert plan["halten_fall"] is False and plan["tou_schreiben"] is True
+
+
+def test_untergrenze_wird_nicht_nachgezogen_wenn_der_wechselrichter_nicht_haelt(blueprint, tag):
+    """Register 70, Ladestand 64.5 und die Batterie entlaedt: der Wechselrichter haelt nicht, die Grenze bleibt."""
+    unten = szenario(blueprint, zeit(tag, 2, 0), soc=64.5, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(70), **_leistung(400)}).auswerten(bis="tou_schreiben")
+    assert unten["f_soc"] == 64 and unten["unter_register"] is True and unten["tou_schreiben"] is False
+    # Ladestand am Register (Toleranz 1.5): Absenken auf den neuen Plan 45 bleibt erlaubt
+    plan = szenario(blueprint, zeit(tag, 2, 0), soc=74.0, prognose_tage_kwh=(30, 30, 30), zustands_overrides={**_tou(75), **_leistung(400)}).auswerten(bis="tou_schreiben")
+    assert plan["f_soc"] < 75 and plan["unter_register"] is False and plan["tou_schreiben"] is True
+
+
+def test_trigger_untergrenze_verletzt(blueprint, tag):
+    """Feuert bei Ladestand mehr als 3 Punkte unter dem Register und Entladung ueber 100 W."""
+    from conftest import fake_entity
+    trig = next(t for t in blueprint["trigger"] if t.get("id") == "untergrenze_verletzt")
+    assert trig["for"] == "00:10:00"
+    soc, tou, p = fake_entity("battery_soc_sensor", "sensor"), fake_entity("wr_tou_1", "number"), fake_entity("battery_power_sensor", "sensor")
+    tv = {"tv_battery_soc": soc, "tv_wr_tou_1": tou, "tv_battery_power": p}
+    for soc_w, p_w, erwartet in ((66, 300, True), (66, -500, False), (68, 300, False), (66, 50, False)):
+        h = szenario(blueprint, zeit(tag, 2, 0), soc=soc_w, zustands_overrides={**_tou(70), **_leistung(p_w)})
+        assert h._aufloesen(trig["value_template"], dict(tv)) is erwartet, (soc_w, p_w)
+
+
+def test_meldung_untergrenze_nicht_gehalten(blueprint, tag):
+    h = szenario(blueprint, zeit(tag, 2, 0), soc=66.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(70), **_leistung(326)})
+    ctx = h.auswerten()
+    ctx["trigger"] = {"id": "untergrenze_verletzt", "now": h.jetzt}
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "untergrenze_verletzt" in str(st["if"]))
+    text = " ".join(h.render(block["then"][0]["data"]["message"], ctx).split())
+    assert "Register bleibt auf 70 %" in text and "Ladestand (SOC) 66 % < Untergrenze 70 % − 3 %" in text and "326 W" in text
+    assert block["then"][-1].get("stop")
+
 
 
 def test_ohne_prognose_morgen_bleibt_die_planung_aus(blueprint, tag):
@@ -622,8 +664,21 @@ def test_optimizer_anfrage_aus_dem_lauf(blueprint, tag):
     assert bat["s_min"] == pytest.approx(ctx["default_tou_soc"] / 100 * bat["s_capacity"])
     assert set(ts["gt"]) == {190.0}                      # Profil 0.19 kWh je Slot in Wh
     assert all(f == 0 for f in ts["ft"][:6])             # 21:00 - 00:00 keine PV
-    morgen = float(h.states.tabelle[h.inputs["solcast_morgen_sensor"]].state)
-    assert sum(ts["ft"]) / 1000 == pytest.approx(morgen, rel=0.02)   # Tagesform von heute auf morgen skaliert
+    # Morgen: die vertraute Tagessumme der Entlade-Planung (P10/P50-Mischung), nicht das rohe P50 des Sensors
+    morgen = next(t["pv"] for t in ctx["prognose_tage"] if t["name"] == "morgen")
+    assert sum(ts["ft"]) / 1000 == pytest.approx(morgen, rel=0.02)
+    assert morgen <= float(h.states.tabelle[h.inputs["solcast_morgen_sensor"]].state)   # synthetisch P10 = P50
+    # Heute: dieselbe Slot-Mischung wie slot_daten (P10/P50 mit Realitaets-Check)
+    tag_ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
+    tctx, _ = _optimizer_zweig(blueprint, tag_ctx, antwort={"status": 200, "content": {}})
+    ta = tctx["opt_anfrage"]; ta = ta if isinstance(ta, dict) else json.loads(ta)
+    a = tctx["blend_p50_anteil"]; ab = tctx["pv_abschlag"]
+    fc = {s_["period_start"] if isinstance(s_["period_start"], str) else s_["period_start"].isoformat(): s_
+          for s_ in tag_ctx.states.tabelle[tag_ctx.inputs["solcast_heute_sensor"]].attributes["detailedForecast"]}
+    start = tag_ctx.jetzt.replace(minute=0, second=0, microsecond=0)
+    slot = fc[(start + dt.timedelta(minutes=30)).isoformat()]
+    erwartet = (slot["pv_estimate"] * a + slot["pv_estimate10"] * (1 - a)) * 0.5 * ab * 1000
+    assert ta["time_series"]["ft"][1] == pytest.approx(erwartet, abs=1)
     assert ts["p_N"][0] == pytest.approx(0.0003) and ts["p_E"][0] == pytest.approx(0.00008)
     assert a["strategy"]["charging_strategy"] == "attenuate_feedin_peaks"
 

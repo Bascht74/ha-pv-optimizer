@@ -10,6 +10,23 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.8.0] - 2026-09-12
+
+### Added
+- A template trigger reports once per night when the battery keeps discharging more than
+  three points below the ToU register: the inverter is not honouring the floor, and
+  rewriting it lower would only give the hold away. The register is left as it is.
+
+### Changed
+- The hold (floor clamped to the current SOC) is written only once the battery discharges.
+  While it charges there is nothing to hold, and following the rising SOC produced a
+  register write and a logbook entry every five points.
+- The floor is no longer lowered while the SOC already sits below the register; lowering
+  to a new plan value stays possible once the SOC is at the register again.
+- The optimizer second opinion receives the same PV forecast as the blueprint: today's
+  P10/P50 blend with the reality check, tomorrow the trusted day total of the discharge
+  planning. Differences in the schedule then come from the planning, not from the data.
+
 ## [V6.7.0] - 2026-09-12
 
 ### Added
@@ -586,7 +603,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...HEAD
+[V6.8.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...V6.8.0
 [V6.7.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...V6.7.0
 [V6.6.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.5.0...V6.6.0
 [V6.5.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.4.0...V6.5.0
