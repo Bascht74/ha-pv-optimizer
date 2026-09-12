@@ -14,7 +14,9 @@ Added
   optional helper "Netzbezug während Haltephase (kWh)"; without it nothing changes.
 - The diagnostic recording carries the computed decision values of every run
   (discharge floor and its candidates, hold state, charge targets, Fall B, blockade,
-  reality check), so a day can be analysed from the file alone.
+  reality check), and the profile run adds a slot line with the half hour's house
+  consumption and hold state, so a day and the night-side loss can be recomputed
+  from the file alone, helper or not.
 
 Changed
 - The recording is written after the variable chain instead of in the middle of it,

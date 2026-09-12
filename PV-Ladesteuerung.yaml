@@ -1180,17 +1180,36 @@ action:
           hb_tou_ist: >
             {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
-          hb_haelt: >
-            {{ hb_helfer != '' and hb_planung != '' and not is_state('sun.sun', 'above_horizon')
+          # Halte-Lage unabhaengig vom Helfer, damit die Aufzeichnung sie auch
+          # ohne zugewiesenen Helfer festhaelt.
+          hb_lage: >
+            {{ hb_planung != '' and not is_state('sun.sun', 'above_horizon')
                and hb_tou_ist > (hb_tou_min | float(20))
                and (states(hb_soc) | float(100)) <= hb_tou_ist + 1 }}
+          hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
+          hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
+          hb_zurueck_kwh: "{{ [(hb_tou_ist - (hb_tou_min | float(20))) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
+      # AUFZEICHNUNG DES SLOTS: Der Halbstunden-Verbrauch ist nur hier lesbar,
+      # der Halbstundenlauf sieht den Zaehler schon genullt. Mit dieser Zeile
+      # laesst sich die Bezugssumme im Halten ohne den Helfer nachrechnen.
+      - if:
+          - condition: template
+            value_template: "{{ states.notify.pv_optimizer_aufzeichnung is not none }}"
+        then:
+          - action: notify.send_message
+            target:
+              entity_id: notify.pv_optimizer_aufzeichnung
+            data:
+              message: >-
+                {{ {'zeit': now().isoformat(), 'version': bp_version, 'art': 'slot', 'h_index': h_index,
+                    'slot_kwh': last_half_hour_kwh | round(3), 'halten': hb_lage, 'soc': states(hb_soc) | float(0),
+                    'tou_ist': hb_tou_ist, 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
+                    'halten_bezug_kwh': (states(hb_helfer) | float(0)) if hb_helfer != '' else none} | to_json }}
       - if:
           - condition: template
             value_template: "{{ hb_haelt }}"
         then:
           - variables:
-              hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
-              hb_zurueck_kwh: "{{ (hb_tou_ist - (hb_tou_min | float(20))) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000 }}"
               hb_neu: "{{ [((states(hb_helfer) | float(0)) + last_half_hour_kwh), hb_zurueck_kwh] | min | round(3) }}"
           - action: input_number.set_value
             target:
@@ -2419,6 +2438,7 @@ action:
   # eine JSON-Zeile mit allen Eingangswerten und den Rechenwerten der Kette an -
   # vor allem die Prognose, mit der dieser Lauf gerechnet hat. Steht bewusst
   # HINTER der Kette, damit die Entscheidungsgroessen mitgeschrieben werden.
+  # Dazu kommt je Halbstunde die Slot-Zeile des Profil-Laufs (art: slot).
   # Fester Name statt Input-Feld: Wer die Entitaet nicht anlegt, verliert nichts.
   # minute % 30 < 5 statt in [0, 30]: die Warteschlange kann den Lauf verzoegern.
   - if:

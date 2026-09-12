@@ -11,7 +11,11 @@ und `pv` (2 × 200 Ah, ohne Wärmepumpe). Die Dateien bleiben, wie sie herunterg
 wurden: Die zwei Kopfzeilen der File-Integration, Testsendungen und ein Zeitstempel-
 Präfix vor dem `{` werden beim Einlesen übersprungen.
 
-`test_aufzeichnung.py` schickt jede Zeile jeder Datei durch die Variablenkette. Das
+Neben den Halbstundenzeilen des Steuerlaufs stehen kurze Slot-Zeilen des Profil-Laufs
+(`"art": "slot"`: Slot-Verbrauch, Halte-Lage, Register); der Loader nimmt nur Zeilen mit
+`entitaeten` als Lauf, die Slot-Zeilen sind fuer die Nachrechnung der Nachtbilanz da.
+
+`test_aufzeichnung.py` schickt jede Lauf-Zeile jeder Datei durch die Variablenkette. Das
 belegt zunächst nur, dass die Kette mit echten Werten durchläuft. Eine Regression
 entsteht daraus, wenn zu einer Zeile die geloggte Entscheidung des Tages als
 Erwartungswert in einen Test wandert.

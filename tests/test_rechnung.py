@@ -412,7 +412,8 @@ def test_halten_verlust_ohne_helfer_null(blueprint, tag):
 
 def _update_json_zweig(blueprint, h, trigger_zeit):
     """Loest die Variablen des update_json-Zweigs auf, wie der Lauf es taete (verschachtelte if-Zweige eingeschlossen)."""
-    ctx = {"trigger": {"id": "update_json", "now": trigger_zeit}}
+    ctx = h.auswerten(bis="bp_version")   # globale Variablen vor dem Zweig, wie im Lauf
+    ctx["trigger"] = {"id": "update_json", "now": trigger_zeit}
     block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
     def wahr(bedingungen):
         return all(h._aufloesen(b["value_template"], ctx) for b in bedingungen if b.get("condition") == "template")
@@ -438,7 +439,7 @@ def test_netzbezug_im_halten_laeuft_im_update_json_zweig_auf(blueprint, tag, bis
     e = fake_entity("helper_halten_bezug", "input_number"); tous[e] = Zustand(e, str(bisher))
     h = szenario(blueprint, zeit(tag, 3, 0), soc=soc, hausverbrauch_slot_kwh=slot_kwh, zustands_overrides=tous, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
-    assert ctx["hb_haelt"] is (erwartet is not None)
+    assert ctx["hb_lage"] is (erwartet is not None) and ctx["hb_haelt"] is (erwartet is not None)
     if erwartet is not None:
         assert ctx["hb_neu"] == pytest.approx(erwartet, abs=0.001)
 
@@ -455,3 +456,21 @@ def test_halten_aktiv_nur_wenn_die_grenze_schlagend_ist(blueprint, tag, stunde, 
     tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), str(tou)) for i in range(1, 7)}
     ctx = szenario(blueprint, zeit(tag, stunde, 0), soc=soc, zustands_overrides=tous).auswerten(bis="halten_aktiv")
     assert ctx["halten_aktiv"] is erwartet
+
+
+def test_slot_zeile_der_aufzeichnung(blueprint, tag):
+    """Der Profil-Lauf schreibt Slot-Verbrauch und Halte-Lage, auch ohne zugewiesenen Helfer."""
+    import json
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "65") for i in range(1, 7)}
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=65.0, hausverbrauch_slot_kwh=0.6, zustands_overrides=tous,
+                 input_overrides={"helper_halten_bezug": ""}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"]))
+    nachricht = h._aufloesen(schritt["then"][0]["data"]["message"], ctx)
+    zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
+    assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
+    assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
+    assert zeile["halten_bezug_kwh"] is None and "entitaeten" not in zeile
+    assert ctx["hb_lage"] is True and ctx["hb_haelt"] is False
