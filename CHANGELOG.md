@@ -18,9 +18,10 @@ Logbuch-Meldung trägt ihn.
   rewriting it lower would only give the hold away. The register is left as it is.
 
 ### Changed
-- The hold (floor clamped to the current SOC) is written only once the battery discharges.
-  While it charges there is nothing to hold, and following the rising SOC produced a
-  register write and a logbook entry every five points.
+- The hold (floor clamped to the current SOC) is written only once the battery discharges
+  and the SOC has dropped below the day's maximum. While it charges there is nothing to
+  hold, and following the rising SOC produced a register write and a logbook entry every
+  five points; a brief draw caught by the five-minute cycle does not count as discharging.
 - The floor is no longer lowered while the SOC already sits below the register; lowering
   to a new plan value stays possible once the SOC is at the register again.
 - The optimizer second opinion receives the same PV forecast as the blueprint: today's

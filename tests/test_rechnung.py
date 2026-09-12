@@ -297,13 +297,23 @@ def _leistung(watt):
     return {e: Zustand(e, str(watt))}
 
 
+def _tagesmax(soc):
+    from conftest import fake_entity
+    e = fake_entity("helper_max_soc_heute", "input_number")
+    return {e: Zustand(e, str(soc))}
+
+
 def test_halten_wird_erst_beim_entladen_geschrieben(blueprint, tag):
     """Dezember: Untergrenze 90 ueber dem Ladestand 85 -> Grenze = 85. Geschrieben, sobald die Batterie entlaedt; beim Laden nicht."""
     laedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
     assert laedt["f_roh"] == pytest.approx(90.0) and laedt["f_soc"] == 85 and laedt["halten_fall"] is True
     assert laedt["batterie_leistung"] == -1500 and laedt["tou_schreiben"] is False
-    entlaedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320)}).auswerten(bis="tou_schreiben")
-    assert entlaedt["tou_schreiben"] is True
+    # Entladung mit 320 W, aber der Ladestand steht noch auf dem Tageshoechststand: ein Anlaufstoss, kein Halten
+    stoss = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320)}).auswerten(bis="tou_schreiben")
+    assert stoss["entlaedt_nachhaltig"] is False and stoss["tou_schreiben"] is False
+    # Ladestand 0.5 Punkte unter dem Tageshoechststand: die Entladung hat begonnen
+    entlaedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320), **_tagesmax(86)}).auswerten(bis="tou_schreiben")
+    assert entlaedt["entlaedt_nachhaltig"] is True and entlaedt["tou_schreiben"] is True
     # Kein Halten-Fall (Plan 75 unter dem Ladestand 77): Schreiben haengt nicht an der Entladung
     plan = szenario(blueprint, zeit(tag, 21, 0), soc=77.0, prognose_tage_kwh=(15, 5, 5), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
     assert plan["halten_fall"] is False and plan["tou_schreiben"] is True

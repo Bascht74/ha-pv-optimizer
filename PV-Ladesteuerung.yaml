@@ -2635,11 +2635,16 @@ action:
       # Halten nur auf (Diagnose ueber den Trigger untergrenze_verletzt).
       halten_fall: "{{ f_roh > aktueller_soc }}"
       unter_register: "{{ aktueller_soc < tou_ist - 1.5 }}"
+      # Entladung gilt als begonnen, wenn sie den Ladestand unter das Tagesmaximum
+      # gedrueckt hat. Ein kurzer Bezug am Tag (Anlauf eines Verbrauchers), den das
+      # 5-Minuten-Raster zufaellig trifft, schreibt so keinen Halte-Wert.
+      tages_max_soc: "{{ (states(var_max_soc_heute) | float(0)) if var_max_soc_heute != '' else aktueller_soc }}"
+      entlaedt_nachhaltig: "{{ batterie_leistung > 100 and aktueller_soc < tages_max_soc - 0.5 }}"
       tou_schreiben: >
         {{ entlade_aktiv
            and ((f_soc - tou_ist) | abs) >= 5
            and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf
-           and (not halten_fall or batterie_leistung > 100)
+           and (not halten_fall or entlaedt_nachhaltig)
            and not (f_soc < tou_ist and unter_register) }}
       # Wann die Batterie die Untergrenze erreicht: Energie ueber der nach diesem
       # Lauf wirksamen Grenze gegen das Verbrauchsprofil ab jetzt (laufender Slot
@@ -3001,7 +3006,7 @@ action:
           name: "PV Optimizer"
           message: >-
             {{ log_kopf }} Entlade-Untergrenze: Netz-Ladeziele (ToU 1–6) von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
-            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W und die Batterie deshalb gehalten wird
+            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0) }} % und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
