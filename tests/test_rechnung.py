@@ -414,11 +414,14 @@ def _update_json_zweig(blueprint, h, trigger_zeit):
     """Loest die Variablen des update_json-Zweigs auf, wie der Lauf es taete (verschachtelte if-Zweige eingeschlossen)."""
     ctx = {"trigger": {"id": "update_json", "now": trigger_zeit}}
     block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    def wahr(bedingungen):
+        return all(h._aufloesen(b["value_template"], ctx) for b in bedingungen if b.get("condition") == "template")
     def gehe(schritte):
         for st in schritte:
             if "variables" in st:
-                ctx.update(h._aufloesen(st["variables"], ctx))
-            elif "if" in st and h._aufloesen(st["if"][0]["value_template"], ctx):
+                for k, v in st["variables"].items():   # der Reihe nach, wie HA: spaetere Keys sehen fruehere
+                    ctx[k] = h._aufloesen(v, ctx)
+            elif "if" in st and wahr(st["if"]):
                 gehe(st["then"])
     gehe(block["then"])
     return ctx
@@ -426,7 +429,7 @@ def _update_json_zweig(blueprint, h, trigger_zeit):
 
 @pytest.mark.parametrize("bisher, slot_kwh, soc, tou, erwartet", [
     (2.0, 0.6, 65.0, 65, 2.6),        # Halten: Slot-Verbrauch kommt dazu
-    (14.2, 0.6, 65.0, 65, 14.4675),   # Deckel: (65-20) % x 32.15 kWh zurueckgehalten
+    (14.2, 0.6, 65.0, 65, 14.469),    # Deckel: (65-20) % x 32.154 kWh (2 x 314 Ah x 51.2 V) zurueckgehalten
     (2.0, 0.6, 70.0, 65, None),       # Batterie entlaedt noch: kein Halten, nichts geschrieben
 ])
 def test_netzbezug_im_halten_laeuft_im_update_json_zweig_auf(blueprint, tag, bisher, slot_kwh, soc, tou, erwartet):
