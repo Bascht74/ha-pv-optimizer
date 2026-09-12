@@ -11,7 +11,8 @@ und `pv` (2 × 200 Ah, ohne Wärmepumpe). Die Dateien bleiben, wie sie herunterg
 wurden: Die zwei Kopfzeilen der File-Integration, Testsendungen und ein Zeitstempel-
 Präfix vor dem `{` werden beim Einlesen übersprungen.
 
-Neben den Halbstundenzeilen des Steuerlaufs stehen kurze Slot-Zeilen des Profil-Laufs
+Die Zeilen des Steuerlaufs tragen `"art": "lauf"` (Halbstundentakt) oder `"art": "entscheidung"`
+(Laufende nach einem Registerwechsel, zusaetzlich zum Takt). Daneben stehen kurze Slot-Zeilen des Profil-Laufs
 (`"art": "slot"`: Slot-Verbrauch, Halte-Lage, Register); der Loader nimmt nur Zeilen mit
 `entitaeten` als Lauf, die Slot-Zeilen sind fuer die Nachrechnung der Nachtbilanz da.
 
