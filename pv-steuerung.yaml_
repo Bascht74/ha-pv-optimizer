@@ -103,6 +103,16 @@ input_number:
     unit_of_measurement: "kWh"
     icon: mdi:battery-clock
     mode: box
+  halten_bezug:                       # -> Helfer: Netzbezug waehrend Haltephase (kWh)
+    # Laeuft nachts auf, solange die Entlade-Untergrenze die Batterie haelt;
+    # abends als Speicherverlust verbucht (wenn die Batterie voll wurde) und genullt.
+    name: "Netzbezug während Haltephase"
+    min: 0
+    max: 1000
+    step: 0.001
+    unit_of_measurement: "kWh"
+    icon: mdi:transmission-tower-import
+    mode: box
   schatten_bms_tare_geladen:          # -> Schatten-BMS: Tare Ladezaehler (kWh)
     name: "Schatten-BMS Tara geladen"
     min: 0

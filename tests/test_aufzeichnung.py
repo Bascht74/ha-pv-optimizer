@@ -218,3 +218,24 @@ def test_horizont_der_entlade_planung_in_der_nacht(blueprint, zeit_prefix, f_soc
     assert ctx["entlade_aktiv"] is True
     assert ctx["prognose_tage"][0]["name"] == erster_tag
     assert ctx["f_soc"] == f_soc
+
+
+def test_aufzeichnung_traegt_die_rechenwerte(blueprint, tag):
+    """Die Zeile enthaelt die Entscheidungsgroessen des Laufs, nicht nur die Eingangswerte."""
+    h = szenario(blueprint, zeit(tag, 10, 0))
+    ctx = h.auswerten()
+    aufz = aufzeichnen(h, blueprint)
+    r = aufz["rechnung"]
+    for k in ("f_soc", "tou_ist", "tou_schreiben", "halten_aktiv", "halten_verlust_kwh", "prognose_tage",
+              "target_p5", "fall_b_aktiv", "blockade_aktiv", "spitze_erwartet", "trend_faktor", "benoetigt_kwh"):
+        assert k in r, k
+    assert r["f_soc"] == ctx["f_soc"] and r["target_p5"] == ctx["target_p5"]
+
+
+@pytest.mark.parametrize("datei", ["pv_2026-09-04_bis_11.jsonl", "dachterrasse_2026-09-04_bis_11.jsonl"])
+def test_aufzeichnung_rendert_fuer_echte_laeufe(blueprint, datei):
+    """to_json darf an keinem Rechenwert scheitern (datetime, Undefined): jede 12. Zeile beider Standorte."""
+    zs = _zeilen_von(datei)
+    for z in zs[::12]:
+        aufz = aufzeichnen(szenario_aus_aufzeichnung(blueprint, z), blueprint)
+        assert "rechnung" in aufz and "f_soc" in aufz["rechnung"], z["zeit"]

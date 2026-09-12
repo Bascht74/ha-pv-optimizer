@@ -383,3 +383,94 @@ def test_horizont_beginnt_vor_sonnenaufgang_mit_heute(blueprint, tag):
     abend = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
     assert [t["name"] for t in abend["prognose_tage"]] == ["morgen", "Tag 3", "Tag 4"]
     assert abend["f_soc"] == 85
+
+
+# --------------------------------------------------------------------------
+# Netzbezug im Halten: Verlust nur, was nachts bezogen UND tags eingespeist wurde
+# --------------------------------------------------------------------------
+def _halten(bezug, export_heute):
+    from conftest import fake_entity
+    e1 = fake_entity("helper_halten_bezug", "input_number"); e2 = fake_entity("grid_export_kwh_heute", "sensor")
+    return {e1: Zustand(e1, str(bezug)), e2: Zustand(e2, str(export_heute))}
+
+
+@pytest.mark.parametrize("bezug, export_heute, verlust, grund", [
+    (3.0, 12.5, 3.0, "Netzbezug im Halten deckelt"),
+    (20.0, 5.0, 5.0, "Tageseinspeisung deckelt"),
+    (3.0, 0.0, 0.0, "voll geworden ohne jede Einspeisung: nichts verloren"),
+    (0.0, 12.5, 0.0, "kein Verbrauch nach Erreichen der Grenze"),
+])
+def test_halten_verlust_zweifacher_deckel(blueprint, tag, bezug, export_heute, verlust, grund):
+    ctx = szenario(blueprint, zeit(tag, 20, 0), zustands_overrides=_halten(bezug, export_heute)).auswerten(bis="halten_verlust_kwh")
+    assert ctx["halten_verlust_kwh"] == pytest.approx(verlust, abs=0.001), grund
+
+
+def test_halten_verlust_ohne_helfer_null(blueprint, tag):
+    ctx = szenario(blueprint, zeit(tag, 20, 0), input_overrides={"helper_halten_bezug": ""}).auswerten(bis="halten_verlust_kwh")
+    assert ctx["halten_kwh"] == 0 and ctx["halten_verlust_kwh"] == 0
+
+
+def _update_json_zweig(blueprint, h, trigger_zeit):
+    """Loest die Variablen des update_json-Zweigs auf, wie der Lauf es taete (verschachtelte if-Zweige eingeschlossen)."""
+    ctx = h.auswerten(bis="bp_version")   # globale Variablen vor dem Zweig, wie im Lauf
+    ctx["trigger"] = {"id": "update_json", "now": trigger_zeit}
+    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    def wahr(bedingungen):
+        return all(h._aufloesen(b["value_template"], ctx) for b in bedingungen if b.get("condition") == "template")
+    def gehe(schritte):
+        for st in schritte:
+            if "variables" in st:
+                for k, v in st["variables"].items():   # der Reihe nach, wie HA: spaetere Keys sehen fruehere
+                    ctx[k] = h._aufloesen(v, ctx)
+            elif "if" in st and wahr(st["if"]):
+                gehe(st["then"])
+    gehe(block["then"])
+    return ctx
+
+
+@pytest.mark.parametrize("bisher, slot_kwh, soc, tou, erwartet", [
+    (2.0, 0.6, 65.0, 65, 2.6),        # Halten: Slot-Verbrauch kommt dazu
+    (14.2, 0.6, 65.0, 65, 14.469),    # Deckel: (65-20) % x 32.154 kWh (2 x 314 Ah x 51.2 V) zurueckgehalten
+    (2.0, 0.6, 70.0, 65, None),       # Batterie entlaedt noch: kein Halten, nichts geschrieben
+])
+def test_netzbezug_im_halten_laeuft_im_update_json_zweig_auf(blueprint, tag, bisher, slot_kwh, soc, tou, erwartet):
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), str(tou)) for i in range(1, 7)}
+    e = fake_entity("helper_halten_bezug", "input_number"); tous[e] = Zustand(e, str(bisher))
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=soc, hausverbrauch_slot_kwh=slot_kwh, zustands_overrides=tous, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    assert ctx["hb_lage"] is (erwartet is not None) and ctx["hb_haelt"] is (erwartet is not None)
+    if erwartet is not None:
+        assert ctx["hb_neu"] == pytest.approx(erwartet, abs=0.001)
+
+
+@pytest.mark.parametrize("stunde, soc, tou, erwartet", [
+    (3, 65.0, 65, True),    # nachts, Ladestand an der Grenze, Grenze ueber dem Minimum
+    (3, 66.0, 65, True),    # ein Punkt darueber zaehlt noch als Halten
+    (3, 70.0, 65, False),   # Batterie entlaedt noch
+    (3, 20.0, 20, False),   # allgemeines Minimum ist keine Planungsgrenze
+    (12, 65.0, 65, False),  # tagsueber kein Halten
+])
+def test_halten_aktiv_nur_wenn_die_grenze_schlagend_ist(blueprint, tag, stunde, soc, tou, erwartet):
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), str(tou)) for i in range(1, 7)}
+    ctx = szenario(blueprint, zeit(tag, stunde, 0), soc=soc, zustands_overrides=tous).auswerten(bis="halten_aktiv")
+    assert ctx["halten_aktiv"] is erwartet
+
+
+def test_slot_zeile_der_aufzeichnung(blueprint, tag):
+    """Der Profil-Lauf schreibt Slot-Verbrauch und Halte-Lage, auch ohne zugewiesenen Helfer."""
+    import json
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "65") for i in range(1, 7)}
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=65.0, hausverbrauch_slot_kwh=0.6, zustands_overrides=tous,
+                 input_overrides={"helper_halten_bezug": ""}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"]))
+    nachricht = h._aufloesen(schritt["then"][0]["data"]["message"], ctx)
+    zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
+    assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
+    assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
+    assert zeile["halten_bezug_kwh"] is None and "entitaeten" not in zeile
+    assert ctx["hb_lage"] is True and ctx["hb_haelt"] is False
