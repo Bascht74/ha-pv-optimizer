@@ -20,14 +20,19 @@ Logbuch-Meldung trägt ihn.
   the consumption profile. The recording carries the estimates of every run next to the
   real times: the moment the battery became full and, per half hour, whether the floor
   holds, so plan and outcome can be compared from the file.
-- Optional wallbox coupling (section 11, two entity fields from the evcc integration): the
-  charging energy of the loadpoints per half hour stays out of the consumption profile and the
-  live anchoring, and the open charging demand of the connected cars is taken from the earliest
-  surplus slots before the battery is planned, so charge window, Fall B and blockade see only
-  what the cars leave. The package template carries the sum sensors and the utility meter.
-- Development tool `tools/optimizer_vergleich.py`: builds evcc-optimizer requests from recorded
-  runs and prints the optimizer's charge start, full time and night minimum next to the
-  blueprint's values for the same run, as a second opinion on the planning.
+- Optional wallbox coupling (section 11, two multi-select entity fields from the evcc
+  integration): the charging energy of the loadpoints per half hour stays out of the
+  consumption profile and the live anchoring, and the open charging demand of the connected
+  cars is taken from the earliest surplus slots before the battery is planned, so charge
+  window, Fall B and blockade see only what the cars leave. The package template carries one
+  utility meter per loadpoint.
+- Second opinion from the evcc optimizer: with the add-on address in the new optional text
+  field, an hourly run posts the forecast, the learned profile and the battery state to the
+  optimizer through a rest_command from the package and records its schedule (charge start,
+  full time, night minimum, SOC curve) next to the blueprint's plan values as an `optimizer`
+  line. Diagnosis only, the run touches no register.
+- Optional outdoor-temperature sensor, recorded per half hour in the `slot` line so the
+  consumption can later be evaluated against temperature.
 
 ### Changed
 - The house-load profile is anchored to the running half hour: from 15 minutes into the

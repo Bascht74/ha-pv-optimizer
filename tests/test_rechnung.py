@@ -559,8 +559,13 @@ def test_auto_bedarf_geht_vom_ueberschuss_der_ersten_slots_ab(blueprint, tag):
     viel = szenario(blueprint, zeit(tag, 10, 0), zustands_overrides={e: Zustand(e, "99")}).auswerten(bis="brutto_ueberschuss_rest")
     assert viel["brutto_ueberschuss_rest"] == 0 and viel["rest_slots"] == [] and viel["defizit_kwh"] == ohne["defizit_kwh"]
     # Ohne zugewiesenes Feld: kein Abzug.
-    leer = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": ""}).auswerten(bis="brutto_ueberschuss_rest")
+    leer = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": []}).auswerten(bis="brutto_ueberschuss_rest")
     assert leer["ev_bedarf_kwh"] == 0 and leer["brutto_ueberschuss_rest"] == ohne["brutto_ueberschuss_rest"]
+    # Zwei Ladepunkte: die Werte werden addiert, ein fehlender Sensor zaehlt 0.
+    e2 = "sensor.ladepunkt_2_rest"
+    zwei = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": [e, e2, "sensor.gibt_es_nicht"]},
+                    zustands_overrides={e: Zustand(e, "5.0"), e2: Zustand(e2, "2.5")}).auswerten(bis="ev_bedarf_kwh")
+    assert zwei["ev_bedarf_kwh"] == 7.5
 
 
 def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
@@ -576,5 +581,66 @@ def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
     live = szenario(blueprint, zeit(tag, 14, 20), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}).auswerten(bis="haus_live_kwh")
     assert live["haus_live_kwh"] == pytest.approx(0.45, abs=0.005)
     # Ohne Feld: der volle Zaehler.
-    h3 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": ""}, trigger_id="update_json")
+    h3 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": []}, trigger_id="update_json")
     assert _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))["last_half_hour_kwh"] == pytest.approx(0.9)
+    # Zwei Wallboxen: Summe, und beide Zaehler werden genullt.
+    wb2 = "sensor.wallbox_2_halbstuendlich"
+    h4 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": [wb, wb2]},
+                  zustands_overrides={wb: Zustand(wb, "0.2"), wb2: Zustand(wb2, "0.3")}, trigger_id="update_json")
+    ctx4 = _update_json_zweig(blueprint, h4, zeit(tag, 14, 0))
+    assert ctx4["wallbox_slot_kwh"] == pytest.approx(0.5) and ctx4["last_half_hour_kwh"] == pytest.approx(0.4) and ctx4["wallbox_liste"] == [wb, wb2]
+
+
+# --------------------------------------------------------------------------
+# Zweitmeinung des evcc-Optimizers: Anfrage und Lesen der Antwort
+# --------------------------------------------------------------------------
+def _optimizer_zweig(blueprint, h, antwort=None):
+    """Loest die Variablen des Optimizer-Laufs auf; die Antwort des rest_command wird vorgegeben."""
+    ctx = h.auswerten()
+    ctx["trigger"] = {"id": "optimizer_vergleich", "now": h.jetzt}
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "optimizer_vergleich" in str(st["if"]))
+    innen = block["then"][0]["then"]
+    for st in innen:
+        if "variables" in st:
+            for k, v in st["variables"].items():
+                ctx[k] = h._aufloesen(v, ctx)
+        elif st.get("response_variable") == "opt_antwort" and antwort is not None:
+            ctx["opt_antwort"] = antwort
+    zeile = next(st for st in innen if st.get("action") == "notify.send_message")
+    return ctx, json.loads(h.render(zeile["data"]["message"], ctx))
+
+
+def test_optimizer_anfrage_aus_dem_lauf(blueprint, tag):
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
+    ctx, _ = _optimizer_zweig(blueprint, h, antwort={"status": 200, "content": {}})
+    a = ctx["opt_anfrage"]; a = a if isinstance(a, dict) else json.loads(a)
+    ts, bat = a["time_series"], a["batteries"][0]
+    assert len(ts["ft"]) == len(ts["gt"]) == len(ts["dt"]) == 48 and set(ts["dt"]) == {1800}
+    assert bat["s_capacity"] == pytest.approx(ctx["batterie_kapazitaet"] * 1000)
+    assert bat["s_initial"] == pytest.approx(0.6 * bat["s_capacity"])
+    assert bat["s_min"] == pytest.approx(ctx["default_tou_soc"] / 100 * bat["s_capacity"])
+    assert set(ts["gt"]) == {190.0}                      # Profil 0.19 kWh je Slot in Wh
+    assert all(f == 0 for f in ts["ft"][:6])             # 21:00 - 00:00 keine PV
+    morgen = float(h.states.tabelle[h.inputs["solcast_morgen_sensor"]].state)
+    assert sum(ts["ft"]) / 1000 == pytest.approx(morgen, rel=0.02)   # Tagesform von heute auf morgen skaliert
+    assert ts["p_N"][0] == pytest.approx(0.0003) and ts["p_E"][0] == pytest.approx(0.00008)
+    assert a["strategy"]["charging_strategy"] == "attenuate_feedin_peaks"
+
+
+def test_optimizer_antwort_wird_in_zeiten_uebersetzt(blueprint, tag):
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
+    kap = h.auswerten(bis="batterie_kapazitaet")["batterie_kapazitaet"] * 1000
+    # Laden ab Slot 22 (08:00), Ladestand 100 % erstmals am Ende von Slot 26 -> voll um 10:30; Nacht-Minimum 45 %
+    soc = [kap * 0.6] * 4 + [kap * 0.45] * 18 + [kap * 0.7] * 4 + [kap] * 22
+    laden = [0.0] * 22 + [800.0] * 8 + [0.0] * 18
+    antwort = {"status": 200, "content": {"status": "Optimal", "batteries": [{"state_of_charge": soc, "charging_power": laden}]}}
+    ctx, zeile = _optimizer_zweig(blueprint, h, antwort=antwort)
+    o = ctx["opt_auswertung"]; o = o if isinstance(o, dict) else json.loads(o)
+    assert o["status"] == "Optimal" and o["laedt_ab"] == "08:00" and o["voll_um"] == "10:30" and o["nacht_min_soc"] == 45.0
+    assert len(o["soc_verlauf"]) == 48 and o["soc_verlauf"][0] == 60.0
+    assert zeile["art"] == "optimizer" and zeile["kennung"] == ctx["lauf_kennung"]
+    assert zeile["blueprint"]["f_soc"] == ctx["f_soc"] and zeile["blueprint"]["aktueller_soc"] == 60.0
+    assert zeile["anfrage"]["strategie"] == "attenuate_feedin_peaks" and zeile["anfrage"]["verbrauch_kwh"] == pytest.approx(0.19 * 48, abs=0.01)
+    # Keine Antwort (rest_command fehlgeschlagen): Zeile kommt trotzdem, mit leerem Fahrplan
+    ctx2, zeile2 = _optimizer_zweig(blueprint, h, antwort=None)
+    assert zeile2["optimizer"]["status"] == "keine Antwort" and zeile2["optimizer"]["voll_um"] is None

@@ -37,9 +37,12 @@ def test_version_an_beiden_stellen_gleich(blueprint):
 
 
 def test_jeder_entity_input_hat_leeren_default(blueprint):
+    def leer(d):
+        mehrfach = (d.get("selector") or {}).get("entity", {}).get("multiple", False)
+        return d.get("default") == ([] if mehrfach else "")
     ohne = [name for name, d in input_definitionen(blueprint).items()
-            if "entity" in (d.get("selector") or {}) and d.get("default") != ""]
-    assert ohne == [], f"Entity-Inputs ohne default '': {ohne}"
+            if "entity" in (d.get("selector") or {}) and not leer(d)]
+    assert ohne == [], f"Entity-Inputs ohne leeren Default ('' bzw. [] bei Mehrfachauswahl): {ohne}"
 
 
 def test_jinja_klammern_ausgeglichen(blueprint):
@@ -211,3 +214,9 @@ def test_changelog_hat_sektion_der_arbeitsversion(blueprint):
     sektion = sektion[:sektion.find("\n## ")] if "\n## " in sektion else sektion
     assert re.search(r"^### (Added|Changed|Deprecated|Removed|Fixed|Security)$", sektion, flags=re.M), "Sektion ohne Kategorie"
     assert f"[{version}]: https://github.com/" in text, "Link-Referenz der Version fehlt"
+
+
+def test_package_hat_rest_command_fuer_die_zweitmeinung(package):
+    """Der Optimizer-Lauf ruft rest_command.pv_optimizer_zweitmeinung; Adresse und Payload kommen aus dem Blueprint."""
+    rc = (package.get("rest_command") or {}).get("pv_optimizer_zweitmeinung")
+    assert rc and rc["method"] == "post" and "{{ url }}" in rc["url"] and "payload" in rc["payload"]

@@ -35,14 +35,22 @@ keine Zusatz-Software.
    Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
 
 **Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
-Rest. Zwei optionale Felder aus der evcc-Integration: die Ladeenergie der Ladepunkte je Halbstunde
-(Utility-Meter, bleibt aus dem Verbrauchsprofil heraus) und der offene Ladebedarf der angesteckten
-Autos (geht vom heutigen PV-Überschuss ab, bevor Ladefenster, Fall B und Blockade gerechnet werden).
-evcc selbst darf die Batterie nicht steuern: „Entladung der Hausbatterie … verhindern“ und
-„Entladung ins Stromnetz zulassen“ aus, kein Netzladen-Limit für die Batterie.
+Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
+Utility-Meter über dessen Ladeenergie (bleibt aus dem Verbrauchsprofil heraus, Vorlage im Package)
+und je Ladepunkt der offene Ladebedarf „Charge Remaining Energy“ (geht vom heutigen PV-Überschuss
+ab, bevor Ladefenster, Fall B und Blockade gerechnet werden). evcc selbst darf die Batterie nicht
+steuern: „Entladung der Hausbatterie … verhindern“ und „Entladung ins Stromnetz zulassen“ aus.
 
-Jeder Merge nach `main` ist sofort live; das zugehörige Release
-(`V<MAJOR>.<MINOR>.<PATCH>`) dokumentiert, was läuft. Änderungen stehen in `CHANGELOG.md`.
+**Zweitmeinung vom evcc-Optimizer:** Mit der Adresse des Optimizer-Add-ons im Feld „evcc-Optimizer:
+Adresse“ holt der Blueprint stündlich (Minute 12) dessen Batterie-Fahrplan über `rest_command` aus dem
+Package und schreibt ihn als Zeile `optimizer` in die Aufzeichnung, neben Ladebeginn, Vollzeit und
+Untergrenze des Blueprints für denselben Lauf. Eingaben sind die Solcast-Prognose je Slot, das
+gelernte Verbrauchsprofil, Kapazität, Ladestand und Grenzen, feste Preise (30 ct Bezug, 8 ct
+Einspeisung, nur das Verhältnis zählt) und die Strategie „Einspeisespitzen glätten“, die der
+Blockade plus gedrosselter Ladung entspricht. Reine Diagnose, steuert nichts.
+
+**Außentemperatur (Sektion 3, optional):** wird je Halbstunde in die `slot`-Zeile geschrieben, damit
+sich der Verbrauch nach Temperatur auswerten lässt. Steuert nichts.
 
 ## Logbuch und Diagnose-Aufzeichnung
 
@@ -67,6 +75,7 @@ schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.j
 | `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`), darunter die geplanten Zeiten `plan_voll_um`, `fallb_voll_um`, `untergrenze_um` und die reale Vollzeit `voll_real_um`; `halten_aktiv` markiert, ab wann die Untergrenze real hält |
 | `entscheidung` | nach jedem Lauf, der ein Register, den Modus oder einen Timer geändert hat | dasselbe, mit den Werten genau dieses Laufs |
 | `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox) und Wallbox-Ladung, Halte-Lage der Entlade-Untergrenze, Register |
+| `optimizer` | stündlich, nur mit Optimizer-Adresse | Fahrplan des evcc-Optimizers (Ladebeginn, Vollzeit, Nacht-Minimum, Ladestand-Verlauf) neben den Werten des Blueprints für denselben Lauf |
 
 Die `kennung` jeder Zeile ist die Lauf-Kennung aus dem Logbuch: Zur Meldung `[V6.6.0 · 08:30:02]`
 gehört die Zeile mit `"kennung": "08:30:02"` und `"art": "entscheidung"`. Ohne Aufzeichnung
@@ -82,12 +91,3 @@ rechnen ihn durch dieselbe Variablenkette.
 `pip install -r requirements-dev.txt && pytest -q` rendert die Variablenkette des Blueprints
 außerhalb von Home Assistant gegen synthetische Szenarien und gegen die aufgezeichneten Läufe.
 Arbeitsregeln, Prüfliste und Log-Konvention stehen in `CLAUDE.md`. Lizenz: Apache 2.0.
-
-**Zweitmeinung vom evcc-Optimizer:** `tools/optimizer_vergleich.py` baut aus aufgezeichneten Läufen
-die Eingaben des [evcc-Optimizers](https://github.com/evcc-io/optimizer) (Prognose je Slot, gelerntes
-Verbrauchsprofil, Kapazität, Ladestand, Grenzen, feste Preise), schickt sie an seine Schnittstelle
-(Add-on, Port 7050) und stellt seinen Fahrplan neben die Werte des Blueprints: Ladebeginn und
-Vollzeit gegen `plan_voll_um` / `fallb_voll_um`, das nächtliche Ladestand-Minimum gegen `f_soc`.
-Ohne Preise lädt der Optimizer so früh wie möglich; der Blueprint hält die Batterie absichtlich
-bis Sonnenuntergang minus Ladevorlauf zurück. Der Vergleich zeigt, wo die Planung, nicht die Daten
-auseinanderliegen — beide rechnen mit demselben Profil.

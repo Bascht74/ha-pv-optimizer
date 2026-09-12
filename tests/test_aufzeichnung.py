@@ -53,8 +53,10 @@ def test_aufzeichnung_erfasst_jeden_input(blueprint, tag):
     konfig_inputs = set(definitionen) - entity_inputs
 
     # Jeder belegte Entity-Input steht drin, leere (Pack 3) nicht.
-    belegt = {n for n in entity_inputs if h.inputs[n] != ""}
+    belegt = {n for n in entity_inputs if h.inputs[n] not in ("", [])}
     assert {e["input"] for e in aufz["entitaeten"]} == belegt
+    # Mehrfachauswahl: ein Eintrag je gewaehlter Entitaet
+    assert sum(1 for e in aufz["entitaeten"] if e["input"] == "wallbox_kwh_sensor") == len(h.inputs["wallbox_kwh_sensor"])
     # Jeder Konfigurationswert steht drin und ist der unveraenderte Input - nicht ein
     # spaeter umgerechneter Wert derselben Variablen.
     assert set(aufz["konfiguration"]) == konfig_inputs

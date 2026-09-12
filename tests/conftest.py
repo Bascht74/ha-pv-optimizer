@@ -58,7 +58,8 @@ def standard_inputs(blueprint: dict) -> dict:
         selector = definition.get("selector", {}) or {}
         if "entity" in selector:
             domain = selector["entity"].get("domain", "sensor")
-            inputs[name] = fake_entity(name, domain)
+            eid = fake_entity(name, domain)
+            inputs[name] = [eid] if selector["entity"].get("multiple") else eid
         else:
             inputs[name] = definition.get("default")
     return inputs
@@ -219,14 +220,25 @@ def szenario_aus_aufzeichnung(blueprint: dict, aufz: dict) -> Harness:
     definiert = input_definitionen(blueprint)
     inputs.update({k: v for k, v in aufz["konfiguration"].items() if k in definiert})
     aufgezeichnet = {e["input"] for e in aufz["entitaeten"] if e["input"] in definiert}
-    for name, d in input_definitionen(blueprint).items():
+    mehrfach = {name for name, d in definiert.items()
+                if (d.get("selector") or {}).get("entity", {}).get("multiple")}
+    for name, d in definiert.items():
         if "entity" in (d.get("selector") or {}) and name not in aufgezeichnet:
-            inputs[name] = ""
+            inputs[name] = [] if name in mehrfach else ""
+    # Mehrfachauswahl: je aufgezeichnetem Eintrag eine eigene Fake-Entitaet.
+    for name in mehrfach & aufgezeichnet:
+        basis = inputs[name][0]
+        inputs[name] = [basis if i == 0 else f"{basis}_{i}" for i, _ in enumerate(e for e in aufz["entitaeten"] if e["input"] == name)]
+    zaehler: dict[str, int] = {}
     tabelle: dict[str, Zustand] = {}
     for e in aufz["entitaeten"]:
         if e["last_changed"] is None or e["input"] not in definiert:
             continue  # Entitaet existierte nicht (states() -> 'unknown') oder Input entfernt
-        eid = inputs[e["input"]]
+        if e["input"] in mehrfach:
+            eid = inputs[e["input"]][zaehler.get(e["input"], 0)]
+            zaehler[e["input"]] = zaehler.get(e["input"], 0) + 1
+        else:
+            eid = inputs[e["input"]]
         tabelle[eid] = Zustand(eid, str(e["state"]), e.get("attributes") or {},
                                dt.datetime.fromisoformat(e["last_changed"]))
     tabelle["sun.sun"] = Zustand("sun.sun", aufz["sun"])

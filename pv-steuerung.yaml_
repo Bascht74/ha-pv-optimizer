@@ -10,11 +10,10 @@
 #           ist nur die Sicherung fuer den Fall, dass ein Lauf ausfaellt.
 #   2. binary_sensor "Ladesteuerung Eingriff Aktiv"
 #        -> die number-Entitaet des maximalen Ladestroms und deren Maximalwert
-#   3. Nur mit Wallbox: die evcc-Sensoren der Ladepunkte in den beiden
-#        template-Sensoren "Wallbox Ladeenergie gesamt" und "Autos offener
-#        Ladebedarf" (je Ladepunkt "Charge Total Import" / "Charge Remaining
-#        Energy"). Ohne Wallbox diese Sensoren und das Utility-Meter
-#        wallbox_halbstuendlich loeschen.
+#   3. Nur mit Wallbox: je Ladepunkt die Quelle des Utility-Meters
+#        wallbox_N_halbstuendlich (evcc "Charge Total Import"). Ohne Wallbox
+#        diese Zaehler loeschen. Der offene Ladebedarf braucht keinen Helfer,
+#        die evcc-Sensoren "Charge Remaining Energy" werden direkt ausgewaehlt.
 #           (derselbe Wert wie der Blueprint-Input "Maximaler Ladestrom").
 #
 # Alles andere ist standortunabhaengig. Nach dem Einbinden ueber packages:
@@ -160,11 +159,18 @@ utility_meter:
     cycle: daily
     net_consumption: false
     delta_values: false
-  # Nur mit Wallbox (Sektion 11): Ladeenergie der Autos je Halbstunde, vom
-  # Blueprint zusammen mit dem Hausverbrauch-Zaehler genullt. Ohne Wallbox loeschen.
-  wallbox_halbstuendlich:             # -> Wallbox-Ladung halbstuendlich (kWh)
-    source: sensor.wallbox_ladeenergie_gesamt
-    name: "Wallbox Halbstündlich"
+  # Nur mit Wallbox (Sektion 11): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
+  # vom Blueprint zusammen mit dem Hausverbrauch-Zaehler genullt. Beide im Feld
+  # "Wallbox-Ladung halbstuendlich" auswaehlen; ohne Wallbox loeschen.
+  wallbox_1_halbstuendlich:
+    source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 1 "Charge Total Import", kWh, steigend
+    name: "Wallbox 1 Halbstündlich"
+    cycle: daily
+    net_consumption: false
+    delta_values: false
+  wallbox_2_halbstuendlich:
+    source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 2 "Charge Total Import"
+    name: "Wallbox 2 Halbstündlich"
     cycle: daily
     net_consumption: false
     delta_values: false
@@ -197,25 +203,6 @@ template:
           {% set maximum = 350 %}                                        {# <HIER EINTRAGEN>: Maximaler Ladestrom #}
           {% set limit = states('number.<HIER EINTRAGEN>') | float(maximum) %}  {# Stellgroesse max. Ladestrom #}
           {{ limit < maximum and is_state('sun.sun', 'above_horizon') }}
-  # Nur mit Wallbox (Sektion 11): Summen ueber die Ladepunkte der evcc-Integration.
-  # "availability" haelt den Zaehler bei evcc-Ausfall auf unavailable statt auf 0,
-  # sonst zaehlte das Utility-Meter beim Wiederkommen den ganzen Stand als Verbrauch.
-  - sensor:
-      - name: "Wallbox Ladeenergie gesamt"    # -> Quelle des Utility-Meters wallbox_halbstuendlich
-        unique_id: "optimizer_sensor_wallbox_total"
-        unit_of_measurement: kWh
-        device_class: energy
-        state_class: total_increasing
-        # evcc: je Ladepunkt "Charge Total Import" (kWh), in availability und state dieselben Sensoren
-        availability: "{{ has_value('sensor.<HIER EINTRAGEN>') and has_value('sensor.<HIER EINTRAGEN>') }}"
-        state: "{{ (states('sensor.<HIER EINTRAGEN>') | float(0)) + (states('sensor.<HIER EINTRAGEN>') | float(0)) }}"
-      - name: "Autos offener Ladebedarf"      # -> Autos: offener Ladebedarf (kWh)
-        unique_id: "optimizer_sensor_ev_restbedarf"
-        unit_of_measurement: kWh
-        device_class: energy
-        # evcc: je Ladepunkt "Charge Remaining Energy" (kWh)
-        state: "{{ (states('sensor.<HIER EINTRAGEN>') | float(0)) + (states('sensor.<HIER EINTRAGEN>') | float(0)) }}"
-
 sensor:
   - platform: history_stats           # -> Diagnose: Eingriffsdauer heute
     name: "Ladesteuerung Eingriff Dauer Heute"
@@ -225,3 +212,14 @@ sensor:
     type: time
     start: "{{ now().replace(hour=0, minute=0, second=0) }}"
     end: "{{ now() }}"
+
+# Zweitmeinung des evcc-Optimizers (Feld "evcc-Optimizer: Adresse"). Adresse und
+# Anfrage kommen aus dem Blueprint, hier ist nichts einzutragen. Die Antwort landet
+# in der Diagnose-Aufzeichnung (art: optimizer).
+rest_command:
+  pv_optimizer_zweitmeinung:
+    url: "{{ url }}/optimize/charge-schedule"
+    method: post
+    content_type: "application/json"
+    payload: "{{ payload if payload is string else (payload | to_json) }}"
+    timeout: 120
