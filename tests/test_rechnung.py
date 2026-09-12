@@ -644,3 +644,26 @@ def test_optimizer_antwort_wird_in_zeiten_uebersetzt(blueprint, tag):
     # Keine Antwort (rest_command fehlgeschlagen): Zeile kommt trotzdem, mit leerem Fahrplan
     ctx2, zeile2 = _optimizer_zweig(blueprint, h, antwort=None)
     assert zeile2["optimizer"]["status"] == "keine Antwort" and zeile2["optimizer"]["voll_um"] is None
+
+
+def test_temperaturprofil_lernt_in_zehntelgrad(blueprint, tag):
+    from conftest import fake_entity
+    t = fake_entity("aussentemperatur_sensor", "sensor"); helfer = fake_entity("temperatur_json_text", "input_text")
+    # Leerer Helfer: Erstbelegung mit dem Messwert in allen 48 Slots
+    h = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={t: Zustand(t, "12.0")}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
+    assert ctx["tp_mess"] == 12.0 and ctx["tp_mittel"] is None
+    neu = ctx["tp_neu"] if isinstance(ctx["tp_neu"], list) else json.loads(ctx["tp_neu"])
+    assert neu == [120] * 48
+    # Bestehendes Profil 10.0 Grad, Messung 12.0 -> Slot 13:30-14:00 (Index 27): 100 x 6/7 + 120 / 7 = 102.9 -> 103
+    h2 = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={t: Zustand(t, "12.0"), helfer: Zustand(helfer, json.dumps([100] * 48))}, trigger_id="update_json")
+    ctx2 = _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))
+    neu2 = ctx2["tp_neu"] if isinstance(ctx2["tp_neu"], list) else json.loads(ctx2["tp_neu"])
+    assert neu2[27] == 103 and neu2[26] == 100 and len(json.dumps(neu2, separators=(",", ":"))) <= 255
+    assert ctx2["tp_mittel"] == 10.0
+    # Kaeltester Fall passt in den Helfer: 48 x "-123," = 240 Zeichen
+    assert len(json.dumps([-123] * 48, separators=(",", ":"))) <= 255
+    # Ohne Sensor: kein Wert, kein Schreiben
+    h3 = szenario(blueprint, zeit(tag, 14, 0), input_overrides={"aussentemperatur_sensor": ""}, trigger_id="update_json")
+    ctx3 = _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))
+    assert ctx3["tp_mess"] is None and "tp_neu" not in ctx3

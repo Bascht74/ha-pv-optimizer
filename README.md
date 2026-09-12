@@ -50,7 +50,9 @@ Einspeisung, nur das Verhältnis zählt) und die Strategie „Einspeisespitzen g
 Blockade plus gedrosselter Ladung entspricht. Reine Diagnose, steuert nichts.
 
 **Außentemperatur (Sektion 3, optional):** wird je Halbstunde in die `slot`-Zeile geschrieben, damit
-sich der Verbrauch nach Temperatur auswerten lässt. Steuert nichts.
+sich der Verbrauch nach Temperatur auswerten lässt. Mit dem optionalen Helfer „Temperaturprofil
+(JSON)“ lernt der Blueprint dazu die mittlere Temperatur je Halbstunde, Vorbereitung für eine
+spätere Temperaturkorrektur des Verbrauchsprofils. Beides steuert nichts.
 
 ## Logbuch und Diagnose-Aufzeichnung
 

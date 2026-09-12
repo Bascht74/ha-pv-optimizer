@@ -79,6 +79,10 @@ input_text:
     name: "Hausverbrauch Profil JSON"
     max: 255
     icon: mdi:code-json
+  temperatur_json_profil:             # -> Helfer: Temperaturprofil (JSON, optional)
+    name: "Temperatur Profil JSON"
+    max: 255
+    icon: mdi:thermometer-lines
   akku_100_prozent_tage:              # -> Helfer: 100-%-Tage-Liste
     # Muss ein input_text sein: ein Sensor-State kaeme als Python-Repr mit
     # einfachen Quotes zurueck, kein gueltiges JSON.

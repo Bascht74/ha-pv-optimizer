@@ -32,7 +32,9 @@ Logbuch-Meldung trägt ihn.
   full time, night minimum, SOC curve) next to the blueprint's plan values as an `optimizer`
   line. Diagnosis only, the run touches no register.
 - Optional outdoor-temperature sensor, recorded per half hour in the `slot` line so the
-  consumption can later be evaluated against temperature.
+  consumption can later be evaluated against temperature; with the optional helper
+  "Temperaturprofil (JSON)" the profile run also learns the mean temperature per half hour,
+  groundwork for a temperature correction of the consumption profile.
 
 ### Changed
 - The house-load profile is anchored to the running half hour: from 15 minutes into the

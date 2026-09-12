@@ -85,6 +85,7 @@ def test_alle_kernvariablen_sind_top_level(blueprint):
     "helper_offener_verlust", "helper_tare_charge", "helper_tare_discharge",
     "json_tracking_sensor", "hausverbrauch_json_text", "helper_logbook_dummy",
     "helper_timer_peak", "helper_timer_cooldown", "helper_timer_wp_anlauf", "helper_timer_wp_boost",
+    "temperatur_json_text",
 ])
 def test_package_liefert_die_helfer_die_der_blueprint_erwartet(blueprint, package, helfer_input):
     """Jeder Helfer-Input des Blueprints hat im Package eine Entitaet derselben Domain."""

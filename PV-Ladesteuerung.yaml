@@ -355,6 +355,12 @@ blueprint:
             input_text, in dem der Blueprint dein halbstündliches Verbrauchsprofil als JSON ablegt. Es lernt sich über die Zeit selbst an — anfangs ist es leer, das ist normal.
           default: ""
           selector: {"entity": {"domain": "input_text"}}
+        temperatur_json_text:
+          name: "Helfer: Temperaturprofil (JSON, optional)"
+          description: >-
+            input_text, in dem der Blueprint die mittlere Außentemperatur je Halbstunde ablegt (braucht den Außentemperatur-Sensor). Nur Aufzeichnung, Vorbereitung für eine Temperaturkorrektur des Verbrauchsprofils.
+          default: ""
+          selector: {"entity": {"domain": "input_text"}}
         eingriff_dauer_sensor:
           name: "Diagnose: Eingriffsdauer heute"
           description: >-
@@ -1214,6 +1220,36 @@ action:
               entity_id: "{{ wallbox_liste }}"
             data:
               value: "0"
+      # TEMPERATURPROFIL (nur Aufzeichnung): gleitender Mittelwert der Aussentemperatur
+      # je Halbstunde, gespeichert in ganzen Zehntelgrad, damit 48 Werte samt
+      # Minuszeichen in die 255 Zeichen des input_text passen.
+      - variables:
+          tp_sensor: !input aussentemperatur_sensor
+          tp_helfer: !input temperatur_json_text
+          tp_mess: "{{ (states(tp_sensor) | float(none)) if tp_sensor != '' else none }}"
+          tp_alt: >
+            {% set j = states(tp_helfer) if tp_helfer != '' else '' %}
+            {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
+            {% elif j is string and j | length > 20 and j[0] == '[' %}{{ j | from_json }}
+            {% else %}[]{% endif %}
+          tp_mittel: "{{ ((tp_alt[h_index] | float(0)) / 10) | round(1) if tp_alt | length == 48 else none }}"
+      - if:
+          - condition: template
+            value_template: "{{ tp_helfer != '' and tp_mess is not none }}"
+        then:
+          - variables:
+              tp_neu: >
+                {% set basis = tp_alt if tp_alt | length == 48 else [(tp_mess * 10) | round(0) | int] * 48 %}
+                {% set ns = namespace(l=[]) %}
+                {% for i in range(48) %}
+                  {% set ns.l = ns.l + [(((basis[i] | float(0)) * 6 / 7 + tp_mess * 10 / 7) | round(0) | int) if i == h_index else (basis[i] | float(0)) | round(0) | int] %}
+                {% endfor %}
+                {{ ns.l | to_json }}
+          - action: input_text.set_value
+            target:
+              entity_id: "{{ tp_helfer }}"
+            data:
+              value: "{{ tp_neu }}"
       # NETZBEZUG IM HALTEN aufsummieren, solange die Untergrenze haelt. Nachts
       # ohne PV ist der Slot-Verbrauch der Netzbezug; nur hier lesbar, weil der
       # Zaehler gleich genullt wird. Gedeckelt auf die zurueckgehaltene Energie:
@@ -1235,7 +1271,6 @@ action:
           hb_bms1: !input bms1_temp_min_sensor
           hb_bms2: !input bms2_temp_min_sensor
           hb_bms3: !input bms3_temp_min_sensor
-          hb_aussen: !input aussentemperatur_sensor
           hb_tou_ist: >
             {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
@@ -1262,7 +1297,7 @@ action:
               message: >-
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
                     'slot_kwh': last_half_hour_kwh | round(3), 'wallbox_kwh': wallbox_slot_kwh | round(3), 'halten': hb_lage,
-                    'aussen_temp': (states(hb_aussen) | float(none)) if hb_aussen != '' else none, 'soc': states(hb_soc) | float(0),
+                    'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': states(hb_soc) | float(0),
                     'tou_ist': hb_tou_ist, 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
                     'halten_bezug_kwh': (states(hb_helfer) | float(0)) if hb_helfer != '' else none} | to_json }}
       - if:
@@ -1301,6 +1336,7 @@ action:
       var_wallbox_kwh: !input wallbox_kwh_sensor
       var_ev_restbedarf: !input ev_restbedarf_sensor
       var_aussentemperatur: !input aussentemperatur_sensor
+      var_temperatur_json: !input temperatur_json_text
       var_optimizer_url: !input optimizer_url
       # Mehrfachauswahl liefert eine Liste, ein leeres Feld je nach HA-Version "" oder [].
       wallbox_liste: "{{ var_wallbox_kwh if (var_wallbox_kwh is iterable and var_wallbox_kwh is not string) else ([var_wallbox_kwh] if var_wallbox_kwh else []) }}"
@@ -2626,6 +2662,7 @@ action:
              ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
              ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
              ('aussentemperatur_sensor', var_aussentemperatur, {}),
+             ('temperatur_json_text', var_temperatur_json, {}),
              ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
              ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
              ('solcast_current_sensor', var_pv_forecast, {}),
