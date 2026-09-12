@@ -12,7 +12,7 @@ A single Home Assistant Blueprint (`PV-Ladesteuerung.yaml`) for PV, battery, and
 - `pv-steuerung.yaml_` — companion Home Assistant package, a *template*: every helper the blueprint's inputs expect (`input_boolean`, `input_select`, `input_number`, `input_text`, `timer`, `utility_meter`, the intervention `binary_sensor` and its `history_stats`). Two `<HIER EINTRAGEN>` placeholders must be filled per site. Not a blueprint itself, not auto-loaded by Home Assistant under this filename.
 - `tests/` — `ha_jinja.py` renders the blueprint's `variables:` chain outside Home Assistant; `test_struktur.py` holds the mechanical checks, `test_rechnung.py` the computation regressions, `test_aufzeichnung.py` the recording round-trip. `.github/workflows/check.yml` runs them.
 - `tests/fixtures/*.jsonl` — lines written by the blueprint's diagnostic recording (one per half-hour run, all input values incl. the Solcast forecast the run saw). `szenario_aus_aufzeichnung` in `conftest.py` rebuilds the run; every line is pushed through the chain by `test_aufzeichnung.py`. Setup is described in the package header.
-- `CHANGELOG.md` — one entry per published version, `Fixed`/`Added`/`Changed`/`Removed`.
+- `CHANGELOG.md` — Keep-a-Changelog format: `## [Vx.y.z] - YYYY-MM-DD` per version (date = merge day, which is the publish day), `### Added`/`Changed`/`Removed`/`Fixed` sub-headings in that order, link references to the release compare view at the bottom, an empty `## [Unreleased]` on top. The working version's section is written with the PR and carries the expected merge date; the release workflow copies that section as the release notes, so the heading must exist before publishing (`test_changelog_hat_sektion_der_arbeitsversion` enforces it).
 - `LICENSE` — Apache 2.0.
 
 ## Validating changes
@@ -56,13 +56,13 @@ Bumping rules:
 - Within one unpublished cycle, do not increment the same level twice (e.g. stay at 3.0.1, don't go to 3.0.2 for a second patch in the same cycle) — instead raise the *scheme level* if the accumulated changes warrant it (patch → minor if a real behavior change joins the cycle; → major on a breaking change).
 - Only bump again after being explicitly told a version was published — that starts a new cycle.
 - **Every merge of a blueprint change into `main` is published right away.** Instances import the blueprint straight from `main`, so a merged change is live before any tag exists; the release only records what already runs. Merge, then trigger the workflow with the version as input, in the same step.
-- **Publishing** = running the `Release` workflow (`.github/workflows/release.yml`, `workflow_dispatch` on `main`, triggerable through the GitHub API). It runs the tests, reads the version from `blueprint.name`, takes that version's section from `CHANGELOG.md` as the notes, and creates tag and GitHub release. It refuses when the tag exists or the section is missing. Tags cannot be pushed from a session (the credential gets 403 on `refs/tags/*`), so never try; use the workflow.
+- **Publishing** = running the `Release` workflow (`.github/workflows/release.yml`, `workflow_dispatch` on `main`, triggerable through the GitHub API). It runs the tests, reads the version from `blueprint.name`, takes that version's section from `CHANGELOG.md` (heading `## [Vx.y.z] - date`) as the notes, and creates tag and GitHub release. It refuses when the tag exists or the section is missing. Tags cannot be pushed from a session (the credential gets 403 on `refs/tags/*`), so never try; use the workflow.
 - Don't delete existing comments unasked when bumping — but don't add new history either (see "Code comments and input text").
 - **Never bump the version without being asked.**
 
 ## Release notes
 
-Every code change ships with an English, GitHub-style release note (`Fixed` / `Added` / `Changed` / `Removed` sections, no markdown headers) as a delta since the last *published* version — not just the current turn's changes. Only real changes belong in it; no separate "Notes" section, and no line explaining something that wasn't changed.
+Every code change ships with an English, GitHub-style release note (`Fixed` / `Added` / `Changed` / `Removed` sections; plain in the PR body, as `###` sub-headings in `CHANGELOG.md`) as a delta since the last *published* version — not just the current turn's changes. Only real changes belong in it; no separate "Notes" section, and no line explaining something that wasn't changed.
 
 **Give the reason, not the case history.** A release note and a commit message should say *what* changed and *why the mechanism needed changing* — in general terms. No dates, no measured values, no incident reports. Write the rule that now holds instead ("a brief cloud gap can lift the export over the threshold long enough to pass a 30 s debounce"). Two to four lines per change; the evidence lives in the conversation and in memory, not in the repository.
 

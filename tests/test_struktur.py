@@ -196,3 +196,18 @@ def test_jede_logbuch_meldung_beginnt_mit_der_lauf_kennung(blueprint):
     assert len(meldungen) > 30
     falsch = [m[:60] for m in meldungen if not m.lstrip().startswith("{{ log_kopf }} ")]
     assert falsch == [], falsch
+
+
+def test_changelog_hat_sektion_der_arbeitsversion(blueprint):
+    """Keep-a-Changelog-Kopf mit Datum fuer die Version im Blueprint; der Release-Workflow kopiert genau diese Sektion."""
+    import re
+    from pathlib import Path
+    version = next(s["variables"]["bp_version"] for s in blueprint["action"]
+                   if isinstance(s, dict) and "bp_version" in s.get("variables", {})).strip("[]")
+    text = Path(__file__).resolve().parents[1].joinpath("CHANGELOG.md").read_text(encoding="utf-8")
+    kopf = re.search(rf"^## \[{re.escape(version)}\] - \d{{4}}-\d{{2}}-\d{{2}}$", text, flags=re.M)
+    assert kopf, f"CHANGELOG.md hat keine Sektion '## [{version}] - YYYY-MM-DD'"
+    sektion = text[kopf.end():]
+    sektion = sektion[:sektion.find("\n## ")] if "\n## " in sektion else sektion
+    assert re.search(r"^### (Added|Changed|Deprecated|Removed|Fixed|Security)$", sektion, flags=re.M), "Sektion ohne Kategorie"
+    assert f"[{version}]: https://github.com/" in text, "Link-Referenz der Version fehlt"
