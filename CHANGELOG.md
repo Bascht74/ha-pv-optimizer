@@ -3,6 +3,23 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.4.0
+
+Added
+- The storage-loss counter now also books the night side of the discharge planning:
+  when the floor held the battery at night and the battery still reached full the next
+  day, the smallest of grid import during the hold, export since reaching full and the
+  energy held back is booked as loss, with all three values in the message. When the
+  battery did not reach full, a diagnosis names the floor and the shortfall instead.
+  Needs the new optional helper "Entlade-Bilanz (JSON)"; without it nothing changes.
+- The diagnostic recording carries the computed decision values of every run
+  (discharge floor and its candidates, hold state, charge targets, Fall B, blockade,
+  reality check), so a day can be analysed from the file alone.
+
+Changed
+- The recording is written after the variable chain instead of in the middle of it,
+  which is what makes the decision values available to it.
+
 ## V6.3.0
 
 Changed

@@ -383,3 +383,40 @@ def test_horizont_beginnt_vor_sonnenaufgang_mit_heute(blueprint, tag):
     abend = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
     assert [t["name"] for t in abend["prognose_tage"]] == ["morgen", "Tag 3", "Tag 4"]
     assert abend["f_soc"] == 85
+
+
+# --------------------------------------------------------------------------
+# Entlade-Bilanz: Verlust nur, was nachts bezogen UND tags eingespeist wurde
+# --------------------------------------------------------------------------
+def _bilanz(text, export_heute):
+    from conftest import fake_entity
+    e1 = fake_entity("helper_entlade_bilanz", "input_text"); e2 = fake_entity("grid_export_kwh_heute", "sensor")
+    return {e1: Zustand(e1, text), e2: Zustand(e2, str(export_heute))}
+
+
+@pytest.mark.parametrize("bilanz, export_heute, verlust, grund", [
+    ('{"halten_kwh": 3.0, "grenze": 65, "export_voll": 10.0}', 12.5, 2.5, "Einspeisung seit Vollwerden deckelt"),
+    ('{"halten_kwh": 1.0, "grenze": 65, "export_voll": 10.0}', 12.5, 1.0, "Netzbezug im Halten deckelt"),
+    ('{"halten_kwh": 3.0, "grenze": 65, "export_voll": 12.5}', 12.5, 0.0, "voll geworden, danach keine Einspeisung"),
+    ('{"halten_kwh": 0.0, "grenze": 65, "export_voll": 10.0}', 12.5, 0.0, "kein Verbrauch nach Erreichen der Grenze"),
+    ('{"halten_kwh": 20.0, "grenze": 25, "export_voll": 0.0}', 30.0, 1.6075, "zurueckgehaltene Energie (25-20) % x 32.15 kWh deckelt"),
+    ('{"halten_kwh": 3.0, "grenze": 65}', 12.5, 0.0, "nie voll geworden: kein Einspeisestand, kein Verlust"),
+    ('{}', 12.5, 0.0, "Helfer leer"),
+])
+def test_halten_verlust_dreifacher_deckel(blueprint, tag, bilanz, export_heute, verlust, grund):
+    ctx = szenario(blueprint, zeit(tag, 20, 0), zustands_overrides=_bilanz(bilanz, export_heute)).auswerten(bis="halten_verlust_kwh")
+    assert ctx["halten_verlust_kwh"] == pytest.approx(verlust, abs=0.001), grund
+
+
+@pytest.mark.parametrize("stunde, soc, tou, erwartet", [
+    (3, 65.0, 65, True),    # nachts, Ladestand an der Grenze, Grenze ueber dem Minimum
+    (3, 66.0, 65, True),    # ein Punkt darueber zaehlt noch als Halten
+    (3, 70.0, 65, False),   # Batterie entlaedt noch
+    (3, 20.0, 20, False),   # allgemeines Minimum ist keine Planungsgrenze
+    (12, 65.0, 65, False),  # tagsueber kein Halten
+])
+def test_halten_aktiv_nur_wenn_die_grenze_schlagend_ist(blueprint, tag, stunde, soc, tou, erwartet):
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), str(tou)) for i in range(1, 7)}
+    ctx = szenario(blueprint, zeit(tag, stunde, 0), soc=soc, zustands_overrides=tous).auswerten(bis="halten_aktiv")
+    assert ctx["halten_aktiv"] is erwartet

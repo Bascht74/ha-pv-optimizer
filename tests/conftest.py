@@ -172,6 +172,7 @@ def szenario(
         z("helper_batterie_heute_voll", "off"), z("helper_blockade_beendet", "off"),
         z("json_tracking_sensor", "[]"),
         z("helper_max_soc_heute", soc), z("speicherverlust_gesamt", 0.0), z("helper_offener_verlust", 0.0),
+        z("helper_entlade_bilanz", "{}"),
         z("helper_tare_charge", 990.0), z("helper_tare_discharge", 790.0),
         z("schatten_bms_sensor", soc, {"raw_drift_soc": soc}),
         z("eingriff_dauer_sensor", 0.0),

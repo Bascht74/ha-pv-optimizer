@@ -77,6 +77,12 @@ input_text:
     name: "Akku 100 Prozent Tage"
     max: 255
     icon: mdi:calendar-check
+  entlade_bilanz:                     # -> Helfer: Entlade-Bilanz (JSON)
+    # Nachtbilanz der Entlade-Planung: Netzbezug, solange die Untergrenze hielt,
+    # und Einspeisestand beim Vollwerden. Abends verbucht und geleert.
+    name: "Entlade-Bilanz JSON"
+    max: 255
+    icon: mdi:code-json
 
 input_number:
   max_soc_heute:                      # -> Helfer: hoechster SOC heute (%)
