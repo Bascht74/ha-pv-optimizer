@@ -10,6 +10,24 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.7.0] - 2026-09-12
+
+### Added
+- Charging messages say when the battery is expected to be full: the time-based charge
+  and the morning blockade name the end of the planned charge window, Fall B and peak
+  shaving the moment the free capacity is covered at full current. The sunset message
+  and the discharge-floor message say when the floor is expected to be reached, from
+  the consumption profile. The recording carries the estimates of every run next to the
+  real times: the moment the battery became full and, per half hour, whether the floor
+  holds, so plan and outcome can be compared from the file.
+
+### Changed
+- The house-load profile is anchored to the running half hour: from 15 minutes into the
+  slot the measured consumption is projected to the full slot (capped at three times the
+  profile) and fades into the profile over four slots. Demand, Fall B, blockade and the
+  expected export peak use this live profile; the daily total for the discharge planning
+  and the profile learning stay on the pure profile.
+
 ## [V6.6.0] - 2026-09-12
 
 ### Added
@@ -549,7 +567,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...HEAD
+[V6.7.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...V6.7.0
 [V6.6.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.5.0...V6.6.0
 [V6.5.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.4.0...V6.5.0
 [V6.4.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.3.0...V6.4.0

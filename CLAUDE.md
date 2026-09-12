@@ -59,6 +59,7 @@ Bumping rules:
 - **Publishing** = running the `Release` workflow (`.github/workflows/release.yml`, `workflow_dispatch` on `main`, triggerable through the GitHub API). It runs the tests, reads the version from `blueprint.name`, takes that version's section from `CHANGELOG.md` (heading `## [Vx.y.z] - date`) as the notes, and creates tag and GitHub release. It refuses when the tag exists or the section is missing. Tags cannot be pushed from a session (the credential gets 403 on `refs/tags/*`), so never try; use the workflow.
 - Don't delete existing comments unasked when bumping — but don't add new history either (see "Code comments and input text").
 - **Never bump the version without being asked.**
+- **Release procedure, in this order** (the tests and the release workflow print reminders for the CHANGELOG part): 1. bump `blueprint.name` and `bp_version`; 2. write the `## [Vx.y.z] - YYYY-MM-DD` section in `CHANGELOG.md` with `###` categories, add the `[Vx.y.z]` compare link and move `[Unreleased]`; 3. `pytest -q`; 4. PR with the template checklist filled; 5. merge; 6. trigger `Release` with the version; 7. tell the user to re-import the blueprint and name any per-site work.
 
 ## Release notes
 

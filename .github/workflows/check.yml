@@ -15,3 +15,5 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
       - run: pytest -q
+      - name: Erinnerung CHANGELOG (Sektion der Arbeitsversion mit Datum, Keep a Changelog)
+        run: pytest -q tests/test_struktur.py -k changelog

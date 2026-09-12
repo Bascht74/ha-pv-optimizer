@@ -486,3 +486,57 @@ def test_trend_zusatz_nur_wenn_der_realitaets_check_kuerzt(blueprint, tag):
         assert ctx["trend_log_addon"].startswith("Realitäts-Check kürzt")
     else:
         assert ctx["trend_log_addon"] == ""
+
+
+# --------------------------------------------------------------------------
+# Live-Anschluss des Verbrauchsprofils
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("minute, slot_kwh, erwartet_slot0", [
+    (20, 0.6, 0.57),    # 0.6 kWh in 20 min -> 0.9 kWh/Slot, gedeckelt auf 3 x 0.19 = 0.57
+    (20, 0.2, 0.30),    # 0.2 kWh in 20 min -> 0.30 kWh/Slot, unter dem Deckel
+    (10, 0.6, None),    # unter 15 Minuten: kein Anschluss, reines Profil
+])
+def test_verbrauchsprofil_live_anschluss(blueprint, tag, minute, slot_kwh, erwartet_slot0):
+    ctx = szenario(blueprint, zeit(tag, 10, minute), hausverbrauch_slot_kwh=slot_kwh).auswerten()
+    idx = 20
+    rein = ctx["json_profil"]; live = ctx["json_profil_live"]
+    if erwartet_slot0 is None:
+        assert ctx["haus_live_kwh"] == -1 and live == rein
+    else:
+        assert live[idx] == pytest.approx(erwartet_slot0, abs=0.005)
+        # Auslauf ueber vier Slots: Gewichte 1, 3/4, 1/2, 1/4, danach reines Profil
+        for k, w in ((1, 0.75), (2, 0.5), (3, 0.25)):
+            assert live[idx + k] == pytest.approx(rein[idx + k] * (1 - w) + erwartet_slot0 * w, abs=0.005)
+        assert live[idx + 4] == rein[idx + 4] and live[idx - 1] == rein[idx - 1]
+        assert ctx["verbrauch_tag_kwh"] == pytest.approx(sum(map(float, rein)), abs=0.001)
+
+
+# --------------------------------------------------------------------------
+# Voraussichtliche Zeiten: voll (Plan / voller Strom) und Untergrenze erreicht
+# --------------------------------------------------------------------------
+def test_untergrenze_um_aus_dem_profil(blueprint, tag):
+    """21:00, Ladestand 60 %, Register 50 %: 10 % von 32.15 kWh = 3.215 kWh / 0.19 kWh je Slot = 16.9 Slots -> 05:27."""
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "50") for i in range(1, 7)}
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert ctx["untergrenze_um"] == "um 05:27 Uhr"
+    assert ctx["untergrenze_text"] == "Untergrenze 50 % voraussichtlich um 05:27 Uhr erreicht."
+    # Ladestand an der Grenze, dunkle Folgetage -> halten bei 50, nichts zu schreiben, Grenze ist jetzt erreicht
+    tief = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert tief["untergrenze_wirksam"] == 50 and tief["untergrenze_um"] == "jetzt" and tief["untergrenze_text"] == ""
+    # Register 50, Plan liegt darunter und wird geschrieben: die Schaetzung gilt fuer die neue Grenze
+    neu = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert neu["tou_schreiben"] is True and neu["f_soc"] < 50
+    assert neu["untergrenze_wirksam"] == neu["f_soc"] and neu["untergrenze_um"].startswith("um 0")
+    tag_ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert tag_ctx["untergrenze_um"] == "" and tag_ctx["untergrenze_text"] == "", "tags keine Schaetzung"
+
+
+def test_voll_um_liegt_im_ladefenster(blueprint, tag):
+    """Plan-Vollzeit = Fensterende minus Vorlauf; bei vollem Strom frueher oder gleich, beide vor Sonnenuntergang."""
+    import re as _re
+    ctx = szenario(blueprint, zeit(tag, 10, 0), soc=85.0).auswerten(bis="fallb_voll_um")
+    for k in ("plan_voll_um", "fallb_voll_um"):
+        assert _re.fullmatch(r"um \d\d:\d\d Uhr", ctx[k]), ctx[k]
+    plan = ctx["plan_voll_um"][3:8]; voll = ctx["fallb_voll_um"][3:8]
+    assert "10:00" < voll <= plan <= "21:00", (voll, plan)
