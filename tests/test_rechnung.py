@@ -672,12 +672,12 @@ def test_optimizer_anfrage_aus_dem_lauf(blueprint, tag):
     tag_ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
     tctx, _ = _optimizer_zweig(blueprint, tag_ctx, antwort={"status": 200, "content": {}})
     ta = tctx["opt_anfrage"]; ta = ta if isinstance(ta, dict) else json.loads(ta)
-    a = tctx["blend_p50_anteil"]; ab = tctx["pv_abschlag"]
+    anteil = tctx["blend_p50_anteil"]; ab = tctx["pv_abschlag"]
     fc = {s_["period_start"] if isinstance(s_["period_start"], str) else s_["period_start"].isoformat(): s_
           for s_ in tag_ctx.states.tabelle[tag_ctx.inputs["solcast_heute_sensor"]].attributes["detailedForecast"]}
     start = tag_ctx.jetzt.replace(minute=0, second=0, microsecond=0)
     slot = fc[(start + dt.timedelta(minutes=30)).isoformat()]
-    erwartet = (slot["pv_estimate"] * a + slot["pv_estimate10"] * (1 - a)) * 0.5 * ab * 1000
+    erwartet = (slot["pv_estimate"] * anteil + slot["pv_estimate10"] * (1 - anteil)) * 0.5 * ab * 1000
     assert ta["time_series"]["ft"][1] == pytest.approx(erwartet, abs=1)
     assert ts["p_N"][0] == pytest.approx(0.0003) and ts["p_E"][0] == pytest.approx(0.00008)
     assert a["strategy"]["charging_strategy"] == "attenuate_feedin_peaks"
