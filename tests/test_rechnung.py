@@ -145,20 +145,6 @@ def test_json_profil_fallback_bei_leerem_helfer(blueprint, tag):
 # --------------------------------------------------------------------------
 # Hausverbrauchs-Hinweis in Prio 7 und Fall B
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("minute, slot_kwh, meldet", [
-    (25, 0.80, True),   # Backofen: 0,80 kWh nach 25 min gegen 0,19 x 25/30 = 0,16 erwartet
-    (25, 0.13, False),  # ruhiges Haus
-    (25, 0.27, False),  # Blip: 1,7x, aber nur 0,11 kWh ueber Profil
-    (5, 0.20, False),   # zu frueh im Slot - Rauschen
-])
-def test_haus_log_addon_schwellen(blueprint, tag, minute, slot_kwh, meldet):
-    h = szenario(blueprint, zeit(tag, 17, minute), hausverbrauch_slot_kwh=slot_kwh)
-    text = h.auswerten(bis="haus_log_addon")["haus_log_addon"]
-    assert (text != "") is meldet, repr(text)
-    if meldet:
-        assert "Hausverbrauch im laufenden Zeitfenster" in text
-
-
 # --------------------------------------------------------------------------
 # Fall B
 # --------------------------------------------------------------------------
@@ -474,3 +460,28 @@ def test_slot_zeile_der_aufzeichnung(blueprint, tag):
     assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
     assert zeile["halten_bezug_kwh"] is None and "entitaeten" not in zeile
     assert ctx["hb_lage"] is True and ctx["hb_haelt"] is False
+
+
+# --------------------------------------------------------------------------
+# Aufzeichnung: Entscheidungszeile nur, wenn der Lauf etwas geschrieben hat
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("geaendert_vor_s, erwartet", [
+    (-30, True),    # Ladestrom-Register 30 s nach Laufstart geaendert -> Entscheidung
+    (600, False),   # zuletzt 10 min vor dem Lauf geaendert -> nichts passiert
+])
+def test_entscheidung_im_lauf_ueber_last_changed(blueprint, tag, geaendert_vor_s, erwartet):
+    import datetime as _dt
+    from conftest import fake_entity
+    jetzt = zeit(tag, 10, 0)
+    e = fake_entity("wr_max_charge_current", "number")
+    h = szenario(blueprint, jetzt, zustands_overrides={e: Zustand(e, "36", {}, last_changed=jetzt - _dt.timedelta(seconds=geaendert_vor_s))})
+    ctx = h.auswerten(bis="entscheidung_im_lauf")
+    assert ctx["entscheidung_im_lauf"] is erwartet
+
+
+def test_trend_zusatz_nur_wenn_der_realitaets_check_kuerzt(blueprint, tag):
+    ctx = szenario(blueprint, zeit(tag, 10, 0)).auswerten(bis="trend_log_addon")
+    if ctx["trend_aktiv"] and ctx["pv_abschlag"] < 1.0:
+        assert ctx["trend_log_addon"].startswith("Realitäts-Check kürzt")
+    else:
+        assert ctx["trend_log_addon"] == ""

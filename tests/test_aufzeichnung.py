@@ -23,6 +23,7 @@ def _block(blueprint: dict) -> dict:
 
 def aufzeichnen(harness: Harness, blueprint: dict) -> dict:
     """Rendert die Meldung des Blocks so, wie der Blueprint sie schreiben wuerde."""
+    harness.states.tabelle.setdefault(AUFZEICHNUNG_ENTITY, Zustand(AUFZEICHNUNG_ENTITY, "unknown"))
     ctx = harness.auswerten()
     nachricht = None
     for schritt in _block(blueprint)["then"]:
@@ -239,3 +240,16 @@ def test_aufzeichnung_rendert_fuer_echte_laeufe(blueprint, datei):
     for z in zs[::12]:
         aufz = aufzeichnen(szenario_aus_aufzeichnung(blueprint, z), blueprint)
         assert "rechnung" in aufz and "f_soc" in aufz["rechnung"], z["zeit"]
+
+
+def test_zeilenarten_lauf_und_entscheidung(blueprint, tag):
+    """Die Halbstundenzeile traegt art=lauf; die Entscheidungszeile am Laufende dieselben Daten mit art=entscheidung."""
+    h = szenario(blueprint, zeit(tag, 10, 0))
+    h.states.tabelle[AUFZEICHNUNG_ENTITY] = Zustand(AUFZEICHNUNG_ENTITY, "unknown")
+    ctx = h.auswerten()
+    tick = aufzeichnen(h, blueprint)
+    assert tick["art"] == "lauf" and "rechnung" in tick and "entitaeten" in tick
+    ende = next(s for s in reversed(blueprint["action"]) if isinstance(s, dict) and "if" in s and "entscheidung_im_lauf" in str(s["if"]))
+    nachricht = h._aufloesen(ende["then"][0]["data"]["message"], ctx)
+    zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
+    assert zeile["art"] == "entscheidung" and zeile["rechnung"] == tick["rechnung"]

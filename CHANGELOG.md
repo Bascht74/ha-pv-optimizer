@@ -3,6 +3,23 @@
 All notable changes to `PV-Ladesteuerung.yaml`. The version tag appears in
 `blueprint.name` and in `bp_version`, and every log message carries it.
 
+## V6.5.0
+
+Added
+- The diagnostic recording gets a line for every run that changed a register, mode or
+  timer (art: entscheidung), in addition to the half-hourly line (art: lauf). A logbook
+  decision can thus always be recomputed from the values of the very run that made it,
+  not from the nearest half hour.
+- Without the recording entity a daily diagnosis at sunset says that today's decisions
+  cannot be recomputed and where the setup is described.
+
+Changed
+- Logbook messages name the action, the decision with both compared values and the two
+  or three figures that carry it; the full derivation moved to the recording. The five
+  longest messages (time-based charge, Fall B, morning blockade, peak shaving, discharge
+  floor) shrink to roughly a third. The forecast-blend add-on appears only when the
+  reality check actually cuts the forecast, the house-load add-on is gone.
+
 ## V6.4.0
 
 Added
