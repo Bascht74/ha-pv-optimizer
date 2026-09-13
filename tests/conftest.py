@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -194,13 +195,15 @@ def szenario(
 # --------------------------------------------------------------------------
 def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kwh: float,
                   v3: float = 0.7, v4: float = 0.5, eta: float = 0.92, ziel: float = 90.0,
-                  reserve: float = 50.0, minimum: float = 20.0, soc: float | None = None) -> dict:
+                  reserve: float = 50.0, minimum: float = 20.0, soc: float | None = None,
+                  notstrom_pct: float = 0.0) -> dict:
     """
     tage: Kalenderdatum -> 48 Halbstundenwerte kWh (bereits P50/P10-gemischt).
     Rollierend ab dem laufenden Slot 144 Halbstunden: Ueberschuss je Slot mal Gewicht
     nach Vorlauf (1.0 / v3 / v4 fuer < 24 h / < 48 h / darueber), Defizite voll;
     Summe bei null geklemmt (Defizite vor einer Sonnenstrecke traegt die Untergrenze);
     B* = groesstes Zwischenmaximum; Start = erster Slot mit mehr als 0.01 kWh Summe.
+    notstrom_pct: Notstromreserve in Prozent (reserve_referenz), auf 5 % aufgerundet als Mindestwert.
     """
     start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0)
     kum = best = 0.0
@@ -217,11 +220,34 @@ def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kw
         if start is None and kum > 0.01:
             start = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=30 * g)
     b_pct = best / kap_kwh * 100
-    f_roh = max(ziel - b_pct, min(reserve, 100 - b_pct))
+    f_roh = max(ziel - b_pct, min(reserve, 100 - b_pct), math.ceil(notstrom_pct / 5) * 5)
     plan = (f_roh // 5) * 5
     wert = plan if (soc is None or f_roh <= soc) else float(int(soc))
     f_soc = int(min(max(wert, minimum), 100))
     return {"b_kwh": best, "b_pct": b_pct, "f_roh": f_roh, "f_soc": f_soc, "start": start}
+
+
+def reserve_referenz(jetzt: dt.datetime, tage10: dict, profil_wh: list[float], *, kap_kwh: float,
+                     shutdown: float = 10.0, eigen_kwh: float = 0.045, eta_pv: float = 0.92,
+                     eta_ac: float = 0.95) -> dict:
+    """
+    tage10: Kalenderdatum -> 48 P10-Halbstundenwerte kWh. Ab dem laufenden Slot 96 Halbstunden:
+    Last (Profil in Wh plus Eigenverbrauch, durch den Entlade-Wirkungsgrad) minus P10-PV mal
+    Ladewirkungsgrad, kumuliert ohne Klemmung; Reserve = Abschalt-Ladestand plus groesstes
+    Zwischenmaximum, bis = Ende des Slots, in dem es erreicht wird.
+    """
+    start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0)
+    kum = best = 0.0
+    bis = None
+    for k in range(96):
+        g = start_idx + k
+        d, idx = divmod(g, 48)
+        pv = tage10.get(jetzt.date() + dt.timedelta(days=d), [0.0] * 48)[idx]
+        kum += (profil_wh[idx] / 1000 + eigen_kwh) / eta_ac - pv * eta_pv
+        if kum > best:
+            best = kum
+            bis = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=30 * (g + 1))
+    return {"kwh": best, "pct": shutdown + best / kap_kwh * 100, "bis": bis}
 
 
 def tage_aus_szenario(jetzt: dt.datetime, prognose_tage_kwh, *, forecast: list[dict] | None = None,

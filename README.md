@@ -71,8 +71,13 @@ Außenfühler bestimmen lässt. Alles steuert nichts.
 Leistung; das Package bildet daraus per Riemann-Sensor die Energie und zählt sie je Halbstunde. Der
 Blueprint schreibt den Wert in die `slot`-Zeile und lernt im Helfer „Notstromprofil (JSON)“ das
 Profil in Wattstunden je Halbstunde, ein Startwert aus der Historie kann eingetragen werden. Hängt nur
-ein Teil des Hauses am Notstromausgang, zählt nur dieser Teil. Noch reine Aufzeichnung, Grundlage für
-eine Notstromreserve.
+ein Teil des Hauses am Notstromausgang, zählt nur dieser Teil. Mit zugewiesenem Profil hält die
+Entlade-Planung eine **Notstromreserve**: Ohne Netz gelten die ToU-Programme nicht, der Deye entlädt im
+Inselbetrieb bis zu seinem „Battery Shutdown SOC“ (Sektion 2, optional; leer: 10 %). Die Untergrenze
+liegt deshalb nie unter diesem Ladestand plus dem größten Defizit der Notstromlast (samt Eigenverbrauch
+des Wechselrichters) gegen die P10-Prognose der nächsten 48 Stunden, auf volle 5 % aufgerundet. Die
+Meldung der Untergrenze nennt Reserve und Defizit, die Aufzeichnung trägt `reserve_kwh`, `reserve_pct`
+und `reserve_bis`.
 
 ## Logbuch und Diagnose-Aufzeichnung
 

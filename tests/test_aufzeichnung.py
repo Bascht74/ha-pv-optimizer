@@ -5,6 +5,7 @@ sich aus ihr derselbe Lauf wieder aufbauen laesst - sonst taugt sie nicht als Fi
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
@@ -158,6 +159,43 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     nacht = [float(_eintrag(z, "battery_soc_sensor")["state"]) for z in zs
              if "2026-09-06T21:00" <= z["zeit"][:16] <= "2026-09-07T08:00"]
     assert min(nacht) == 80
+
+
+def test_notstromreserve_an_einem_echten_septemberabend(blueprint):
+    """
+    Derselbe Abend, das ganze Haus als Notstromlast (Hausprofil in Wh): 21 Halbstunden von 21:00 bis
+    07:30 mit 3670 Wh Profil + 21 x 45 Wh Eigenverbrauch = 4615 Wh / 0,95 = 4,858 kWh, minus P10-PV
+    der Slots 06:00-07:30 (0,138 kWh x 0,92 = 0,127) = 4,73 kWh bis 07:30, danach liegt PV10 ueber der Last.
+    Abschalt-Ladestand 5 %: 5 + 4,73 / 32,15 = 19,7 % -> 20 %, gleich dem Minimum; mit 9 %: 23,7 % -> 25 %.
+    """
+    from conftest import fake_entity, reserve_referenz, tage_aus_szenario
+    zs = _zeilen_von("dachterrasse_2026-09-04_bis_11.jsonl")
+    abend = next(z for z in zs if z["zeit"].startswith("2026-09-06T21:00"))
+    morgen = next(z for z in zs if z["zeit"].startswith("2026-09-07T00:00"))
+    p50, p10 = _tagesprognose(morgen)
+    wh = [round(float(v) * 1000) for v in json.loads(_eintrag(abend, "hausverbrauch_json_text")["state"])]
+    assert sum(wh[42:] + wh[:15]) == 3670
+
+    def lauf(shutdown):
+        h = szenario_aus_aufzeichnung(blueprint, abend)
+        for name, state, attrs in (("solcast_morgen_sensor", str(p50), {"estimate10": p10}),
+                                   ("notstrom_json_text", json.dumps(wh), {}), ("wr_shutdown_soc", str(shutdown), {})):
+            eid = fake_entity(name, "sensor" if name.endswith("sensor") else ("number" if name.startswith("wr_") else "input_text"))
+            h.inputs[name] = eid
+            h.states.tabelle[eid] = Zustand(eid, state, attrs)
+        return h.auswerten(bis="tou_schreiben")
+
+    ctx = lauf(5)
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(4.73, abs=0.01)
+    assert ctx["reserve_plan"]["bis"].endswith("2026-09-07T07:30:00+02:00")
+    assert ctx["reserve_pct"] == pytest.approx(19.7, abs=0.05) and ctx["reserve_5"] == 20 and ctx["f_soc"] == 20
+    jetzt = dt.datetime.fromisoformat(abend["zeit"])
+    fc = _eintrag(abend, "solcast_heute_sensor")["attributes"]["detailedForecast"]
+    ref = reserve_referenz(jetzt, tage_aus_szenario(jetzt, (p50,), forecast=fc, p10_anteil=p10 / p50, a=0.0),
+                           wh, kap_kwh=ctx["batterie_kapazitaet"], shutdown=5)
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_plan"]["bis"] == ref["bis"].isoformat()
+    neun = lauf(9)
+    assert neun["reserve_5"] == 25 and neun["f_roh"] == 25 and neun["f_soc"] == 25 and neun["tou_schreiben"] is False
 
 
 # --------------------------------------------------------------------------

@@ -10,6 +10,22 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.10.0] - 2026-09-13
+
+### Added
+- Backup reserve for sites with a backup circuit: without grid the inverter ignores the
+  time-of-use floor and discharges to its shutdown SOC, so the discharge floor never drops
+  below that SOC plus the largest cumulative deficit of the backup load (learned profile plus
+  inverter self-consumption, after discharge losses) against the P10 forecast over the next
+  48 hours. PV surplus in between reduces the later deficit; the result is rounded up to the
+  5 % step. Active only while a backup profile is assigned.
+- Optional input for the inverter's "Battery Shutdown SOC" entity as the base of the reserve;
+  without it the reserve assumes 10 %.
+
+### Changed
+- The half-hour forecast table keeps a pure P10 series per day next to the blend, and the
+  floor message and the recording carry the reserve, its deficit and the moment it peaks.
+
 ## [V6.9.0] - 2026-09-13
 
 ### Added
@@ -630,7 +646,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...HEAD
+[V6.10.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...V6.10.0
 [V6.9.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...V6.9.0
 [V6.8.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...V6.8.0
 [V6.7.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...V6.7.0

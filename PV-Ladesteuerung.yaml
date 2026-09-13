@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.9.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.10.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -132,6 +132,12 @@ blueprint:
           name: "ToU-Programm 6: Min-SOC (%)"
           description: >-
             Die number-Entität für Zeitprogramm 6. Siehe Programm 1 — der Blueprint setzt immer alle sechs Programme gemeinsam auf denselben Wert.
+          default: ""
+          selector: {"entity": {"domain": "number"}}
+        wr_shutdown_soc:
+          name: "Abschalt-Ladestand bei Netzausfall (%, optional)"
+          description: >-
+            Die Entität „Battery Shutdown SOC“ des Wechselrichters. Bei Netzausfall gelten die ToU-Programme nicht, er entlädt bis zu diesem Ladestand; zusammen mit dem Notstromprofil ergibt sich daraus die Notstromreserve. Leer: 10 %.
           default: ""
           selector: {"entity": {"domain": "number"}}
         min_ampere:
@@ -904,7 +910,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.9.0]"
+      bp_version: "[V6.10.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -933,6 +939,10 @@ action:
       # Zellausgleich gilt als faellig, wenn die Batterie so viele Tage nicht voll war.
       lade_wirkungsgrad: 0.92
       zellausgleich_nach_tagen: 9
+      # Notstromreserve: Entladeverluste auf die Last am Notstromausgang, dazu der
+      # Eigenverbrauch des Wechselrichters je Halbstunde (rund 90 W).
+      entlade_wirkungsgrad: 0.95
+      wr_eigenverbrauch_kwh: 0.045
       # Die Untergrenze wird erst geschrieben, wenn der Ladestand ihr so nahe
       # kommt (Prozentpunkte): Ein Lauf Vorlauf reicht, darueber wirkt sie nicht.
       tou_schreib_vorlauf: 2
@@ -1443,6 +1453,7 @@ action:
       var_temperatur_json: !input temperatur_json_text
       var_notstrom_kwh: !input notstrom_utility_sensor
       var_notstrom_json: !input notstrom_json_text
+      var_wr_shutdown_soc: !input wr_shutdown_soc
       var_wetter_prognose: !input wetter_prognose_entities
       var_optimizer_url: !input optimizer_url
       # Mehrfachauswahl liefert eine Liste, ein leeres Feld je nach HA-Version "" oder [].
@@ -2635,49 +2646,58 @@ action:
         {% else %}{% set liste = [] %}{% endif %}
         {{ 0 if liste | length == 0 else (now().date() - (liste | max | as_datetime).date()).days }}
       zellausgleich_faellig: "{{ tage_seit_voll > zellausgleich_nach_tagen }}"
-      # Je Solcast-Tagessensor die 48 Halbstunden (kWh, P50/P10-Blend), nach Kalenderdatum
-      # abgelegt: der Datumsabgleich faengt den Sensorwechsel um Mitternacht ab, der bis
-      # zu 30 Minuten nach dem Datum kommen kann. Ohne Slot-Attribut wird die Tagessumme
-      # in der heutigen Tagesform verteilt.
+      # Je Solcast-Tagessensor die 48 Halbstunden (kWh) nach Kalenderdatum: k als
+      # P50/P10-Blend fuer die Planung, k10 als reines P10 fuer die Notstromreserve.
+      # Der Datumsabgleich faengt den Sensorwechsel um Mitternacht ab, der bis zu 30
+      # Minuten nach dem Datum kommen kann. Ohne Slot-Attribut wird die Tagessumme in
+      # der heutigen Tagesform verteilt.
       solcast_slot_tage: >
         {% set a = nacht_p50_anteil | float(0.5) %}
-        {% set ns = namespace(tage=[], form=[0.0] * 48, summe=0.0, d0=none) %}
+        {% set ns = namespace(tage=[], form=[0.0] * 48, summe=0.0, form10=[0.0] * 48, summe10=0.0, d0=none) %}
         {% set fc = state_attr(var_solcast_heute, 'detailedForecast') if var_solcast_heute != '' else none %}
         {% if fc %}
-          {% set nsf = namespace(k=[0.0] * 48, datum=none) %}
+          {% set nsf = namespace(k=[0.0] * 48, k10=[0.0] * 48, datum=none) %}
           {% for s in fc %}
             {% set t = as_datetime(s.period_start) | as_local %}
             {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
-            {% set kwh = ((s.pv_estimate | float(0)) * a + (s.get('pv_estimate10', s.pv_estimate) | float(0)) * (1 - a)) * 0.5 %}
+            {% set p10 = (s.get('pv_estimate10', s.pv_estimate) | float(0)) * 0.5 %}
+            {% set kwh = (s.pv_estimate | float(0)) * 0.5 * a + p10 * (1 - a) %}
             {% set nsf.k = nsf.k[:idx] + [kwh] + nsf.k[idx + 1:] %}
+            {% set nsf.k10 = nsf.k10[:idx] + [p10] + nsf.k10[idx + 1:] %}
             {% if loop.first %}{% set nsf.datum = t.date() %}{% endif %}
           {% endfor %}
           {% set ns.form = nsf.k %}{% set ns.summe = nsf.k | sum %}{% set ns.d0 = nsf.datum %}
-          {% set ns.tage = ns.tage + [{'datum': nsf.datum.isoformat(), 'k': nsf.k, 'summe': ns.summe, 'slots': true}] %}
+          {% set ns.form10 = nsf.k10 %}{% set ns.summe10 = nsf.k10 | sum %}
+          {% set ns.tage = ns.tage + [{'datum': nsf.datum.isoformat(), 'k': nsf.k, 'k10': nsf.k10, 'summe': ns.summe, 'slots': true}] %}
         {% endif %}
         {# Ohne heutige Form: Tagessumme gleichmaessig auf 08:00-18:00 verteilen. #}
         {% if ns.summe <= 0 %}{% set ns.form = [0.0] * 16 + [0.05] * 20 + [0.0] * 12 %}{% set ns.summe = 1.0 %}{% endif %}
+        {% if ns.summe10 <= 0 %}{% set ns.form10 = ns.form %}{% set ns.summe10 = ns.summe %}{% endif %}
         {% set basis = ns.d0 if ns.d0 is not none else now().date() %}
         {% for e in [var_solcast_morgen, var_solcast_tag3, var_solcast_tag4] %}
           {% if e != '' and states(e) not in ['unknown', 'unavailable', ''] %}
             {% set p50 = states(e) | float(0) %}
-            {% set summe = p50 * a + (state_attr(e, 'estimate10') | float(p50)) * (1 - a) %}
+            {% set p10 = state_attr(e, 'estimate10') | float(p50) %}
+            {% set summe = p50 * a + p10 * (1 - a) %}
             {% set fcd = state_attr(e, 'detailedForecast') %}
-            {% set nsd = namespace(k=[0.0] * 48, datum=basis + timedelta(days=loop.index), slots=false) %}
+            {% set nsd = namespace(k=[0.0] * 48, k10=[0.0] * 48, datum=basis + timedelta(days=loop.index), slots=false) %}
             {% if fcd %}
               {% for s in fcd %}
                 {% set t = as_datetime(s.period_start) | as_local %}
                 {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
-                {% set kwh = ((s.pv_estimate | float(0)) * a + (s.get('pv_estimate10', s.pv_estimate) | float(0)) * (1 - a)) * 0.5 %}
+                {% set s10 = (s.get('pv_estimate10', s.pv_estimate) | float(0)) * 0.5 %}
+                {% set kwh = (s.pv_estimate | float(0)) * 0.5 * a + s10 * (1 - a) %}
                 {% set nsd.k = nsd.k[:idx] + [kwh] + nsd.k[idx + 1:] %}
+                {% set nsd.k10 = nsd.k10[:idx] + [s10] + nsd.k10[idx + 1:] %}
                 {% if loop.first %}{% set nsd.datum = t.date() %}{% set nsd.slots = true %}{% endif %}
               {% endfor %}
             {% else %}
-              {% set nsm = namespace(l=[]) %}
+              {% set nsm = namespace(l=[], l10=[]) %}
               {% for v in ns.form %}{% set nsm.l = nsm.l + [v * summe / ns.summe] %}{% endfor %}
-              {% set nsd.k = nsm.l %}
+              {% for v in ns.form10 %}{% set nsm.l10 = nsm.l10 + [v * p10 / ns.summe10] %}{% endfor %}
+              {% set nsd.k = nsm.l %}{% set nsd.k10 = nsm.l10 %}
             {% endif %}
-            {% set ns.tage = ns.tage + [{'datum': nsd.datum.isoformat(), 'k': nsd.k, 'summe': summe, 'slots': nsd.slots}] %}
+            {% set ns.tage = ns.tage + [{'datum': nsd.datum.isoformat(), 'k': nsd.k, 'k10': nsd.k10, 'summe': summe, 'slots': nsd.slots}] %}
           {% endif %}
         {% endfor %}
         {{ ns.tage }}
@@ -2732,8 +2752,40 @@ action:
       ziel_soc_eff: "{{ 100 if (zellausgleich_faellig and b_stern_pct > 0) else (ziel_soc | float(90)) }}"
       f_ziel: "{{ ziel_soc_eff - b_stern_pct }}"
       f_spill: "{{ 100 - b_stern_pct }}"
-      # Mindest-Ladestand gilt, ausser er erzwaenge Einspeisung; nie tiefer als das Ziel zulaesst.
-      f_roh: "{{ [f_ziel, [reserve_soc | float(50), f_spill] | min] | max }}"
+      # NOTSTROMRESERVE: Ohne Netz gelten die ToU-Programme nicht, der Wechselrichter
+      # entlaedt im Inselbetrieb bis zum Abschalt-Ladestand. Die Reserve ist dieser
+      # Ladestand plus das groesste kumulierte Defizit der Notstromlast (mit Eigen-
+      # verbrauch, durch den Entlade-Wirkungsgrad) gegen die P10-Prognose ueber 48 h;
+      # PV-Ueberschuss dazwischen laedt die Batterie und mindert das spaetere Defizit.
+      notstrom_profil: >
+        {% set j = states(var_notstrom_json) if var_notstrom_json != '' else '' %}
+        {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
+        {% elif j is string and j | length > 20 and j[0] == '[' and (j | from_json) | length == 48 %}{{ j | from_json }}
+        {% else %}{{ none }}{% endif %}
+      reserve_plan: >
+        {% set ns = namespace(kum=0.0, best=0.0, bis=none) %}
+        {% if notstrom_profil is not none %}
+          {% set jetzt = now() %}
+          {% set start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0) %}
+          {% set mitternacht = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) %}
+          {% for k in range(96) %}
+            {% set g = start_idx + k %}{% set d = g // 48 %}{% set idx = g % 48 %}
+            {% set datum = (jetzt.date() + timedelta(days=d)).isoformat() %}
+            {% set tag = solcast_slot_tage | selectattr('datum', 'eq', datum) | list %}
+            {% set pv10 = (tag[0].k10[idx] | float(0)) if tag | length > 0 else 0.0 %}
+            {% set last = (notstrom_profil[idx] | float(0)) / 1000 + wr_eigenverbrauch_kwh %}
+            {% set ns.kum = ns.kum + last / entlade_wirkungsgrad - pv10 * lade_wirkungsgrad %}
+            {% if ns.kum > ns.best %}{% set ns.best = ns.kum %}{% set ns.bis = (mitternacht + timedelta(minutes=30 * (g + 1))).isoformat() %}{% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ {'kwh': ns.best | round(3), 'bis': ns.bis} }}
+      shutdown_soc: "{{ (states(var_wr_shutdown_soc) | float(10)) if var_wr_shutdown_soc != '' else 10 }}"
+      reserve_pct: "{{ ((shutdown_soc + reserve_plan.kwh / batterie_kapazitaet * 100) | round(3)) if (notstrom_profil is not none and batterie_kapazitaet > 0) else 0 }}"
+      # Auf volle 5 % aufgerundet: ein Sicherheitsnetz rundet nicht nach unten.
+      reserve_5: "{{ ((reserve_pct / 5) | round(0, 'ceil')) * 5 }}"
+      # Mindest-Ladestand gilt, ausser er erzwaenge Einspeisung; nie tiefer als das Ziel
+      # zulaesst und nie unter der Notstromreserve.
+      f_roh: "{{ [f_ziel, [reserve_soc | float(50), f_spill] | min, reserve_5] | max }}"
       # Ueber dem Ladestand heisst halten; unter dem Minimum nie. Der Planwert
       # wird auf 5 % abgerundet - die Prognose traegt keine feinere Aufloesung,
       # und abrunden ist die Richtung, die eher entlaedt als einspeist.
@@ -2862,6 +2914,7 @@ action:
              ('temperatur_json_text', var_temperatur_json, {}),
              ('notstrom_utility_sensor', var_notstrom_kwh, {}),
              ('notstrom_json_text', var_notstrom_json, {}),
+             ('wr_shutdown_soc', var_wr_shutdown_soc, {}),
              ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
              ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
              ('solcast_current_sensor', var_pv_forecast, {}),
@@ -2964,6 +3017,7 @@ action:
               'prognose_tage': prognose_tage, 'plan_start': plan_start, 'b_stern_pct': b_stern_pct | round(1),
               'ziel_soc_eff': ziel_soc_eff, 'zellausgleich_faellig': zellausgleich_faellig, 'tage_seit_voll': tage_seit_voll,
               'f_ziel': f_ziel | round(1), 'f_spill': f_spill | round(1), 'f_roh': f_roh | round(1), 'f_soc': f_soc,
+              'shutdown_soc': shutdown_soc, 'reserve_kwh': reserve_plan.kwh, 'reserve_bis': reserve_plan.bis, 'reserve_pct': reserve_pct,
               'tou_ist': tou_ist, 'tou_schreiben': tou_schreiben,
               'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
               'export_heute_kwh': export_heute_kwh, 'halten_verlust_kwh': halten_verlust_kwh | round(2),
@@ -3141,7 +3195,7 @@ action:
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
-            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem der beiden anderen, auf volle 5 % abgerundet.
+            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
             {% if plan_start and prognose_tage %}Auffüllung ab {{ (plan_start | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %}{% else %}Kein Überschuss in den nächsten 72 Stunden{% endif %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
             {%- if zellausgleich_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
           entity_id: !input helper_logbook_dummy
