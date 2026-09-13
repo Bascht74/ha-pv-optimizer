@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from conftest import plan_referenz, tage_aus_szenario, prognose_gleichmaessig, szenario, zeit
+from conftest import plan_referenz, reserve_referenz, tage_aus_szenario, prognose_gleichmaessig, szenario, zeit
 from ha_jinja import Zustand
 
 # Gleichmaessige Prognose: 2,0 kW P50, 1,4 kW P10 -> Blend je Slot
@@ -823,6 +823,99 @@ def test_notstromprofil_lernt_in_wattstunden(blueprint, tag):
     h3 = szenario(blueprint, zeit(tag, 14, 0), input_overrides={"notstrom_utility_sensor": ""}, trigger_id="update_json")
     ctx3 = _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))
     assert ctx3["np_kwh"] is None and "np_neu" not in ctx3
+
+
+# --------------------------------------------------------------------------
+# Notstromreserve: Untergrenze nie unter Abschalt-Ladestand plus Defizit am Notstromausgang
+# --------------------------------------------------------------------------
+def _notstrom_zustaende(profil_wh, shutdown=None):
+    from conftest import fake_entity
+    helfer = fake_entity("notstrom_json_text", "input_text")
+    zs = {helfer: Zustand(helfer, json.dumps(profil_wh))}
+    if shutdown is not None:
+        e = fake_entity("wr_shutdown_soc", "number")
+        zs[e] = Zustand(e, str(shutdown))
+    return zs
+
+
+def test_notstromreserve_hebt_die_untergrenze(blueprint, tag):
+    """
+    21:00, gleichmaessige Prognose 2 kW 08:00-18:00 (P10 0,7), morgen/Tag 3/Tag 4 je 40 kWh: Die Planung
+    fuellt die Batterie morgen ueber 100 % (B* 33 kWh = 102,6 %), Ziel- und Einspeise-Kandidat sind negativ,
+    Untergrenze ohne Reserve = Minimum 20 %. Notstromlast 200 Wh je Halbstunde: 22 Nacht-Slots bis 08:00
+    x (0,2 + 0,045) / 0,95 = 5,674 kWh, dann PV10 2,0 kWh x 0,92 > Last -> Defizit endet 08:00.
+    Reserve = 10 % + 5,674 / 32,15 = 27,6 % -> aufgerundet 30 %; mit Abschalt-Ladestand 5 %: 22,6 % -> 25 %.
+    """
+    fc = prognose_gleichmaessig(tag, 2.0)
+    basis = dict(forecast=fc, prognose_tage_kwh=(40, 40, 40), soc=85.0)
+    ohne = szenario(blueprint, zeit(tag, 21, 0), **basis).auswerten(bis="f_soc")
+    assert ohne["notstrom_profil"] is None and ohne["reserve_pct"] == 0 and ohne["reserve_plan"]["kwh"] == 0
+    assert ohne["f_ziel"] < 0 and ohne["f_soc"] == 20
+
+    mit = szenario(blueprint, zeit(tag, 21, 0), zustands_overrides=_notstrom_zustaende([200] * 48), **basis).auswerten(bis="f_soc")
+    assert mit["shutdown_soc"] == 10, "ohne Entitaet 10 %"
+    assert mit["reserve_plan"]["kwh"] == pytest.approx(5.674, abs=0.001)
+    assert mit["reserve_plan"]["bis"].endswith(f"{(tag + dt.timedelta(days=1)).isoformat()}T08:00:00+02:00")
+    assert mit["reserve_pct"] == pytest.approx(27.648, abs=0.01)
+    assert mit["reserve_5"] == 30 and mit["f_roh"] == 30 and mit["f_soc"] == 30
+    ref = reserve_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (40, 40, 40), forecast=fc, a=0.0),
+                           [200] * 48, kap_kwh=mit["batterie_kapazitaet"])
+    assert mit["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and mit["reserve_pct"] == pytest.approx(ref["pct"], abs=0.01)
+    assert mit["reserve_plan"]["bis"] == ref["bis"].isoformat()
+    plan = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (40, 40, 40), forecast=fc), [0.19] * 48,
+                         kap_kwh=mit["batterie_kapazitaet"], notstrom_pct=ref["pct"], soc=85.0)
+    assert plan["f_soc"] == 30
+
+    fuenf = szenario(blueprint, zeit(tag, 21, 0), zustands_overrides=_notstrom_zustaende([200] * 48, shutdown=5), **basis).auswerten(bis="f_soc")
+    assert fuenf["shutdown_soc"] == 5 and fuenf["reserve_pct"] == pytest.approx(22.648, abs=0.01) and fuenf["f_soc"] == 25
+
+
+def test_notstromreserve_ueberschuss_dazwischen_mindert_das_spaetere_defizit(blueprint, tag):
+    """
+    Wie oben (Last 0,258 kWh je Slot nach Verlusten), aber Tag 3 dunkel (P10 2 kWh = 0,1 kWh je Slot):
+    Mit 40 kWh morgen ueberwiegt der Ueberschuss (20 x (1,84 - 0,258) = 31,6 kWh) alles Spaetere, das Maximum
+    bleibt die erste Nacht. Mit 14 kWh morgen (P10 0,7 kWh je Slot x 0,92 = 0,644) bleibt der Ueberschuss bei
+    20 x 0,386 = 7,72 kWh; zweite Nacht 28 x 0,258 = 7,22, Tag 3 20 x (0,258 - 0,092) = 3,32, Abend 6 x 0,258 = 1,55:
+    5,674 - 7,72 + 7,22 + 3,32 + 1,55 = 10,04 kWh, Maximum am Horizontende (Tag 3, 21:00).
+    Last 700 Wh je Slot (0,784 kWh) liegt ueber jedem P10-Slot: 96 x 0,784 - 20 x 0,644 - 20 x 0,092 = 60,56 kWh.
+    """
+    fc = prognose_gleichmaessig(tag, 2.0)
+    j = zeit(tag, 21, 0)
+    faelle = {"hell": ((40, 2, 40), 200, 5.674, 1, "08:00"),
+              "dunkel": ((14, 2, 40), 200, 5.674 - 20 * (0.7 * 0.92 - 0.245 / 0.95) + 28 * 0.245 / 0.95 + 20 * (0.245 / 0.95 - 0.1 * 0.92) + 6 * 0.245 / 0.95, 2, "21:00"),
+              "schwer": ((14, 2, 40), 700, 96 * 0.745 / 0.95 - 20 * 0.7 * 0.92 - 20 * 0.1 * 0.92, 2, "21:00")}
+    for name, (prog, wh, kwh, tage, uhr) in faelle.items():
+        ctx = szenario(blueprint, j, forecast=fc, prognose_tage_kwh=prog, soc=85.0,
+                       zustands_overrides=_notstrom_zustaende([wh] * 48)).auswerten(bis="halten_fall")
+        assert ctx["reserve_plan"]["kwh"] == pytest.approx(kwh, abs=0.01), name
+        assert ctx["reserve_plan"]["bis"].endswith(f"{(tag + dt.timedelta(days=tage)).isoformat()}T{uhr}:00+02:00"), name
+        ref = reserve_referenz(j, tage_aus_szenario(j, prog, forecast=fc, a=0.0), [wh] * 48, kap_kwh=ctx["batterie_kapazitaet"])
+        assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_plan"]["bis"] == ref["bis"].isoformat(), name
+    # Reserve ueber dem Ladestand: halten am Ladestand, wie bei der Planung
+    assert ctx["f_roh"] > 85 and ctx["halten_fall"] is True and ctx["f_soc"] == 85
+
+
+def test_notstromreserve_am_tag_ohne_defizit(blueprint, tag):
+    """12:00, heller Tag: PV10 0,7 kWh x 0,92 = 0,644 > 0,258 je Slot bis 18:00, Ueberschuss 12 x 0,386 = 4,63 kWh;
+    die Nacht (28 Slots x 0,258 = 7,22 kWh) uebersteigt ihn: Reserve 2,59 kWh bis 08:00. Mit 40 kWh P10 heute
+    (2,0 kWh je Slot) bleibt die Summe negativ: Reserve 0, bis leer, Untergrenze = Abschalt-Ladestand."""
+    fc = prognose_gleichmaessig(tag, 2.0)
+    zs = _notstrom_zustaende([200] * 48)
+    ctx = szenario(blueprint, zeit(tag, 12, 0), forecast=fc, prognose_tage_kwh=(40, 40, 40), soc=70.0, zustands_overrides=zs).auswerten(bis="f_soc")
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(28 * 0.245 / 0.95 - 12 * (0.7 * 0.92 - 0.245 / 0.95), abs=0.001)
+    hell = prognose_gleichmaessig(tag, 2.0 / 0.7)  # P10 = 2,0 kW
+    ctx2 = szenario(blueprint, zeit(tag, 12, 0), forecast=hell, prognose_tage_kwh=(40, 40, 40), soc=70.0, zustands_overrides=zs).auswerten(bis="f_soc")
+    assert ctx2["reserve_plan"]["kwh"] == 0 and ctx2["reserve_plan"]["bis"] is None and ctx2["reserve_pct"] == 10 and ctx2["reserve_5"] == 10
+
+
+def test_notstromprofil_nur_mit_48_werten(blueprint, tag):
+    from conftest import fake_entity
+    helfer = fake_entity("notstrom_json_text", "input_text")
+    for wert in ("", "unknown", json.dumps([50] * 47), "[]"):
+        ctx = szenario(blueprint, zeit(tag, 21, 0), zustands_overrides={helfer: Zustand(helfer, wert)}).auswerten(bis="reserve_pct")
+        assert ctx["notstrom_profil"] is None and ctx["reserve_pct"] == 0, wert
+    ohne = szenario(blueprint, zeit(tag, 21, 0), input_overrides={"notstrom_json_text": ""}).auswerten(bis="reserve_pct")
+    assert ohne["notstrom_profil"] is None and ohne["reserve_pct"] == 0
 
 
 def test_temperaturprofil_lernt_in_zehntelgrad(blueprint, tag):
