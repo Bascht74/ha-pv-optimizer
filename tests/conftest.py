@@ -190,6 +190,57 @@ def szenario(
 
 
 # --------------------------------------------------------------------------
+# Referenzrechnung der Entlade-Planung (unabhaengig vom Jinja des Blueprints)
+# --------------------------------------------------------------------------
+def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kwh: float,
+                  v3: float = 0.7, v4: float = 0.5, eta: float = 0.92, ziel: float = 90.0,
+                  reserve: float = 50.0, minimum: float = 20.0, soc: float | None = None) -> dict:
+    """
+    tage: Kalenderdatum -> 48 Halbstundenwerte kWh (bereits P50/P10-gemischt).
+    Rollierend ab dem laufenden Slot 144 Halbstunden: Ueberschuss je Slot mal Gewicht
+    nach Vorlauf (1.0 / v3 / v4 fuer < 24 h / < 48 h / darueber), Defizite voll;
+    Summe bei null geklemmt (Defizite vor einer Sonnenstrecke traegt die Untergrenze);
+    B* = groesstes Zwischenmaximum; Start = erster Slot mit mehr als 0.01 kWh Summe.
+    """
+    start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0)
+    kum = best = 0.0
+    start = None
+    for k in range(144):
+        g = start_idx + k
+        d, idx = divmod(g, 48)
+        pv = tage.get(jetzt.date() + dt.timedelta(days=d), [0.0] * 48)[idx]
+        w = 1.0 if k < 48 else (v3 if k < 96 else v4)
+        n = pv * eta - profil[idx]
+        b = n * w if n > 0 else n
+        kum = max(kum + b, 0.0)
+        best = max(best, kum)
+        if start is None and kum > 0.01:
+            start = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=30 * g)
+    b_pct = best / kap_kwh * 100
+    f_roh = max(ziel - b_pct, min(reserve, 100 - b_pct))
+    plan = (f_roh // 5) * 5
+    wert = plan if (soc is None or f_roh <= soc) else float(int(soc))
+    f_soc = int(min(max(wert, minimum), 100))
+    return {"b_kwh": best, "b_pct": b_pct, "f_roh": f_roh, "f_soc": f_soc, "start": start}
+
+
+def tage_aus_szenario(jetzt: dt.datetime, prognose_tage_kwh, *, forecast: list[dict] | None = None,
+                      p10_anteil: float = 1.0, a: float = 0.5) -> dict:
+    """Dieselben Eingaben wie szenario(): heute aus dem Slot-Array, Folgetage in heutiger Form."""
+    forecast = forecast if forecast is not None else prognose_real(jetzt.date())
+    heute = [0.0] * 48
+    for s in forecast:
+        t = s["period_start"] if isinstance(s["period_start"], dt.datetime) else dt.datetime.fromisoformat(s["period_start"])
+        heute[t.hour * 2 + (1 if t.minute >= 30 else 0)] += (s["pv_estimate"] * a + s["pv_estimate10"] * (1 - a)) * 0.5
+    summe = sum(heute)
+    tage = {jetzt.date(): heute}
+    for i, kwh in enumerate(prognose_tage_kwh or (), start=1):
+        blend = kwh * a + round(kwh * p10_anteil, 3) * (1 - a)
+        tage[jetzt.date() + dt.timedelta(days=i)] = [v * blend / summe for v in heute] if summe > 0 else [0.0] * 48
+    return tage
+
+
+# --------------------------------------------------------------------------
 # Echte Laeufe aus der Diagnose-Aufzeichnung
 # --------------------------------------------------------------------------
 def ist_aufzeichnung(zeile: str) -> bool:

@@ -10,6 +10,32 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.9.0] - 2026-09-13
+
+### Added
+- Optional inputs for the backup circuit: a half-hourly energy meter of the load on the
+  inverter's UPS output and a helper in which the blueprint learns its 48-slot profile
+  (watt-hours per half hour). Both are recorded per half hour; nothing is controlled yet.
+  The profile is the basis for a backup reserve in a later version.
+
+### Changed
+- The discharge floor is planned per half hour over a rolling 72-hour window instead of per
+  calendar day. The forecast trust applies by lead time (under 24 hours in full, then the two
+  configured factors) to each slot's surplus, deficits count in full, and the running sum is
+  clamped at zero: deficits before a sunny stretch are carried by the floor itself and do not
+  reduce the refill. Nothing switches at midnight or at sunrise any more; the two trust
+  inputs now read "24 to 48 hours" and "48 to 72 hours ahead".
+- The refill is measured up to the largest intermediate maximum, so the target is reached
+  at the end of the best sun day rather than at midnight after the evening consumption.
+- Tomorrow, day 3 and day 4 use their own Solcast half-hour arrays when the sensors carry
+  `detailedForecast`; otherwise the day total is spread in today's shape. Days are matched by
+  the date of their array, so a late sensor roll-over at midnight no longer shifts the horizon.
+- The recording carries the half-hour arrays of the three following days (state, P10 and
+  start only) and the first counted slot of the plan.
+- README names the inverter setting "Battery Operation Mode: Voltage" as a reason for a
+  floor that is not honoured: in that mode the SOC fields of the time-of-use programs are
+  ignored.
+
 ## [V6.8.0] - 2026-09-12
 
 ### Added
@@ -604,7 +630,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...HEAD
+[V6.9.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...V6.9.0
 [V6.8.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...V6.8.0
 [V6.7.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.6.0...V6.7.0
 [V6.6.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.5.0...V6.6.0

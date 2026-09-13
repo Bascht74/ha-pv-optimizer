@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from conftest import prognose_gleichmaessig, szenario, zeit
+from conftest import plan_referenz, tage_aus_szenario, prognose_gleichmaessig, szenario, zeit
 from ha_jinja import Zustand
 
 # Gleichmaessige Prognose: 2,0 kW P50, 1,4 kW P10 -> Blend je Slot
@@ -256,38 +256,50 @@ def _tou(soc):
 
 
 @pytest.mark.parametrize("lage, prognose, b_stern, f_soc", [
-    ("Sommer: 40/40/40 kWh, alles wuerde einspeisen -> Minimum", (40, 40, 40), 166.7, 20),
-    ("Herbst: 15/5/5 kWh, morgen +4,68 kWh = 14,6 % -> 90 - 14,6 = 75,4 -> 75", (15, 5, 5), 14.56, 75),
+    ("Sommer: 40/40/40 kWh, alles wuerde einspeisen -> Minimum", (40, 40, 40), 192.7, 20),
+    ("Herbst: 15/5/5 kWh, morgen 10,1 kWh Zwischenmaximum = 31,4 % -> 90 - 31,4 = 58,6 -> 55", (15, 5, 5), 31.4, 55),
     ("Dezember: 2/2/2 kWh, keine Auffuellung -> halten beim Ladestand 85", (2, 2, 2), 0.0, 85),
-    ("Strecke: 3/30/30 kWh, Sonnentage ab uebermorgen geben die Nacht davor frei: 63,5 -> 60", (3, 30, 30), 26.5, 60),
+    ("Strecke: 3/30/30 kWh, Sonnentage ab uebermorgen (0,7 / 0,5) geben die Nacht davor frei: 27,7 -> 25", (3, 30, 30), 72.3, 25),
 ])
 def test_entlade_untergrenze(blueprint, tag, lage, prognose, b_stern, f_soc):
+    """
+    Von Hand (Herbst): morgen in heutiger Form skaliert auf 15 kWh, Profil 0,19 kWh je Slot.
+    Ueberschuss-Slots 09:00-17:30 (18 Slots): 14,70 kWh x 0,92 - 18 x 0,19 = 10,10 kWh Zwischenmaximum
+    am Ende des PV-Tags; Tag 3/4 mit 5 kWh bleiben negativ. 10,10 / 32,15 = 31,4 %.
+    Strecke: morgen ohne Ueberschuss, Tag 3 (0,7) 14,38 kWh, dessen Abend/Nacht -6,4 kWh,
+    Tag 4 (0,5) +15,3 kWh bis zum Abend -> 23,24 kWh am Ende von Tag 4 = 72,3 %.
+    """
     ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=prognose).auswerten(bis="tou_schreiben")
     assert ctx["entlade_aktiv"] is True
     assert ctx["b_stern_pct"] == pytest.approx(b_stern, abs=0.1), lage
     assert ctx["f_soc"] == f_soc, lage
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), prognose), [0.19] * 48,
+                        kap_kwh=ctx["batterie_kapazitaet"], soc=85.0)
+    assert ctx["b_stern_pct"] == pytest.approx(ref["b_pct"], abs=0.01) and ctx["f_soc"] == ref["f_soc"], lage
 
 
 @pytest.mark.parametrize("soc, tou, erwartet", [
     (95.0, 20, False),   # weit ueber der Grenze: Register bleibt, bis es wirken kann
-    (78.0, 20, False),   # 78 > 75 + 2: noch ein Lauf zu frueh
-    (77.0, 20, True),    # 77 <= 75 + 2: jetzt schreiben, die Nacht laeuft auf die Grenze zu
-    (77.0, 72, False),   # Aenderung 75 - 72 = 3 < 5 Punkte
+    (63.0, 20, False),   # 63 > 60 + 2: noch ein Lauf zu frueh
+    (62.0, 20, True),    # 62 <= 60 + 2: jetzt schreiben, die Nacht laeuft auf die Grenze zu
+    (62.0, 57, False),   # Aenderung 60 - 57 = 3 < 5 Punkte
 ])
 def test_untergrenze_wird_nur_beim_annaehern_geschrieben(blueprint, tag, soc, tou, erwartet):
-    h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(15, 5, 5), zustands_overrides=_tou(tou))
+    """Morgen 14 kWh: Rohwert 61,4 -> Plan 60; der Ladestand liegt in allen Faellen ueber dem Rohwert (kein Halten)."""
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(14, 5, 5), zustands_overrides=_tou(tou))
     ctx = h.auswerten(bis="tou_schreiben")
-    assert ctx["f_soc"] == 75
+    assert 61 < ctx["f_roh"] < 62 and ctx["halten_fall"] is False
+    assert ctx["f_soc"] == 60
     assert ctx["tou_schreiben"] is erwartet
 
 
 def test_untergrenze_liegt_auf_dem_5er_raster(blueprint, tag):
-    """Strecke: Ziel-Kandidat 63,5 -> abgerundet 60, nicht 63; Halten bleibt am Ladestand (83), nicht 80."""
+    """Strecke: Einspeise-Kandidat 27,7 -> abgerundet 25, nicht 27; Halten bleibt am Ladestand (83), nicht 80."""
     ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(3, 30, 30)).auswerten(bis="f_soc")
-    assert ctx["f_roh"] == pytest.approx(63.5, abs=0.1)
-    assert ctx["f_soc"] == 60
+    assert ctx["f_roh"] == pytest.approx(27.7, abs=0.1)
+    assert ctx["f_soc"] == 25
     ctx = szenario(blueprint, zeit(tag, 21, 0), soc=83.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
-    assert ctx["f_roh"] == pytest.approx(90.0)
+    assert ctx["f_roh"] == pytest.approx(90.0, abs=0.05)
     assert ctx["f_soc"] == 83
 
 
@@ -306,7 +318,7 @@ def _tagesmax(soc):
 def test_halten_wird_erst_beim_entladen_geschrieben(blueprint, tag):
     """Dezember: Untergrenze 90 ueber dem Ladestand 85 -> Grenze = 85. Geschrieben, sobald die Batterie entlaedt; beim Laden nicht."""
     laedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
-    assert laedt["f_roh"] == pytest.approx(90.0) and laedt["f_soc"] == 85 and laedt["halten_fall"] is True
+    assert laedt["f_roh"] == pytest.approx(90.0, abs=0.05) and laedt["f_soc"] == 85 and laedt["halten_fall"] is True
     assert laedt["batterie_leistung"] == -1500 and laedt["tou_schreiben"] is False
     # Entladung mit 320 W, aber der Ladestand steht noch auf dem Tageshoechststand: ein Anlaufstoss, kein Halten
     stoss = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320)}).auswerten(bis="tou_schreiben")
@@ -314,15 +326,15 @@ def test_halten_wird_erst_beim_entladen_geschrieben(blueprint, tag):
     # Ladestand 0.5 Punkte unter dem Tageshoechststand: die Entladung hat begonnen
     entlaedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320), **_tagesmax(86)}).auswerten(bis="tou_schreiben")
     assert entlaedt["entlaedt_nachhaltig"] is True and entlaedt["tou_schreiben"] is True
-    # Kein Halten-Fall (Plan 75 unter dem Ladestand 77): Schreiben haengt nicht an der Entladung
-    plan = szenario(blueprint, zeit(tag, 21, 0), soc=77.0, prognose_tage_kwh=(15, 5, 5), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
-    assert plan["halten_fall"] is False and plan["tou_schreiben"] is True
+    # Kein Halten-Fall (Plan 60 unter dem Ladestand 62): Schreiben haengt nicht an der Entladung
+    plan = szenario(blueprint, zeit(tag, 21, 0), soc=62.0, prognose_tage_kwh=(14, 5, 5), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
+    assert plan["halten_fall"] is False and plan["f_soc"] == 60 and plan["tou_schreiben"] is True
 
 
 def test_untergrenze_wird_nicht_nachgezogen_wenn_der_wechselrichter_nicht_haelt(blueprint, tag):
     """Register 70, Ladestand 64.5 und die Batterie entlaedt: der Wechselrichter haelt nicht, die Grenze bleibt."""
     unten = szenario(blueprint, zeit(tag, 2, 0), soc=64.5, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(70), **_leistung(400)}).auswerten(bis="tou_schreiben")
-    assert unten["f_soc"] == 64 and unten["unter_register"] is True and unten["tou_schreiben"] is False
+    assert unten["f_soc"] == 55 and unten["unter_register"] is True and unten["tou_schreiben"] is False
     # Ladestand am Register (Toleranz 1.5): Absenken auf den neuen Plan 45 bleibt erlaubt
     plan = szenario(blueprint, zeit(tag, 2, 0), soc=74.0, prognose_tage_kwh=(30, 30, 30), zustands_overrides={**_tou(75), **_leistung(400)}).auswerten(bis="tou_schreiben")
     assert plan["f_soc"] < 75 and plan["unter_register"] is False and plan["tou_schreiben"] is True
@@ -359,7 +371,7 @@ def test_ohne_prognose_morgen_bleibt_die_planung_aus(blueprint, tag):
 
 
 def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
-    """Herbst-Lage, Batterie seit 12 Tagen nicht voll: Ziel 100 % -> Untergrenze 100 - 14,6 = 85."""
+    """Herbst-Lage, Batterie seit 12 Tagen nicht voll: Ziel 100 % -> Untergrenze 100 - 31,4 = 68,6 -> 65."""
     from conftest import fake_entity
     eid = fake_entity("json_tracking_sensor", "input_text")
     liste = json.dumps([(tag - dt.timedelta(days=d)).isoformat() for d in (12, 13, 14)])
@@ -368,7 +380,7 @@ def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
     assert ctx["tage_seit_voll"] == 12
     assert ctx["zellausgleich_faellig"] is True
     assert ctx["ziel_soc_eff"] == 100
-    assert ctx["f_soc"] == 85
+    assert ctx["f_soc"] == 65
 
 
 # --------------------------------------------------------------------------
@@ -405,22 +417,101 @@ def test_blockade_ohne_spitze(blueprint, tag, beendet, timer_tage_alt, erwartet)
     assert ctx["blockade_ohne_spitze"] is erwartet
 
 
-def test_horizont_beginnt_vor_sonnenaufgang_mit_heute(blueprint, tag):
+def test_horizont_rollt_ohne_sprung_ueber_mitternacht(blueprint, tag):
     """
-    Nach Mitternacht fuellt HEUTE die Batterie wieder auf, dunkle Folgetage (2/2/2) aendern daran nichts.
-    Von Hand: heute 17.25 kWh x 0.92 - 9.12 kWh = 6.75 kWh = 21.0 % von 32.15 kWh -> Ziel-Kandidat 69 -> 65.
-    Abends zaehlt nur noch morgen (dunkel) -> halten beim Ladestand.
+    Dieselben drei Tage vor und nach Mitternacht: 23:30 sieht morgen (14,66 kWh, heutige Form),
+    Tag 3 (15) und Tag 4 (10); 00:00 sieht heute (14,66 aus dem Array), morgen (15), Tag 3 (10).
+    Die Gewichte haengen am Vorlauf, nicht am Kalendertag: beide Laeufe rechnen dieselbe Untergrenze.
     """
-    nacht = szenario(blueprint, zeit(tag, 3, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
-    tage = nacht["prognose_tage"]
-    assert [t["name"] for t in tage] == ["heute", "morgen", "Tag 3"]
-    assert [t["vertrauen"] for t in tage] == [1.0, 1.0, 0.7]
-    assert tage[0]["pv"] == pytest.approx(17.25, abs=0.05) and tage[1]["pv"] == pytest.approx(2.0)
-    assert nacht["b_stern_pct"] == pytest.approx(21.0, abs=0.2)
-    assert nacht["f_soc"] == 65
-    abend = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
+    abend = szenario(blueprint, zeit(tag, 23, 30), soc=85.0, prognose_tage_kwh=(14.663, 15, 10)).auswerten(bis="f_soc")
+    nacht = szenario(blueprint, zeit(tag + dt.timedelta(days=1), 0, 0), soc=85.0, prognose_tage_kwh=(15, 10, 5)).auswerten(bis="f_soc")
     assert [t["name"] for t in abend["prognose_tage"]] == ["morgen", "Tag 3", "Tag 4"]
-    assert abend["f_soc"] == 85
+    assert [t["name"] for t in nacht["prognose_tage"]] == ["heute", "morgen", "Tag 3"]
+    assert [t["vertrauen"] for t in abend["prognose_tage"]] == [1.0, 0.7, 0.5]
+    assert [t["vertrauen"] for t in nacht["prognose_tage"]] == [1.0, 0.7, 0.5]
+    assert abend["b_stern_pct"] == pytest.approx(nacht["b_stern_pct"], abs=0.05)
+    assert abend["f_roh"] == pytest.approx(nacht["f_roh"], abs=0.05)
+    # Nach Mitternacht zaehlt der heutige PV-Tag ab dem ersten Ueberschuss-Slot (09:00), 9,80 kWh
+    # Zwischenmaximum bei Sonnenuntergang = 30,5 % von 32,15 kWh; dunkle Folgetage aendern nichts.
+    frueh = szenario(blueprint, zeit(tag, 3, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
+    assert frueh["plan_start"].endswith("09:00:00+02:00")
+    assert frueh["b_stern_pct"] == pytest.approx(30.5, abs=0.1) and frueh["f_soc"] == 55
+
+
+def test_vertrauen_daempft_den_ueberschuss_nicht_die_pv(blueprint, tag):
+    """
+    Morgen ohne PV, Tag 3 mit 12 kWh gegen 9,12 kWh Tagesverbrauch. Auf die Brutto-PV gerechnet
+    (12 x 0,7 x 0,92 = 7,7 < 9,1) bliebe nichts uebrig; auf den Ueberschuss der Slots gerechnet zaehlt
+    der Tag mit genau 70 % seines Plus: B* bei Vertrauen 0,7 = 0,7 x B* bei Vertrauen 1,0.
+    """
+    voll = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(0, 12, 0),
+                    input_overrides={"vertrauen_tag3": 1.0}).auswerten(bis="f_soc")
+    gedaempft = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(0, 12, 0)).auswerten(bis="f_soc")
+    assert gedaempft["prognose_tage"][0]["name"] == "Tag 3" and gedaempft["plan_start"].endswith("09:00:00+02:00")
+    assert voll["b_stern_pct"] > 15
+    assert gedaempft["b_stern_pct"] == pytest.approx(0.7 * voll["b_stern_pct"], abs=0.01)
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (0, 12, 0)), [0.19] * 48, kap_kwh=gedaempft["batterie_kapazitaet"])
+    assert gedaempft["b_stern_pct"] == pytest.approx(ref["b_pct"], abs=0.01)
+
+
+def test_defizit_vor_der_sonnenstrecke_mindert_die_auffuellung_nicht(blueprint, tag):
+    """
+    Dunkle Tage vor einer Sonnenstrecke traegt die Untergrenze selbst, sie zaehlen nicht gegen die
+    Auffuellung; ein marginaler Ueberschuss-Slot am dunklen Tag aendert daher nichts.
+    Von Hand: Tag 4 mit 30 kWh (Gewicht 0,5) hat 20 Ueberschuss-Slots 08:00-17:30, Summe der
+    Netto-Werte 23,80 kWh x 0,5 = 11,90 kWh = 37,0 % von 32,15 kWh -> 100 - 37 = 63 > 50 -> f_roh 53,0 -> 50.
+    Mit morgen 15 kWh (Lauf 10,10 kWh) davor gilt das groessere Zwischenmaximum, wieder 11,90 kWh.
+    """
+    dunkel = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 30)).auswerten(bis="f_soc")
+    knapp = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(1.9, 2, 30)).auswerten(bis="f_soc")
+    assert dunkel["b_stern_pct"] == pytest.approx(37.0, abs=0.1) and dunkel["f_soc"] == 50
+    assert knapp["b_stern_pct"] == pytest.approx(dunkel["b_stern_pct"], abs=0.01) and knapp["f_soc"] == dunkel["f_soc"]
+    assert dunkel["plan_start"].endswith("08:00:00+02:00") and dunkel["plan_start"][:10] == (tag + dt.timedelta(days=3)).isoformat()
+    tal = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(15, 2, 30)).auswerten(bis="f_soc")
+    assert tal["b_stern_pct"] == pytest.approx(37.0, abs=0.1)
+    assert [t["name"] for t in tal["prognose_tage"]] == ["morgen", "Tag 3", "Tag 4"]
+    assert tal["prognose_tage"][0]["bilanz"] == pytest.approx(7.82, abs=0.05) and tal["prognose_tage"][1]["bilanz"] < 0
+    # Ohne jeden Ueberschuss: kein Zaehlbeginn, keine Tage in der Meldung
+    keiner = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2)).auswerten(bis="f_soc")
+    assert keiner["plan_start"] is None and keiner["prognose_tage"] == [] and keiner["f_soc"] == 85
+
+
+def test_folgetag_mit_eigenen_slots_statt_heutiger_form(blueprint, tag):
+    """Traegt der Morgen-Sensor detailedForecast, zaehlt dessen Verlauf; ohne Attribut die heutige Form."""
+    from conftest import fake_entity, prognose_gleichmaessig
+    eid = fake_entity("solcast_morgen_sensor", "sensor")
+    morgen = tag + dt.timedelta(days=1)
+    # 12 kWh gleichmaessig 10:00-16:00 (12 Slots x 2 kW x 0,5 h), P10 = P50
+    slots = prognose_gleichmaessig(morgen, 2.0, von=dt.time(10, 0), slots=12)
+    for sl in slots:
+        sl["pv_estimate10"] = sl["pv_estimate"]
+    mit = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(12, 2, 2),
+                   zustands_overrides={eid: Zustand(eid, "12.0", {"estimate10": 12.0, "detailedForecast": slots})}).auswerten(bis="f_soc")
+    ohne = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(12, 2, 2)).auswerten(bis="f_soc")
+    eintrag = next(t for t in mit["solcast_slot_tage"] if t["datum"] == morgen.isoformat())
+    assert eintrag["slots"] is True and sum(eintrag["k"]) == pytest.approx(12.0, abs=0.01)
+    # 12 Slots x (1,0 x 0,92 - 0,19) = 8,76 kWh Zwischenmaximum = 27,2 % von 32,15 kWh
+    assert mit["b_stern_pct"] == pytest.approx(8.76 / mit["batterie_kapazitaet"] * 100, abs=0.05)
+    assert ohne["b_stern_pct"] != pytest.approx(mit["b_stern_pct"], abs=0.5)
+
+
+def test_solcast_sensoren_noch_nicht_gerollt(blueprint, tag):
+    """
+    00:15 nach Mitternacht, die Solcast-Sensoren zeigen noch den Vortag: der Heute-Sensor traegt das Array
+    von gestern, 'morgen' ist bereits heute. Die Zuordnung ueber das Datum des Arrays haelt die Planung
+    gleich, als waeren die Sensoren gerollt.
+    """
+    from conftest import fake_entity, prognose_real
+    heute = tag + dt.timedelta(days=1)
+    jetzt = zeit(heute, 0, 15)
+    gerollt = szenario(blueprint, jetzt, soc=85.0, prognose_tage_kwh=(15, 10, 5)).auswerten(bis="f_soc")
+    e_heute = fake_entity("solcast_heute_sensor", "sensor")
+    alt = prognose_real(tag)  # Array von gestern
+    verzoegert = szenario(blueprint, jetzt, soc=85.0, prognose_tage_kwh=(14.663, 15, 10),
+                          zustands_overrides={e_heute: Zustand(e_heute, "17.65", {"detailedForecast": alt})}).auswerten(bis="f_soc")
+    assert [t["datum"] for t in verzoegert["solcast_slot_tage"]][0] == tag.isoformat()
+    assert verzoegert["b_stern_pct"] == pytest.approx(gerollt["b_stern_pct"], abs=0.05)
+    assert verzoegert["f_soc"] == gerollt["f_soc"]
 
 
 # --------------------------------------------------------------------------
@@ -510,6 +601,7 @@ def test_slot_zeile_der_aufzeichnung(blueprint, tag):
     nachricht = h._aufloesen(next(a for a in schritt["then"] if a.get("action") == "notify.send_message")["data"]["message"], ctx)
     zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
     assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
+    assert "notstrom_kwh" in zeile
     assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
     assert zeile["halten_bezug_kwh"] is None and "entitaeten" not in zeile
     assert zeile["kennung"] == ctx["lauf_kennung"]
@@ -577,9 +669,9 @@ def test_untergrenze_um_aus_dem_profil(blueprint, tag):
     # Ladestand an der Grenze, dunkle Folgetage -> halten bei 50, nichts zu schreiben, Grenze ist jetzt erreicht
     tief = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides=tous).auswerten(bis="untergrenze_text")
     assert tief["untergrenze_wirksam"] == 50 and tief["untergrenze_um"] == "jetzt" and tief["untergrenze_text"] == ""
-    # Register 50, Plan liegt darunter und wird geschrieben: die Schaetzung gilt fuer die neue Grenze
-    neu = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
-    assert neu["tou_schreiben"] is True and neu["f_soc"] < 50
+    # Register 50, Plan 40 liegt darunter und wird geschrieben: die Schaetzung gilt fuer die neue Grenze
+    neu = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, prognose_tage_kwh=(24, 5, 5), zustands_overrides=tous).auswerten(bis="untergrenze_text")
+    assert neu["tou_schreiben"] is True and neu["f_soc"] == 40
     assert neu["untergrenze_wirksam"] == neu["f_soc"] and neu["untergrenze_um"].startswith("um 0")
     tag_ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, zustands_overrides=tous).auswerten(bis="untergrenze_text")
     assert tag_ctx["untergrenze_um"] == "" and tag_ctx["untergrenze_text"] == "", "tags keine Schaetzung"
@@ -710,6 +802,27 @@ def test_optimizer_antwort_wird_in_zeiten_uebersetzt(blueprint, tag):
     # Keine Antwort (rest_command fehlgeschlagen): Zeile kommt trotzdem, mit leerem Fahrplan
     ctx2, zeile2 = _optimizer_zweig(blueprint, h, antwort=None)
     assert zeile2["optimizer"]["status"] == "keine Antwort" and zeile2["optimizer"]["voll_um"] is None
+
+
+def test_notstromprofil_lernt_in_wattstunden(blueprint, tag):
+    """Zaehler 0,075 kWh in der Halbstunde bis 14:00 (Index 27): leerer Helfer -> 75 Wh in allen Slots; Profil 60 Wh -> 60 x 6/7 + 75 / 7 = 62."""
+    from conftest import fake_entity
+    z = fake_entity("notstrom_utility_sensor", "sensor"); helfer = fake_entity("notstrom_json_text", "input_text")
+    h = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={z: Zustand(z, "0.075")}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
+    assert ctx["np_kwh"] == pytest.approx(0.075)
+    neu = ctx["np_neu"] if isinstance(ctx["np_neu"], list) else json.loads(ctx["np_neu"])
+    assert neu == [75] * 48
+    h2 = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={z: Zustand(z, "0.075"), helfer: Zustand(helfer, json.dumps([60] * 48))}, trigger_id="update_json")
+    ctx2 = _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))
+    neu2 = ctx2["np_neu"] if isinstance(ctx2["np_neu"], list) else json.loads(ctx2["np_neu"])
+    assert neu2[27] == 62 and neu2[26] == 60
+    # Ganzes Haus am Notstromausgang, 1,5 kWh je Halbstunde: 48 x "1500," = 240 Zeichen passen
+    assert len(json.dumps([1500] * 48, separators=(",", ":"))) <= 255
+    # Ohne Zaehler: kein Wert, kein Schreiben
+    h3 = szenario(blueprint, zeit(tag, 14, 0), input_overrides={"notstrom_utility_sensor": ""}, trigger_id="update_json")
+    ctx3 = _update_json_zweig(blueprint, h3, zeit(tag, 14, 0))
+    assert ctx3["np_kwh"] is None and "np_neu" not in ctx3
 
 
 def test_temperaturprofil_lernt_in_zehntelgrad(blueprint, tag):

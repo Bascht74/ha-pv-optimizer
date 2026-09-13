@@ -130,8 +130,9 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     """
     Dachterrasse, 06.09. 21:00, Ladestand 95 %: Prognose fuer den 07.09. laut dessen
     Mitternachtszeile 40.94 kWh (P10 35.54), Tagesverbrauch aus dem Profil 11.8 kWh.
-    Von Hand: Blend 38.24 x 0.92 - 11.8 = 23.4 kWh = 73 % von 32.15 kWh ->
-    Ziel-Kandidat 90 - 73 = 17, Einspeise-Kandidat 27, Mindest 50 -> F = max(17, min(50, 27)) = 27 -> 25.
+    Von Hand: Blend 38.24 kWh in heutiger Form, Ueberschuss ab 07:30 bis zum Abend
+    38.24 x 0.92 - Tagesverbrauch der PV-Stunden (7.0 kWh) = 28.2 kWh Zwischenmaximum = 87.7 % ->
+    Ziel-Kandidat 90 - 87.7 = 2.3, Einspeise-Kandidat 12.3, Mindest 50 -> F = max(2.3, min(50, 12.3)) = 12.3 -> Minimum 20.
     Im September bindet die Untergrenze also nicht: Die Nacht fiel real nur auf 80 %.
     """
     from conftest import fake_entity
@@ -150,9 +151,10 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     assert ctx["entlade_aktiv"] is True
     assert ctx["aktueller_soc"] == 95
     assert ctx["verbrauch_tag_kwh"] == pytest.approx(11.8, abs=0.05)
-    assert ctx["b_stern_pct"] == pytest.approx(73, abs=1)
-    assert ctx["f_roh"] == pytest.approx(27, abs=1)
-    assert ctx["f_soc"] == 25
+    assert ctx["plan_start"].endswith("2026-09-07T07:30:00+02:00")
+    assert ctx["b_stern_pct"] == pytest.approx(87.7, abs=0.5)
+    assert ctx["f_roh"] == pytest.approx(12.3, abs=0.5)
+    assert ctx["f_soc"] == 20
     nacht = [float(_eintrag(z, "battery_soc_sensor")["state"]) for z in zs
              if "2026-09-06T21:00" <= z["zeit"][:16] <= "2026-09-07T08:00"]
     assert min(nacht) == 80
@@ -212,14 +214,15 @@ def test_fall_b_am_knappen_morgen(blueprint):
 
 
 @pytest.mark.parametrize("zeit_prefix, f_soc, erster_tag", [
-    ("2026-09-11T03:00", 20, "heute"),    # heute 37.5 kWh Blend -> Nacht frei; mit "morgen" 25 kWh stuende hier 50
-    ("2026-09-10T21:00", 25, "morgen"),   # abends zaehlt morgen
+    ("2026-09-11T03:00", 20, "heute"),    # heute 37.5 kWh Blend ab 08:00 -> Nacht frei
+    ("2026-09-10T21:00", 20, "morgen"),   # abends derselbe Tag als morgen, gleiche Freigabe
 ])
 def test_horizont_der_entlade_planung_in_der_nacht(blueprint, zeit_prefix, f_soc, erster_tag):
-    """PV: Die zweite Nachthaelfte plant mit der heutigen Prognose, der Abend mit der morgigen."""
+    """PV: Vor und nach Mitternacht plant dieselbe Sonnenstrecke, nur der Name des ersten Tags wechselt."""
     ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", zeit_prefix)
     assert ctx["entlade_aktiv"] is True
     assert ctx["prognose_tage"][0]["name"] == erster_tag
+    assert ctx["plan_start"].endswith("2026-09-11T08:00:00+02:00")
     assert ctx["f_soc"] == f_soc
 
 

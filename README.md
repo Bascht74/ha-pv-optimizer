@@ -16,8 +16,10 @@ keine Zusatz-Software.
 - **Zellausgleich über PV.** Bei erreichter Zellspannung wird die Erhaltungsspannung angehoben und
   der interne Ladestand kalibriert; nie aus dem Netz.
 - **Entlade-Planung.** Die sechs ToU-Register des Wechselrichters bekommen nachts eine Untergrenze aus
-  der Bilanz der nächsten drei Prognosetage: so tief, dass das Ziel (90 %) morgen wieder erreicht wird,
-  aber nie so hoch, dass morgen eingespeist würde, was das Haus nachts gebraucht hätte.
+  der Halbstunden-Bilanz der nächsten 72 Stunden: so tief, dass das Ziel (90 %) am Ende des besten
+  Sonnentags wieder erreicht wird, aber nie so hoch, dass eingespeist würde, was das Haus nachts
+  gebraucht hätte. Das Vertrauen in die Prognose hängt am Vorlauf in Stunden, nicht am Kalendertag,
+  deshalb springt nichts um Mitternacht.
 - **Selbstkontrolle.** Ein Zähler „Speicherverlust" sammelt Energie, die ins Netz ging, obwohl das
   Haus sie hätte nutzen können, mit der Ursache in der Meldung; Fehleinschätzungen der Prognose
   werden als Diagnose protokolliert.
@@ -43,9 +45,11 @@ steuern: „Entladung der Hausbatterie … verhindern“ und „Entladung ins St
 
 **Entlade-Untergrenze und Wechselrichter:** Der Blueprint schreibt die Untergrenze in die sechs
 ToU-Register des Deye. Fällt der Ladestand nachts trotzdem mehr als drei Punkte darunter, während die
-Batterie entlädt, hält der Wechselrichter die Grenze nicht (Zeitsteuerung aus, oder seine eigene
-Ladestand-Anzeige weicht vom Sensor ab). Das Logbuch meldet das einmal je Nacht; die Grenze wird dann
-nicht nachgezogen.
+Batterie entlädt, hält der Wechselrichter die Grenze nicht. Häufigste Ursache beim Deye: „Battery
+Operation Mode“ steht auf „Voltage“, dann rechnet er die Programme mit den Spannungsfeldern und
+ignoriert die SOC-Felder; auf „Capacity“ stellen, dazu „Charging“ der Programme auf „Disabled“.
+Weitere Ursachen: Zeitsteuerung aus, oder seine eigene Ladestand-Anzeige weicht vom Sensor ab. Das
+Logbuch meldet das einmal je Nacht; die Grenze wird dann nicht nachgezogen.
 
 **Zweitmeinung vom evcc-Optimizer:** Mit der Adresse des Optimizer-Add-ons im Feld „evcc-Optimizer:
 Adresse“ holt der Blueprint stündlich (Minute 12) dessen Batterie-Fahrplan über `rest_command` aus dem
@@ -62,6 +66,13 @@ spätere Temperaturkorrektur des Verbrauchsprofils. Im Feld „Wetter-Prognose T
 mehrere Wetter-Entitäten wählen (Open-Meteo, DWD, Met.no); ihre Stundenprognose der nächsten 24 Stunden
 landet je Halbstunde in einer Zeile `wetter`, damit sich die genaueste Quelle für den Standort gegen den
 Außenfühler bestimmen lässt. Alles steuert nichts.
+
+**Notstromkreis (Sektion 3 und 5, optional):** Der Deye liefert am Notstromausgang (Load UPS) nur eine
+Leistung; das Package bildet daraus per Riemann-Sensor die Energie und zählt sie je Halbstunde. Der
+Blueprint schreibt den Wert in die `slot`-Zeile und lernt im Helfer „Notstromprofil (JSON)“ das
+Profil in Wattstunden je Halbstunde, ein Startwert aus der Historie kann eingetragen werden. Hängt nur
+ein Teil des Hauses am Notstromausgang, zählt nur dieser Teil. Noch reine Aufzeichnung, Grundlage für
+eine Notstromreserve.
 
 ## Logbuch und Diagnose-Aufzeichnung
 
@@ -85,7 +96,7 @@ schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.j
 |---|---|---|
 | `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`), darunter die geplanten Zeiten `plan_voll_um`, `fallb_voll_um`, `untergrenze_um` und die reale Vollzeit `voll_real_um`; `halten_aktiv` markiert, ab wann die Untergrenze real hält |
 | `entscheidung` | nach jedem Lauf, der ein Register, den Modus oder einen Timer geändert hat | dasselbe, mit den Werten genau dieses Laufs |
-| `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox) und Wallbox-Ladung, Halte-Lage der Entlade-Untergrenze, Register |
+| `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox), Wallbox-Ladung, Energie am Notstromausgang, Halte-Lage der Entlade-Untergrenze, Register |
 | `wetter` | jede halbe Stunde, nur mit Wetter-Entitäten | je Quelle die Temperaturprognose der nächsten 24 Stunden neben dem gemessenen Außenfühler |
 | `optimizer` | stündlich, nur mit Optimizer-Adresse | Fahrplan des evcc-Optimizers (Ladebeginn, Vollzeit, Nacht-Minimum, Ladestand-Verlauf) neben den Werten des Blueprints für denselben Lauf |
 
