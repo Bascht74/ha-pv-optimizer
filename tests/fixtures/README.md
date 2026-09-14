@@ -1,15 +1,21 @@
 # Aufzeichnungen echter Läufe
 
-Hier liegen die Dateien der Diagnose-Aufzeichnung des Blueprints: eine JSON-Zeile je
+Hier liegen lokal die Dateien der Diagnose-Aufzeichnung des Blueprints: eine JSON-Zeile je
 Halbstundenlauf mit allen Eingangswerten, so wie der Lauf sie gesehen hat. Einrichtung
 steht im Kopf von `pv-steuerung.yaml_`, Download unter
 `/local/pv_optimizer_aufzeichnung.jsonl` der Instanz.
+
+**Die Dateien sind private Standortdaten und gehören nicht ins Repo.** `tests/fixtures/*.jsonl`
+steht in `.gitignore`, committet wird hier nur diese README. Die Tests auf echten Aufzeichnungen
+laufen, wenn lokal eine Datei liegt, und überspringen sich sonst, in GitHub Actions also immer.
 
 Ablage: `<standort>_<datum>.jsonl` oder `<standort>_<von>_bis_<bis>.jsonl` bei mehreren Tagen;
 ein neuer Download, der den alten Zeitraum enthaelt, ersetzt die alte Datei. Standorte: `dachterrasse` (2 × 314 Ah, Wärmepumpe)
 und `pv` (2 × 200 Ah, ohne Wärmepumpe). Die Dateien bleiben, wie sie heruntergeladen
 wurden: Die zwei Kopfzeilen der File-Integration, Testsendungen und ein Zeitstempel-
-Präfix vor dem `{` werden beim Einlesen übersprungen.
+Präfix vor dem `{` werden beim Einlesen übersprungen. Schreiben zwei Läufe gleichzeitig, steht
+die zweite Aufzeichnung mitten in der ersten; solche zerrissenen Zeilen lässt der Loader weg und
+meldet ihre Nummern als Warnung (`zerrissene_zeilen` in `conftest.py` listet sie).
 
 Die Zeilen des Steuerlaufs tragen `"art": "lauf"` (Halbstundentakt) oder `"art": "entscheidung"`
 (Laufende nach einem Registerwechsel, zusaetzlich zum Takt). Jede Zeile traegt die `kennung` ihres

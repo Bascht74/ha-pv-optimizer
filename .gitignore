@@ -7,3 +7,6 @@ PV-Ladesteuerung_HANDOVER.md
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Diagnose-Aufzeichnungen sind private Standortdaten: nur lokal, nie im Repo
+tests/fixtures/*.jsonl

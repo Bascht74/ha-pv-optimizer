@@ -11,7 +11,7 @@ import json
 import pytest
 
 from conftest import (AUFZEICHNUNG_ENTITY, FIXTURES_PFAD, aufzeichnung_lesen, aufzeichnungen, standard_inputs,
-                      szenario, szenario_aus_aufzeichnung, zeit)
+                      szenario, szenario_aus_aufzeichnung, zeit, zerrissene_zeilen)
 from ha_jinja import Harness, Zustand, input_definitionen
 
 
@@ -97,25 +97,65 @@ def test_aufzeichnung_reproduziert_den_lauf(blueprint, tag, hh, soc):
         assert a[k] == b[k], f"{k}: Original {a[k]!r}, aus Aufzeichnung {b[k]!r}"
 
 
+# Aufzeichnungen sind private Standortdaten und liegen nur lokal (tests/fixtures/*.jsonl ist
+# per .gitignore ausgeschlossen). Ohne Datei ueberspringen sich die Tests darauf.
 def _zeilen():
-    for datei in sorted(FIXTURES_PFAD.glob("*.jsonl")):
-        for nr, zeile in aufzeichnungen(datei):
-            yield pytest.param(zeile, id=f"{datei.name}:{nr}")
+    params = [pytest.param(zeile, id=f"{datei.name}:{nr}")
+              for datei in sorted(FIXTURES_PFAD.glob("*.jsonl")) for nr, zeile in aufzeichnungen(datei)]
+    return params or [pytest.param(None, id="keine", marks=pytest.mark.skip(reason="keine lokale Aufzeichnung in tests/fixtures"))]
 
 
-@pytest.mark.parametrize("zeile", list(_zeilen()))
+@pytest.mark.parametrize("zeile", _zeilen())
 def test_echte_aufzeichnungen_laufen_durch_die_kette(blueprint, zeile):
     """Jede echte Zeile rendert die komplette Variablenkette ohne Fehler."""
     ctx = szenario_aus_aufzeichnung(blueprint, aufzeichnung_lesen(zeile)).auswerten()
     assert "target_p5" in ctx
 
 
+def test_zerrissene_zeilen_werden_uebersprungen_und_gemeldet(blueprint, tag, tmp_path):
+    """
+    Schreiben zwei Laeufe gleichzeitig in die Datei, steht die zweite Aufzeichnung mitten in
+    der ersten. Der Loader laesst so eine Zeile weg und nennt ihre Nummer, statt an ihr zu
+    scheitern; die Zeilen davor und danach bleiben lesbar.
+    """
+    a = json.dumps(aufzeichnen(szenario(blueprint, zeit(tag, 9, 0), soc=60.0), blueprint))
+    b = json.dumps(aufzeichnen(szenario(blueprint, zeit(tag, 9, 30), soc=62.0), blueprint))
+    schnitt = a.index('"zeit": "') + len('"zeit": "')
+    zerrissen = a[:schnitt] + b + a[schnitt:]
+    datei = tmp_path / "pv_2026-09-04.jsonl"
+    datei.write_text("Home Assistant notifications (Log started: 2026-09-04T00:00:00+00:00)\n" + "-" * 80 + "\n"
+                     + "test\n" + "2026-09-04T09:00:00.123456 " + a + "\n" + zerrissen + "\n" + b + "\n",
+                     encoding="utf-8")
+    with pytest.warns(UserWarning, match=r"pv_2026-09-04\.jsonl: 1 zerrissene Zeile\(n\) uebersprungen: \[5\]"):
+        gelesen = aufzeichnungen(datei)
+    assert [nr for nr, _ in gelesen] == [4, 6]
+    assert [aufzeichnung_lesen(z)["zeit"] for _, z in gelesen] == [json.loads(a)["zeit"], json.loads(b)["zeit"]]
+    assert zerrissene_zeilen(datei) == [5]
+
+
 # --------------------------------------------------------------------------
 # Entlade-Untergrenze an einem echten Abend: Aufzeichnung plus die Tagesprognose
 # der Folgetage aus deren erster Zeile (Solcast-Stand um Mitternacht).
 # --------------------------------------------------------------------------
-def _zeilen_von(datei):
-    return [aufzeichnung_lesen(z) for _, z in aufzeichnungen(FIXTURES_PFAD / datei)]
+def _zeilen_von(standort):
+    """
+    Alle Laeufe der lokalen Aufzeichnung(en) eines Standorts (`<standort>_<datum>.jsonl`; das
+    Datum im Muster haelt einen Download unter seinem Originalnamen pv_optimizer_aufzeichnung.jsonl
+    fern). Ohne Datei oder ohne lesbaren Lauf wird der Test uebersprungen.
+    """
+    dateien = sorted(FIXTURES_PFAD.glob(f"{standort}_20*.jsonl"))
+    zs = [aufzeichnung_lesen(z) for datei in dateien for _, z in aufzeichnungen(datei)]
+    if not zs:
+        pytest.skip(f"keine lokale Aufzeichnung mit lesbaren Laeufen: {standort}_<datum>.jsonl")
+    return zs
+
+
+def _zeile_um(zs, zeit_prefix):
+    """Der Lauf zu einem Zeitpunkt; fehlt er in der lokalen Aufzeichnung, wird der Test uebersprungen."""
+    z = next((x for x in zs if x["zeit"].startswith(zeit_prefix)), None)
+    if z is None:
+        pytest.skip(f"kein Lauf {zeit_prefix} in der lokalen Aufzeichnung")
+    return z
 
 
 def _eintrag(z, inp):
@@ -137,9 +177,9 @@ def test_entlade_untergrenze_an_einem_echten_septemberabend(blueprint):
     Im September bindet die Untergrenze also nicht: Die Nacht fiel real nur auf 80 %.
     """
     from conftest import fake_entity
-    zs = _zeilen_von("dachterrasse_2026-09-04_bis_11.jsonl")
-    abend = next(z for z in zs if z["zeit"].startswith("2026-09-06T21:00"))
-    morgen = next(z for z in zs if z["zeit"].startswith("2026-09-07T00:00"))
+    zs = _zeilen_von("dachterrasse")
+    abend = _zeile_um(zs, "2026-09-06T21:00")
+    morgen = _zeile_um(zs, "2026-09-07T00:00")
     p50, p10 = _tagesprognose(morgen)
     assert (p50, p10) == (40.94, 35.54)
 
@@ -169,9 +209,9 @@ def test_notstromreserve_an_einem_echten_septemberabend(blueprint):
     Abschalt-Ladestand 5 %: 5 + 4,73 / 32,15 = 19,7 % -> 20 %, gleich dem Minimum; mit 9 %: 23,7 % -> 25 %.
     """
     from conftest import fake_entity, reserve_referenz, tage_aus_szenario
-    zs = _zeilen_von("dachterrasse_2026-09-04_bis_11.jsonl")
-    abend = next(z for z in zs if z["zeit"].startswith("2026-09-06T21:00"))
-    morgen = next(z for z in zs if z["zeit"].startswith("2026-09-07T00:00"))
+    zs = _zeilen_von("dachterrasse")
+    abend = _zeile_um(zs, "2026-09-06T21:00")
+    morgen = _zeile_um(zs, "2026-09-07T00:00")
     p50, p10 = _tagesprognose(morgen)
     wh = [round(float(v) * 1000) for v in json.loads(_eintrag(abend, "hausverbrauch_json_text")["state"])]
     assert sum(wh[42:] + wh[:15]) == 3670
@@ -201,9 +241,8 @@ def test_notstromreserve_an_einem_echten_septemberabend(blueprint):
 # --------------------------------------------------------------------------
 # Morgen-Blockade und Drosselung nur, wenn eine Einspeisespitze zu erwarten ist
 # --------------------------------------------------------------------------
-def _lauf(blueprint, datei, zeit_prefix):
-    z = next(x for x in _zeilen_von(datei) if x["zeit"].startswith(zeit_prefix))
-    return szenario_aus_aufzeichnung(blueprint, z).auswerten()
+def _lauf(blueprint, standort, zeit_prefix):
+    return szenario_aus_aufzeichnung(blueprint, _zeile_um(_zeilen_von(standort), zeit_prefix)).auswerten()
 
 
 def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
@@ -214,7 +253,7 @@ def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
     voll wird, wie die Prognose es zulaesst. Real hielt die Blockade an diesem Tag
     bis 13:00 bei 14 kWh Einspeisung, und die Batterie wurde nicht voll.
     """
-    ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-05T08:00")
+    ctx = _lauf(blueprint, "pv", "2026-09-05T08:00")
     assert ctx["spitze_erwartet_w"] == pytest.approx(5776, abs=5)
     assert ctx["spitze_erwartet"] is False
     assert ctx["blockade_aktiv"] is False
@@ -224,7 +263,7 @@ def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
 
 def test_mit_erwarteter_spitze_bleibt_alles_wie_bisher(blueprint):
     """Dachterrasse, 06.09. 08:00: Spitze 6,1 kW >= 90 % von 6,5 kW -> Blockade und Drosselung wie zuvor."""
-    ctx = _lauf(blueprint, "dachterrasse_2026-09-04_bis_11.jsonl", "2026-09-06T08:00")
+    ctx = _lauf(blueprint, "dachterrasse", "2026-09-06T08:00")
     assert ctx["spitze_erwartet_w"] == pytest.approx(6130, abs=5)
     assert ctx["spitze_erwartet"] is True
     assert ctx["blockade_aktiv"] is True
@@ -241,13 +280,13 @@ def test_fall_b_am_knappen_morgen(blueprint):
     lieferte real 20.5 kWh statt 31.5 kWh P50; ohne Fall B waere die Batterie
     bei rund 92 % stehen geblieben. Eine halbe Stunde vorher reichte es noch.
     """
-    ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-09T08:30")
+    ctx = _lauf(blueprint, "pv", "2026-09-09T08:30")
     assert ctx["blockade_aktiv"] is False and ctx["spitze_erwartet"] is False
     assert ctx["benoetigt_kwh"] == pytest.approx(12.55, abs=0.05)
     assert ctx["brutto_ueberschuss_rest"] == pytest.approx(15.94, abs=0.05)
     assert ctx["puffer_fall_b"] == pytest.approx(1.0)
     assert ctx["fall_b_aktiv"] is True
-    vorher = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", "2026-09-09T08:00")
+    vorher = _lauf(blueprint, "pv", "2026-09-09T08:00")
     assert vorher["fall_b_aktiv"] is False
 
 
@@ -257,7 +296,7 @@ def test_fall_b_am_knappen_morgen(blueprint):
 ])
 def test_horizont_der_entlade_planung_in_der_nacht(blueprint, zeit_prefix, f_soc, erster_tag):
     """PV: Vor und nach Mitternacht plant dieselbe Sonnenstrecke, nur der Name des ersten Tags wechselt."""
-    ctx = _lauf(blueprint, "pv_2026-09-04_bis_11.jsonl", zeit_prefix)
+    ctx = _lauf(blueprint, "pv", zeit_prefix)
     assert ctx["entlade_aktiv"] is True
     assert ctx["prognose_tage"][0]["name"] == erster_tag
     assert ctx["plan_start"].endswith("2026-09-11T08:00:00+02:00")
@@ -277,10 +316,10 @@ def test_aufzeichnung_traegt_die_rechenwerte(blueprint, tag):
     assert r["f_soc"] == ctx["f_soc"] and r["target_p5"] == ctx["target_p5"]
 
 
-@pytest.mark.parametrize("datei", ["pv_2026-09-04_bis_11.jsonl", "dachterrasse_2026-09-04_bis_11.jsonl"])
-def test_aufzeichnung_rendert_fuer_echte_laeufe(blueprint, datei):
+@pytest.mark.parametrize("standort", ["pv", "dachterrasse"])
+def test_aufzeichnung_rendert_fuer_echte_laeufe(blueprint, standort):
     """to_json darf an keinem Rechenwert scheitern (datetime, Undefined): jede 12. Zeile beider Standorte."""
-    zs = _zeilen_von(datei)
+    zs = _zeilen_von(standort)
     for z in zs[::12]:
         aufz = aufzeichnen(szenario_aus_aufzeichnung(blueprint, z), blueprint)
         assert "rechnung" in aufz and "f_soc" in aufz["rechnung"], z["zeit"]

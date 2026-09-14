@@ -8,15 +8,17 @@ Verbrauchsprofil liegt bei 0,19 kWh je Halbstunde.
 
 Echte Laeufe kommen aus der Diagnose-Aufzeichnung des Blueprints (JSON-Zeilen
 an notify.pv_optimizer_aufzeichnung, Einrichtung im Package-Kopf). Solche
-Dateien gehoeren nach tests/fixtures/*.jsonl; szenario_aus_aufzeichnung baut
-aus jeder Zeile ein Harness, die geloggten Entscheidungen des Tages sind der
-Erwartungswert.
+Dateien sind private Standortdaten: Sie liegen nur lokal unter
+tests/fixtures/*.jsonl (per .gitignore ausgeschlossen), die Tests darauf
+ueberspringen sich ohne Datei. szenario_aus_aufzeichnung baut aus jeder Zeile
+ein Harness, die geloggten Entscheidungen des Tages sind der Erwartungswert.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import math
+import warnings
 from pathlib import Path
 
 import pytest
@@ -279,10 +281,36 @@ def aufzeichnung_lesen(zeile: str) -> dict:
     return json.loads(zeile[zeile.index("{"):])
 
 
-def aufzeichnungen(pfad: Path) -> list[tuple[int, str]]:
-    """(Zeilennummer, Zeile) aller echten Aufzeichnungen einer Datei."""
+def aufzeichnung_lesbar(zeile: str) -> bool:
+    """
+    Schreiben zwei Laeufe gleichzeitig, stehen zwei Aufzeichnungen ineinander in einer
+    Zeile: Das JSON bricht mitten im Text ab, oder es parst und traegt die Pflichtfelder
+    nicht. Beides ist eine zerrissene Zeile, kein Lauf.
+    """
+    try:
+        d = aufzeichnung_lesen(zeile)
+    except ValueError:
+        return False
+    return (isinstance(d, dict) and isinstance(d.get("zeit"), str)
+            and isinstance(d.get("entitaeten"), list) and isinstance(d.get("konfiguration"), dict))
+
+
+def zerrissene_zeilen(pfad: Path) -> list[int]:
+    """Zeilennummern der Aufzeichnungen einer Datei, die nicht lesbar sind."""
     with open(pfad, encoding="utf-8") as f:
-        return [(nr, z) for nr, z in enumerate(f, 1) if ist_aufzeichnung(z)]
+        return [nr for nr, z in enumerate(f, 1) if ist_aufzeichnung(z) and not aufzeichnung_lesbar(z)]
+
+
+def aufzeichnungen(pfad: Path) -> list[tuple[int, str]]:
+    """(Zeilennummer, Zeile) aller lesbaren Aufzeichnungen einer Datei; zerrissene Zeilen
+    werden uebersprungen und mit ihren Nummern als Warnung gemeldet."""
+    with open(pfad, encoding="utf-8") as f:
+        kandidaten = [(nr, z) for nr, z in enumerate(f, 1) if ist_aufzeichnung(z)]
+    lesbar = [(nr, z) for nr, z in kandidaten if aufzeichnung_lesbar(z)]
+    kaputt = sorted(set(nr for nr, _ in kandidaten) - set(nr for nr, _ in lesbar))
+    if kaputt:
+        warnings.warn(f"{pfad.name}: {len(kaputt)} zerrissene Zeile(n) uebersprungen: {kaputt}", stacklevel=2)
+    return lesbar
 
 
 def szenario_aus_aufzeichnung(blueprint: dict, aufz: dict) -> Harness:

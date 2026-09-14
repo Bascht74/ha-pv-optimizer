@@ -44,7 +44,8 @@
 #   2. Einstellungen -> Entitaeten -> die neue notify-Entitaet -> Zahnrad ->
 #      Entitaets-ID auf notify.pv_optimizer_aufzeichnung aendern.
 # Download im Browser unter /local/pv_optimizer_aufzeichnung.jsonl (ohne
-# Anmeldung erreichbar, ca. 0,7 MB je Tag); die Datei gehoert nach tests/fixtures/.
+# Anmeldung erreichbar, ca. 0,7 MB je Tag). Die Datei enthaelt private Standortdaten:
+# nur lokal nach tests/fixtures/ legen, dort per .gitignore vom Repo ausgeschlossen.
 # ==============================================================================
 
 input_boolean:

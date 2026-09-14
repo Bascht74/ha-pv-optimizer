@@ -110,9 +110,10 @@ gehört die Zeile mit `"kennung": "08:30:02"` und `"art": "entscheidung"`. Ohne 
 erinnert der Blueprint einmal täglich bei Sonnenuntergang daran, dass die Entscheidungen des Tages
 nicht nachgerechnet werden können.
 
-Die Datei ist unter `/local/pv_optimizer_aufzeichnung.jsonl` abrufbar (etwa 1 MB je Tag). Kopien
-liegen als Fixtures in `tests/fixtures/`; die Tests bauen jeden aufgezeichneten Lauf nach und
-rechnen ihn durch dieselbe Variablenkette.
+Die Datei ist unter `/local/pv_optimizer_aufzeichnung.jsonl` abrufbar (etwa 1 MB je Tag). Sie
+enthält den Standort im Detail und bleibt deshalb privat: Lokal unter `tests/fixtures/` abgelegt
+(dort per `.gitignore` vom Repo ausgeschlossen) bauen die Tests jeden aufgezeichneten Lauf nach
+und rechnen ihn durch dieselbe Variablenkette; ohne Aufzeichnung überspringen sie diese Prüfungen.
 
 ## Entwicklung
 
