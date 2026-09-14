@@ -100,12 +100,12 @@ def test_aufzeichnung_reproduziert_den_lauf(blueprint, tag, hh, soc):
 # Aufzeichnungen sind private Standortdaten und liegen nur lokal (tests/fixtures/*.jsonl ist
 # per .gitignore ausgeschlossen). Ohne Datei ueberspringen sich die Tests darauf.
 def _zeilen():
-    for datei in sorted(FIXTURES_PFAD.glob("*.jsonl")):
-        for nr, zeile in aufzeichnungen(datei):
-            yield pytest.param(zeile, id=f"{datei.name}:{nr}")
+    params = [pytest.param(zeile, id=f"{datei.name}:{nr}")
+              for datei in sorted(FIXTURES_PFAD.glob("*.jsonl")) for nr, zeile in aufzeichnungen(datei)]
+    return params or [pytest.param(None, id="keine", marks=pytest.mark.skip(reason="keine lokale Aufzeichnung in tests/fixtures"))]
 
 
-@pytest.mark.parametrize("zeile", list(_zeilen()))
+@pytest.mark.parametrize("zeile", _zeilen())
 def test_echte_aufzeichnungen_laufen_durch_die_kette(blueprint, zeile):
     """Jede echte Zeile rendert die komplette Variablenkette ohne Fehler."""
     ctx = szenario_aus_aufzeichnung(blueprint, aufzeichnung_lesen(zeile)).auswerten()
@@ -138,11 +138,16 @@ def test_zerrissene_zeilen_werden_uebersprungen_und_gemeldet(blueprint, tag, tmp
 # der Folgetage aus deren erster Zeile (Solcast-Stand um Mitternacht).
 # --------------------------------------------------------------------------
 def _zeilen_von(standort):
-    """Alle Laeufe der lokalen Aufzeichnung(en) eines Standorts; ohne Datei wird der Test uebersprungen."""
-    dateien = sorted(FIXTURES_PFAD.glob(f"{standort}_*.jsonl"))
-    if not dateien:
-        pytest.skip(f"keine lokale Aufzeichnung {standort}_*.jsonl")
-    return [aufzeichnung_lesen(z) for datei in dateien for _, z in aufzeichnungen(datei)]
+    """
+    Alle Laeufe der lokalen Aufzeichnung(en) eines Standorts (`<standort>_<datum>.jsonl`; das
+    Datum im Muster haelt einen Download unter seinem Originalnamen pv_optimizer_aufzeichnung.jsonl
+    fern). Ohne Datei oder ohne lesbaren Lauf wird der Test uebersprungen.
+    """
+    dateien = sorted(FIXTURES_PFAD.glob(f"{standort}_20*.jsonl"))
+    zs = [aufzeichnung_lesen(z) for datei in dateien for _, z in aufzeichnungen(datei)]
+    if not zs:
+        pytest.skip(f"keine lokale Aufzeichnung mit lesbaren Laeufen: {standort}_<datum>.jsonl")
+    return zs
 
 
 def _zeile_um(zs, zeit_prefix):
