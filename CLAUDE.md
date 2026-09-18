@@ -65,7 +65,7 @@ Bumping rules:
 
 Every code change ships with an English, GitHub-style release note (`Fixed` / `Added` / `Changed` / `Removed` sections; plain in the PR body, as `###` sub-headings in `CHANGELOG.md`) as a delta since the last *published* version — not just the current turn's changes. Only real changes belong in it; no separate "Notes" section, and no line explaining something that wasn't changed.
 
-**Give the reason, not the case history.** A release note and a commit message should say *what* changed and *why the mechanism needed changing* — in general terms. No dates, no measured values, no incident reports. Write the rule that now holds instead ("a brief cloud gap can lift the export over the threshold long enough to pass a 30 s debounce"). Two to four lines per change; the evidence lives in the conversation and in memory, not in the repository.
+**Give the reason, not the case history.** A release note and a commit message should say *what* changed and *why the mechanism needed changing* — in general terms. No dates, no measured values, no incident reports. Write the rule that now holds instead ("a brief cloud gap can lift the export over the threshold long enough to pass a two-minute debounce"). Two to four lines per change; the evidence lives in the conversation and in memory, not in the repository.
 
 ## Analysing logs, traces and CSV exports
 

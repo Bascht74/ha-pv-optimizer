@@ -30,7 +30,9 @@ keine Zusatz-Software.
 
 1. **Package anlegen:** `pv-steuerung.yaml_` nach `packages/` kopieren (Endung `.yaml`), die
    Stellen `<HIER EINTRAGEN>` füllen, Home Assistant neu starten. Es legt alle Helfer an, die der
-   Blueprint erwartet. Ohne Wallbox die mit „Nur mit Wallbox“ markierten Blöcke löschen.
+   Blueprint erwartet. Die optionalen Blöcke (Wallbox, Notstromkreis) sind auskommentiert und
+   werden nur einkommentiert, wenn sie gebraucht werden — ein stehengebliebener Platzhalter
+   verwirft die ganze Gruppe, samt des Hausverbrauchszählers daneben.
 2. **Blueprint importieren:** Rohdatei-URL dieser Datei auf `main`
    (`https://raw.githubusercontent.com/Bascht74/ha-pv-optimizer/main/PV-Ladesteuerung.yaml`).
    Updates: Blueprint erneut importieren, GitHub liefert die Datei bis zu 5 Minuten aus dem Cache.

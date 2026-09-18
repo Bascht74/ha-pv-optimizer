@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.2]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -12,7 +12,7 @@ blueprint:
       name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
-        Leer bleiben dürfen: BMS 3 (nur bei drei Türmen) und der Ladezähler (nur fürs Schatten-BMS).
+        Leer bleiben darf nur BMS 3 (nur bei drei Türmen).
       collapsed: true
       input:
         battery_soc_sensor:
@@ -48,7 +48,7 @@ blueprint:
         battery_total_charge:
           name: "Zähler: insgesamt geladen (kWh)"
           description: >-
-            Sensor mit dem aufsummierten Gesamt-Ladezähler des Wechselrichters in kWh (nur steigend, wird nie zurückgesetzt). Das Schatten-BMS berechnet daraus zusammen mit dem Entladezähler einen driftfreien Ladezustand.
+            Sensor mit dem aufsummierten Gesamt-Ladezähler in kWh (nur steigend, wird nie zurückgesetzt). Daran erkennt der Blueprint, ob die Verbindung zum Wechselrichter steht: Meldet der Zähler „nicht verfügbar“, bricht er den Lauf ab, statt mit Ersatzwerten zu regeln. Nicht leer lassen.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         pack_capacity_ah:
@@ -882,7 +882,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.12.1]"
+      bp_version: "[V6.12.2]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
