@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.1]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -882,7 +882,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.12.0]"
+      bp_version: "[V6.12.1]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -916,6 +916,11 @@ action:
       # Die Untergrenze wird erst geschrieben, wenn der Ladestand ihr so nahe
       # kommt (Prozentpunkte): Ein Lauf Vorlauf reicht, darueber wirkt sie nicht.
       tou_schreib_vorlauf: 2
+      # Zweitmeinung: So viele Prozentpunkte muss der Fahrplan des Optimizers in
+      # der Nacht abgeben, damit sein Tiefpunkt als Planung gilt. Das Haus zieht
+      # ueber Nacht deutlich mehr; wer weniger abgibt, deckt es aus dem Netz und
+      # optimiert diese Strecke nicht.
+      nacht_abfall_min: 5
       # Die Morgen-Blockade haelt Platz fuer die Einspeisespitze frei. Erreicht die
       # erwartete Spitze nicht diesen Anteil der Peak-Shaving-Schwelle, gibt es
       # nichts zu kappen, und die gedrosselte Ladung beginnt mit der ersten Sonne.
@@ -3093,18 +3098,30 @@ action:
                 {% set soc = nss.l %}
                 {% set laden = bat.charging_power | default([]) %}
                 {% set ft = a.time_series.ft %}
-                {% set ns = namespace(laedt=none, voll=none, nacht=none, k=0) %}
+                {% set ns = namespace(laedt=none, voll=none, nacht=none, abfall=none, gesehen=false, k=0) %}
                 {% for w in laden %}{% if ns.laedt is none and w > 1 %}{% set ns.laedt = (start + timedelta(minutes=30 * loop.index0)).strftime('%H:%M') %}{% endif %}{% endfor %}
                 {% for v in soc %}{% if ns.voll is none and v >= 99 %}{% set ns.voll = (start + timedelta(minutes=30 * loop.index)).strftime('%H:%M') %}{% endif %}{% endfor %}
+                {# Der Tiefpunkt zaehlt nur, wenn der Fahrplan in der Nacht ueberhaupt
+                   entlaedt. Der Horizont endet nach 24 Stunden, und dahinter ist nichts
+                   mehr zu gewinnen - der Optimizer parkt die Batterie dort auf 100 % und
+                   deckt das Haus rechnerisch aus dem Netz. Faellt der Ladestand im Fenster
+                   kaum, beschreibt der Wert diesen Rand und nicht seine Planung; dann
+                   bleibt er leer und 'nacht_abfall' nennt den Grund. #}
                 {% for k in range(ft | length) %}
-                  {% if ns.nacht is none and ft[k] <= 0 and (k == 0 or ft[k - 1] > 0) %}
+                  {% if not ns.gesehen and ft[k] <= 0 and (k == 0 or ft[k - 1] > 0) %}
                     {% set ns2 = namespace(e=k) %}
                     {% for j in range(k, ft | length) %}{% if ns2.e == j and ft[j] <= 0 %}{% set ns2.e = j + 1 %}{% endif %}{% endfor %}
-                    {% if ns2.e - k >= 12 and soc | length >= ns2.e %}{% set ns.nacht = soc[k:ns2.e] | min | round(1) %}{% endif %}
+                    {% if ns2.e - k >= 12 and soc | length >= ns2.e %}
+                      {% set ns.gesehen = true %}
+                      {% set tief = soc[k:ns2.e] | min | round(1) %}
+                      {% set ns.abfall = (soc[k] - tief) | round(1) %}
+                      {% if ns.abfall >= nacht_abfall_min %}{% set ns.nacht = tief %}{% endif %}
+                    {% endif %}
                   {% endif %}
                 {% endfor %}
                 {{ {'status': inhalt.status | default('keine Antwort'), 'laedt_ab': ns.laedt, 'voll_um': ns.voll,
-                    'nacht_min_soc': ns.nacht, 'soc_verlauf': soc | map('round', 1) | list} | to_json }}
+                    'nacht_min_soc': ns.nacht, 'nacht_abfall': ns.abfall,
+                    'soc_verlauf': soc | map('round', 1) | list} | to_json }}
           - action: notify.send_message
             target:
               entity_id: notify.pv_optimizer_aufzeichnung
