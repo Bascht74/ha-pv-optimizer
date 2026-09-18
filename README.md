@@ -95,7 +95,7 @@ Entscheidung mit beiden Vergleichswerten und in der Klammer die Zahlen, die sie 
 
 Die vollständige Herleitung liegt in der optionalen **Diagnose-Aufzeichnung**: Existiert die
 Entität `notify.pv_optimizer_aufzeichnung` (File-Integration, Einrichtung im Kopf des Package),
-schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.jsonl`:
+schreibt der Blueprint JSON-Zeilen nach `/config/pv_optimizer/aufzeichnung.jsonl`:
 
 | `art` | wann | Inhalt |
 |---|---|---|
@@ -110,10 +110,11 @@ gehört die Zeile mit `"kennung": "08:30:02"` und `"art": "entscheidung"`. Ohne 
 erinnert der Blueprint einmal täglich bei Sonnenuntergang daran, dass die Entscheidungen des Tages
 nicht nachgerechnet werden können.
 
-Die Datei ist unter `/local/pv_optimizer_aufzeichnung.jsonl` abrufbar (etwa 1 MB je Tag). Sie
-enthält den Standort im Detail und bleibt deshalb privat: Lokal unter `tests/fixtures/` abgelegt
-(dort per `.gitignore` vom Repo ausgeschlossen) bauen die Tests jeden aufgezeichneten Lauf nach
-und rechnen ihn durch dieselbe Variablenkette; ohne Aufzeichnung überspringen sie diese Prüfungen.
+Die Datei wächst um etwa 1 MB je Tag und beschreibt den Standort im Detail. Sie gehört deshalb
+**nicht** nach `/config/www/`: Alles darunter liefert Home Assistant unter `/local/` ohne Anmeldung
+aus. Abholen per Samba, Datei-Editor oder `scp`. Lokal unter `tests/fixtures/` abgelegt (dort per
+`.gitignore` vom Repo ausgeschlossen) bauen die Tests jeden aufgezeichneten Lauf nach und rechnen
+ihn durch dieselbe Variablenkette; ohne Aufzeichnung überspringen sie diese Prüfungen.
 
 ## Entwicklung
 

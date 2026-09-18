@@ -101,7 +101,7 @@ blueprint:
         wr_tou_1:
           name: "ToU-Programm 1: Min-SOC (%)"
           description: >-
-            Die number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use). Der Blueprint hebt diesen Wert an, wenn die Batterie längere Zeit nicht voll wurde — so wird sie nachts aus dem Netz nachgeladen und kann wieder balancieren.
+            Die number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use). Der Blueprint schreibt hier die geplante Entlade-Untergrenze, damit die Batterie nachts nur so weit entlädt, wie der nächste Tag es zulässt. Der Wechselrichter muss dafür in der Betriebsart „Capacity" laufen.
           default: ""
           selector: {"entity": {"domain": "number"}}
         wr_tou_2:

@@ -37,15 +37,20 @@
 # Logbuch meldet das einmal taeglich. Sie laesst sich NICHT per
 # YAML anlegen (die File-Integration kennt nur noch Config-Entries), sondern
 # nur ueber die Oberflaeche:
-#   1. Einstellungen -> Geraete & Dienste -> Integration hinzufuegen -> "File"
+#   1. In configuration.yaml das Zielverzeichnis freigeben:
+#        homeassistant:
+#          allowlist_external_dirs:
+#            - /config/pv_optimizer
+#      Danach Home Assistant neu starten und das Verzeichnis anlegen.
+#   2. Einstellungen -> Geraete & Dienste -> Integration hinzufuegen -> "File"
 #      -> Benachrichtigungsdienst, Dateipfad
-#      /config/www/pv_optimizer_aufzeichnung.jsonl, Zeitstempel AUS.
-#      (/config/www ist standardmaessig freigegeben, kein allowlist-Eintrag.)
-#   2. Einstellungen -> Entitaeten -> die neue notify-Entitaet -> Zahnrad ->
+#      /config/pv_optimizer/aufzeichnung.jsonl, Zeitstempel AUS.
+#   3. Einstellungen -> Entitaeten -> die neue notify-Entitaet -> Zahnrad ->
 #      Entitaets-ID auf notify.pv_optimizer_aufzeichnung aendern.
-# Download im Browser unter /local/pv_optimizer_aufzeichnung.jsonl (ohne
-# Anmeldung erreichbar, ca. 0,7 MB je Tag). Die Datei enthaelt private Standortdaten:
-# nur lokal nach tests/fixtures/ legen, dort per .gitignore vom Repo ausgeschlossen.
+# NICHT nach /config/www: Alles darunter liefert Home Assistant unter /local/
+# ohne Anmeldung aus, und die Datei beschreibt den Standort im Detail (ca.
+# 0,7 MB je Tag). Holen per Samba, Datei-Editor oder scp; lokal nach
+# tests/fixtures/ legen, dort per .gitignore vom Repo ausgeschlossen.
 # ==============================================================================
 
 input_boolean:

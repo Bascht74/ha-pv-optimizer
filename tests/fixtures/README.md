@@ -2,8 +2,8 @@
 
 Hier liegen lokal die Dateien der Diagnose-Aufzeichnung des Blueprints: eine JSON-Zeile je
 Halbstundenlauf mit allen Eingangswerten, so wie der Lauf sie gesehen hat. Einrichtung
-steht im Kopf von `pv-steuerung.yaml_`, Download unter
-`/local/pv_optimizer_aufzeichnung.jsonl` der Instanz.
+steht im Kopf von `pv-steuerung.yaml_`; die Datei liegt auf der Instanz unter
+`/config/pv_optimizer/aufzeichnung.jsonl` und wird per Samba, Datei-Editor oder `scp` geholt.
 
 **Die Dateien sind private Standortdaten und gehören nicht ins Repo.** `tests/fixtures/*.jsonl`
 steht in `.gitignore`, committet wird hier nur diese README. Die Tests auf echten Aufzeichnungen
