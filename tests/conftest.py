@@ -147,7 +147,7 @@ def szenario(
         z("battery_soc_sensor", soc),
         z("battery_power_sensor", -1500),
         z("vmax1_sensor", 3.35), z("vmax2_sensor", 3.34), z("vmax3_sensor", "unavailable"),
-        z("battery_total_charge", 1000.0), z("battery_total_discharge", 800.0),
+        z("battery_total_charge", 1000.0),
         z("bms1_temp_min_sensor", 22.0), z("bms2_temp_min_sensor", 22.5), z("bms3_temp_min_sensor", "unavailable"),
         z("bms1_temp_max_sensor", 24.0), z("bms2_temp_max_sensor", 24.5), z("bms3_temp_max_sensor", "unavailable"),
         # Wechselrichter
@@ -178,8 +178,6 @@ def szenario(
         z("json_tracking_sensor", "[]"),
         z("helper_max_soc_heute", soc), z("speicherverlust_gesamt", 0.0), z("helper_offener_verlust", 0.0),
         z("helper_halten_bezug", 0.0),
-        z("helper_tare_charge", 990.0), z("helper_tare_discharge", 790.0),
-        z("schatten_bms_sensor", soc, {"raw_drift_soc": soc}),
         z("eingriff_dauer_sensor", 0.0),
         # Timer
         z("helper_timer_peak", "idle"), z("helper_timer_cooldown", "idle"),
