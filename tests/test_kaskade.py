@@ -14,7 +14,7 @@ import pytest
 
 from conftest import fake_entity, szenario, zeit
 from ha_jinja import Zustand
-from kaskade import kaskade, schreibt, zweig, zweig_und_aktionen
+from kaskade import gruppe, kaskade, schreibt, zweig, zweig_und_aktionen
 
 TIMER = ("helper_timer_peak", "helper_timer_wp_anlauf", "helper_timer_wp_boost", "helper_timer_cooldown")
 
@@ -113,6 +113,52 @@ def test_temperaturdeckel_schreibt_die_laderate(blueprint, tag):
     assert alias.startswith("PRIO 0")
     assert schreibt(aktionen) == [ctx["temperatur_limit_ampere"]]
     assert ctx["temperatur_limit_ampere"] < ctx["max_ampere"]
+
+
+def test_zellausgleich_setzt_strom_timer_und_modus(blueprint, tag):
+    """
+    Prio 1 schreibt den Ausgleichs-Ladestrom und startet den Nachlauf-Timer. Die
+    Erhaltungsspannung gehoert NICHT hierher: Sie haengt am Timer-Start und
+    steht im Zweig darunter (siehe Test danach). Beides zusammen ist der
+    Zellausgleich - faellt eines weg, laedt die Batterie ohne die hoehere
+    Spannung oder umgekehrt.
+    """
+    h = p1_zellausgleich(blueprint, tag)
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
+    assert alias.startswith("PRIO 1")
+    assert schreibt(aktionen) == [ctx["target_p1"]]
+    assert ctx["target_p1"] < ctx["max_ampere"], "Ausgleich laedt bewusst klein"
+    assert schreibt(aktionen, "input_select.select_option") == ["top_balancing"]
+    dienste = [s for s, _, _ in aktionen]
+    assert "timer.start" in dienste and "input_boolean.turn_on" in dienste
+
+
+def test_float_boost_hebt_die_erhaltungsspannung_und_nimmt_sie_zurueck(blueprint, tag):
+    """
+    Der Zweig am Timer-Start hebt die Erhaltungsspannung auf den
+    Zellausgleich-Wert, der am Timer-Ende setzt sie zurueck. Steht kein
+    Float-Register zur Verfuegung, schreibt keiner von beiden.
+    """
+    zweige = gruppe(blueprint, "FLOAT-BOOST STARTEN")
+    h = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_start")
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=zweige)
+    assert alias.startswith("FLOAT-BOOST STARTEN")
+    assert schreibt(aktionen) == [ctx["var_float_balancing"]]
+
+    h2 = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_ende")
+    ctx2 = h2.auswerten()
+    alias2, aktionen2 = zweig_und_aktionen(h2, blueprint, ctx2, zweige=zweige)
+    assert alias2.startswith("FLOAT-BOOST BEENDEN")
+    assert schreibt(aktionen2) == [ctx2["var_float_normal"]]
+    assert ctx2["var_float_balancing"] > ctx2["var_float_normal"]
+
+    # Ohne Float-Register: kein Schreibvorgang, keine Meldung
+    h3 = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_start",
+                  input_overrides={"wr_float_voltage_sensor": ""})
+    _, aktionen3 = zweig_und_aktionen(h3, blueprint, zweige=zweige)
+    assert aktionen3 == []
 
 
 def test_fall_b_reisst_auf_das_maximum_auf(blueprint, tag):

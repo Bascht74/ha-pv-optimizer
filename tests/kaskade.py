@@ -27,13 +27,18 @@ class Stopp(Exception):
     """Ein stop:-Schritt hat die Sequenz beendet."""
 
 
-def kaskade(blueprint: dict) -> list[dict]:
-    """Die Zweige der Master-Kaskade, erkannt am Alias des ersten Zweigs."""
+def gruppe(blueprint: dict, erster_alias: str) -> list[dict]:
+    """Eine choose:-Gruppe auf oberster Ebene, erkannt am Alias ihres ersten Zweigs."""
     for schritt in blueprint["action"]:
         zweige = schritt.get("choose") if isinstance(schritt, dict) else None
-        if zweige and str(zweige[0].get("alias", "")).startswith("PRIO 0"):
+        if zweige and str(zweige[0].get("alias", "")).startswith(erster_alias):
             return zweige
-    raise AssertionError("Master-Kaskade nicht gefunden")
+    raise AssertionError(f"choose-Gruppe {erster_alias!r} nicht gefunden")
+
+
+def kaskade(blueprint: dict) -> list[dict]:
+    """Die Zweige der Master-Kaskade."""
+    return gruppe(blueprint, "PRIO 0")
 
 
 def bedingung(h: Harness, c: Any, ctx: dict) -> bool:
@@ -95,10 +100,11 @@ def _lauf(h: Harness, schritte: list, ctx: dict, aktionen: list) -> None:
             raise UnbekannteArt(f"Schrittart {sorted(s)} ist hier nicht nachgebildet")
 
 
-def zweig_und_aktionen(h: Harness, blueprint: dict, ctx: dict | None = None) -> tuple[str | None, list]:
+def zweig_und_aktionen(h: Harness, blueprint: dict, ctx: dict | None = None,
+                       zweige: list[dict] | None = None) -> tuple[str | None, list]:
     """(Alias des gewinnenden Zweigs, [(service, entity_id, wert), ...])."""
     ctx = h.auswerten() if ctx is None else ctx
-    for z in kaskade(blueprint):
+    for z in (zweige if zweige is not None else kaskade(blueprint)):
         if _alle(h, z["conditions"], ctx):
             aktionen: list = []
             try:
