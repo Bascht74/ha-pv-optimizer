@@ -12,6 +12,7 @@ blueprint:
       name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
+        Leer bleiben dürfen: BMS 3 (nur bei drei Türmen) und der Ladezähler (nur fürs Schatten-BMS).
       collapsed: true
       input:
         battery_soc_sensor:
@@ -78,6 +79,7 @@ blueprint:
       name: "2 – Wechselrichter-Steuerung (Pflicht)"
       description: >-
         Die Stellglieder, über die der Blueprint tatsächlich eingreift. Das sind schreibbare Entitäten (number/switch), keine Sensoren.
+        Leer bleiben dürfen: Float- und Batteriespannung (nur für den Zellausgleich) und der Abschalt-Ladestand (nur für die Notstromreserve).
       collapsed: true
       input:
         wr_max_charge_current:
@@ -164,6 +166,7 @@ blueprint:
       name: "3 – Netz & PV-Leistung (Pflicht)"
       description: >-
         Messwerte für Netzbezug/-einspeisung und die aktuelle PV-Erzeugung.
+        Leer bleiben dürfen: Notstromlast (nur für die Notstromreserve) sowie Außentemperatur und Wetter-Prognose (nur für die Aufzeichnung).
       collapsed: true
       input:
         grid_export_sensor:
@@ -219,6 +222,7 @@ blueprint:
       name: "4 – Solcast-Prognose (Pflicht)"
       description: >-
         Die PV-Vorhersage. Sie ist die Grundlage für die vorausschauende Ladeplanung — ohne sie kann der Blueprint nicht entscheiden, ob er mit dem Laden warten kann.
+        Leer bleiben dürfen die Prognosen morgen bis Tag 4; ohne sie entfällt die Entladeplanung.
       collapsed: true
       input:
         solcast_heute_sensor:
@@ -267,6 +271,7 @@ blueprint:
       name: "5 – Helfer-Entitäten (Pflicht)"
       description: >-
         Diese Helfer speichern den Zustand zwischen zwei Läufen. Sie müssen einmalig angelegt werden (siehe mitgeliefertes Package). Der Blueprint schreibt hier hinein — es sind keine Sensoren.
+        Leer bleiben dürfen die Helfer für Haltephase, Schatten-BMS und Temperatur-/Notstromprofil.
       collapsed: true
       input:
         helper_lade_modus:
