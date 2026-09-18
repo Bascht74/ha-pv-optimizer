@@ -384,6 +384,45 @@ def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
+# Abregelung: erst bei voller Batterie geht Ertrag verloren
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("export_w, soc, heute_voll, erwartet", [
+    (7000, 99.0, "off", True),    # ueber der Schwelle und voll -> der Wechselrichter regelt ab
+    (7000, 95.0, "off", False),   # ueber der Schwelle, aber Peak-Shaving kann noch aufnehmen
+    (7000, 95.0, "on", True),     # Tagesmarker gesetzt: Prio 5 laeuft nicht mehr an
+    (6000, 99.0, "off", False),   # voll, aber unter der Schwelle -> nichts zu verlieren
+])
+def test_abregelung_nur_wenn_peak_shaving_nichts_mehr_auffangen_kann(blueprint, tag, export_w, soc, heute_voll, erwartet):
+    """
+    Gegenbedingung zum Peak-Shaving-Zweig: Der laeuft nur unter 99 % und ohne
+    Tagesmarker an. Darueber nimmt die Batterie den Ueberschuss nicht mehr auf,
+    und alles ueber der Einspeisegrenze wird abgeregelt.
+    """
+    from conftest import fake_entity
+    g = fake_entity("grid_export_sensor", "sensor")
+    v = fake_entity("helper_batterie_heute_voll", "input_boolean")
+    h = szenario(blueprint, zeit(tag, 13, 0), soc=soc,
+                 zustands_overrides={g: Zustand(g, str(-export_w)), v: Zustand(v, heute_voll)},
+                 input_overrides={"schwelle_peak_shaving": 6500})
+    ctx = h.auswerten()
+    assert ctx["real_export"] == pytest.approx(export_w)
+    assert ctx["abregelung_aktiv"] is erwartet
+
+
+def test_abregelung_meldet_nur_entprellt_oder_zur_halben_stunde(blueprint):
+    """Nicht jeder 5-Minuten-Takt schreibt eine Zeile; der entprellte Trigger meldet je Ueberschreitung einmal."""
+    block = next(st for st in blueprint["action"]
+                 if isinstance(st, dict) and "if" in st and "abregelung_aktiv" in str(st.get("if")))
+    bedingung = str(block["if"])
+    assert "export_peak_schwelle" in bedingung
+    assert "minute % 30 < 5" in bedingung
+    text = str(block["then"])
+    # Beide Vergleichswerte und die tragenden Zahlen stehen in der Meldung
+    for teil in ("real_export", "schwelle_peak_shaving", "Ladestand (SOC)", "freie Ladekapazität"):
+        assert teil in text, teil
+
+
+# --------------------------------------------------------------------------
 # Erwartete Einspeisespitze: Grenze bei 90 % der Peak-Shaving-Schwelle
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("schwelle_w, erwartet", [
@@ -947,7 +986,11 @@ def test_wetter_zeile_haelt_24_stunden_je_quelle_fest(blueprint, tag):
     t = fake_entity("aussentemperatur_sensor", "sensor")
     q1, q2 = "weather.open_meteo", "weather.dwd"
     jetzt = zeit(tag, 14, 0)
-    h = szenario(blueprint, jetzt, zustands_overrides={t: Zustand(t, "12.0")}, input_overrides={"wetter_prognose_entities": [q1, q2]}, trigger_id="update_json")
+    # q1 hat einen Registry-Eintrag, q2 nicht: Schluessel ist die Integration,
+    # ohne Eintrag die Position in der Auswahl. Die Entitaets-ID steht nie drin -
+    # ihr Name traegt an manchen Instanzen den Standort.
+    h = szenario(blueprint, jetzt, zustands_overrides={t: Zustand(t, "12.0")}, input_overrides={"wetter_prognose_entities": [q1, q2]}, trigger_id="update_json",
+                 integrationen={q1: "open_meteo"})
     ctx = _update_json_zweig(blueprint, h, jetzt)
     assert ctx["wetter_liste"] == [q1, q2]
     # Stundenprognose ab 12:00 (zwei Stunden alt) bis uebermorgen; nur q1 hat geantwortet
@@ -965,6 +1008,8 @@ def test_wetter_zeile_haelt_24_stunden_je_quelle_fest(blueprint, tag):
     zeile = json.loads(h.render(finde(block["then"]), ctx))
     assert zeile["art"] == "wetter" and zeile["aussen_temp"] == 12.0 and zeile["kennung"] == ctx["lauf_kennung"]
     # Erster Wert ist die laufende Stunde 14:00 (Index 2 -> 11.0 Grad), dann 24 Stunden
-    assert zeile["quellen"][q1]["von"].startswith(f"{tag.isoformat()}T14:00") and len(zeile["quellen"][q1]["temp"]) == 24
-    assert zeile["quellen"][q1]["temp"][0] == 11.0 and zeile["quellen"][q1]["temp"][-1] == pytest.approx(22.5)
-    assert zeile["quellen"][q2] == {"von": None, "temp": []}
+    assert set(zeile["quellen"]) == {"open_meteo", "quelle_2"}
+    assert not any(q in json.dumps(zeile) for q in (q1, q2))
+    assert zeile["quellen"]["open_meteo"]["von"].startswith(f"{tag.isoformat()}T14:00") and len(zeile["quellen"]["open_meteo"]["temp"]) == 24
+    assert zeile["quellen"]["open_meteo"]["temp"][0] == 11.0 and zeile["quellen"]["open_meteo"]["temp"][-1] == pytest.approx(22.5)
+    assert zeile["quellen"]["quelle_2"] == {"von": None, "temp": []}

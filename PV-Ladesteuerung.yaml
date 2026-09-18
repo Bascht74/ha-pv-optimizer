@@ -1,9 +1,10 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.10.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.11.0]"
   description: >-
-    Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
-    Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
-    Top-Balancing inkl. Schatten-BMS Kalibrierung, WP-Boost und historischer Treppen-Filter.
+    Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
+    frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
+    ToU-Programme aus einer rollierenden Halbstundenprognose, hält eine Notstromreserve frei und
+    verschiebt Warmwasser in den PV-Überschuss. Zellausgleich über PV, nie aus dem Netz.
   domain: automation
 
   input:
@@ -16,13 +17,13 @@ blueprint:
         battery_soc_sensor:
           name: "Ladezustand SOC (%)"
           description: >-
-            Sensor mit dem aktuellen Ladezustand der Gesamt-Batterie in Prozent. Steuert die gesamte Prioritäts-Kaskade. Tipp: Wenn du das mitgelieferte Schatten-BMS nutzt, trage hier dessen Sensor ein — er ist meist genauer als der SOC des Wechselrichters.
+            Sensor mit dem aktuellen Ladezustand der Gesamt-Batterie in Prozent. Steuert die gesamte Prioritäts-Kaskade. Tipp: Wenn du ein Schatten-BMS nutzt, trage hier dessen Sensor ein — er ist meist genauer als der SOC des Wechselrichters.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         battery_power_sensor:
           name: "Batterie-Leistung (W)"
           description: >-
-            Sensor mit der aktuellen Lade-/Entladeleistung. Wird unter anderem beim Peak-Shaving genutzt, um zu erkennen, wie viel die Batterie gerade puffert.
+            Vorzeichen wie beim Deye: negativ beim Laden, positiv beim Entladen — ein Sensor mit umgekehrtem Vorzeichen kehrt die Entlade-Erkennung um. Sensor mit der aktuellen Lade-/Entladeleistung. Wird unter anderem beim Peak-Shaving genutzt, um zu erkennen, wie viel die Batterie gerade puffert.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "power"}}
         vmax1_sensor:
@@ -101,7 +102,7 @@ blueprint:
         wr_tou_1:
           name: "ToU-Programm 1: Min-SOC (%)"
           description: >-
-            Die number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use). Der Blueprint hebt diesen Wert an, wenn die Batterie längere Zeit nicht voll wurde — so wird sie nachts aus dem Netz nachgeladen und kann wieder balancieren.
+            Die number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use). Der Blueprint schreibt hier die geplante Entlade-Untergrenze, damit die Batterie nachts nur so weit entlädt, wie der nächste Tag es zulässt. Der Wechselrichter muss dafür in der Betriebsart „Capacity" laufen.
           default: ""
           selector: {"entity": {"domain": "number"}}
         wr_tou_2:
@@ -352,7 +353,7 @@ blueprint:
         schatten_bms_sensor:
           name: "Schatten-BMS: SOC-Sensor"
           description: >-
-            Der Template-Sensor des mitgelieferten Schatten-BMS. Er muss das Attribut „raw_drift_soc“ haben (ungeclampter Rohwert). Der Blueprint korrigiert damit die Drift, sobald der Rohwert über 100 % läuft.
+            Der Template-Sensor des optionalen Schatten-BMS (nicht im Package enthalten). Er muss das Attribut „raw_drift_soc“ haben (ungeclampter Rohwert). Der Blueprint korrigiert damit die Drift, sobald der Rohwert über 100 % läuft.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
         helper_tare_charge:
@@ -792,20 +793,20 @@ trigger:
     # Polung: Roh-Sensor ist negativ bei Einspeisung -> * -1 ergibt positiven
     # Export, Vergleich mit der positiven Schwelle.
     #
-    # Gleiche Entprellung wie beim WP-Boost-Trigger: Waere sie kuerzer, wuerde
-    # Peak-Shaving zuerst greifen, den Export unter die Boost-Schwelle druecken
-    # und den Boost damit verhindern. Die Waermepumpe soll aber Vorrang haben.
-    # Zwei Minuten Clipping sind hinnehmbar.
+    # Beide Export-Trigger entprellen gleich lang (2 Min). Waere dieser kuerzer,
+    # griffe Peak-Shaving zuerst, drueckte den Export unter die Boost-Schwelle
+    # und verhinderte den Boost. Die Waermepumpe hat Vorrang: Sie verlagert
+    # mehrere kWh Warmwasser in die Sonne, die Abregelung waehrend der
+    # Entprellung kostet nur Wattstunden.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_peak_shaving | float(6500)) }}
     for: "00:02:00"
     id: export_peak_schwelle
   - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (2 Min entprellt)"
-    # Deutlich traeger als der Peak-Shaving-Trigger (30 s): Ein Boost bindet die
-    # Waermepumpe fuer die volle Laufzeit - das lohnt nur bei tragfaehigem
-    # Ueberschuss, den eine kurze Wolkenluecke nicht liefert. Beim Peak-Shaving
-    # reichen 30 s: Dort wird nur der Ladestrom angehoben.
+    # Zwei Minuten wie beim Peak-Shaving-Trigger, Begruendung dort. Ein Boost
+    # bindet die Waermepumpe fuer die volle Laufzeit - das lohnt nur bei
+    # tragfaehigem Ueberschuss, den eine kurze Wolkenluecke nicht liefert.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
@@ -889,7 +890,7 @@ trigger:
 mode: queued
 max: 20
 trace:
-  stored_traces: 400
+  stored_traces: 800
 
 action:
   # NEUSTART-EINLESEPAUSE
@@ -910,7 +911,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.10.0]"
+      bp_version: "[V6.11.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -921,8 +922,6 @@ action:
       log_kopf: "{{ bp_version[:-1] ~ ' · ' ~ lauf_kennung ~ ']' }}"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
-      # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
-      winter_monate: [11, 12, 1, 2]
       # Sicherheitspuffer anteilig statt fest, gedeckelt durch puffer_kwh:
       # Ein fester Abzug wirkt umgekehrt proportional (1 kWh von 4 kWh sind 25 %,
       # von 20 kWh nur 5 %) und bremst damit abends am staerksten - gerade dann,
@@ -1345,7 +1344,11 @@ action:
             data:
               type: hourly
             response_variable: wetter_antwort
+          # Schluessel ist die Integration, nicht die Entitaets-ID: Deren Name
+          # traegt je nach Integration den Standort, und zur Auswertung genuegt
+          # die Quelle. Ohne Registry-Eintrag bleibt die Position der Auswahl.
           - action: notify.send_message
+            continue_on_error: true
             target:
               entity_id: notify.pv_optimizer_aufzeichnung
             data:
@@ -1360,7 +1363,9 @@ action:
                       {% set n2.t = n2.t + [f.temperature | float(none)] %}
                     {% endif %}
                   {% endfor %}
-                  {% set ns.q = ns.q + [[e, {'von': n2.von, 'temp': n2.t}]] %}
+                  {% set ce = config_entry_id(e) %}
+                  {% set integ = config_entry_attr(ce, 'domain') if ce else none %}
+                  {% set ns.q = ns.q + [[integ if integ else 'quelle_' ~ loop.index, {'von': n2.von, 'temp': n2.t}]] %}
                 {% endfor %}
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'wetter',
                     'aussen_temp': tp_mess, 'quellen': dict(ns.q)} | to_json }}
@@ -1635,7 +1640,6 @@ action:
       # Unbekanntes Register: Maximalstrom annehmen, damit kein Anheben ausgeloest wird.
       aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(max_ampere) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
-      pv_power: "{{ states(var_pv_power) | float(0) }}"
       pv_forecast: "{{ states(var_pv_forecast) | float(0) }}"
       vmax1: "{{ states(var_vmax1) | float(0) }}"
       vmax2: "{{ states(var_vmax2) | float(0) }}"
@@ -2150,37 +2154,42 @@ action:
       # steht vorher fest (sim_slots) - unabhängig von X, sonst wäre die
       # Suchfunktion nicht monoton.
       # ==================================================================
-      # Suche in 1-A-Schritten. Zwei Laeufe: einmal im um den Ladevorlauf
-      # gekuerzten Fenster, einmal im vollen. Der GROESSERE gewinnt - ein
-      # Umschalten zwischen beiden waere nicht monoton, mehr Bedarf koennte
-      # dann weniger Strom ergeben. Ist der Vorlauf nicht erreichbar, liefert
-      # sein Lauf 0 und der volle Lauf bestimmt das Ergebnis.
+      # Binaere Suche: Die simulierte Kapazitaet ist monoton in X, Halbieren
+      # findet denselben kleinsten Wert in fester Rundenzahl. Der 1-A-Scan lief
+      # bis max_ampere durch, sobald der Bedarf im Fenster gar nicht zu decken
+      # war - der haeufigste Fall. Zwei Laeufe: gekuerztes und volles Fenster,
+      # der GROESSERE gewinnt, sonst waere die Suche nicht monoton. Ist der
+      # Vorlauf nicht erreichbar, liefert sein Lauf 0.
       sim_a_vorlauf: >
-        {% set ns = namespace(gefunden=0) %}
+        {% set ns = namespace(lo=1, hi=(max_ampere | int(140)), gefunden=0) %}
         {% if sim_slots_gekuerzt | length > 0 and benoetigt_kwh > 0 %}
-          {% for x in range(1, (max_ampere | int(140)) + 1) %}
-            {% if ns.gefunden == 0 %}
+          {% for runde in range(12) %}
+            {% if ns.lo <= ns.hi %}
+              {% set x = (ns.lo + ns.hi) // 2 %}
               {% set ns2 = namespace(summe=0.0) %}
               {% for s in sim_slots_gekuerzt %}
                 {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
                 {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
               {% endfor %}
-              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% endif %}
+              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% set ns.hi = x - 1 %}
+              {% else %}{% set ns.lo = x + 1 %}{% endif %}
             {% endif %}
           {% endfor %}
         {% endif %}
         {{ ns.gefunden }}
       sim_a_fenster: >
-        {% set ns = namespace(gefunden=0) %}
+        {% set ns = namespace(lo=1, hi=(max_ampere | int(140)), gefunden=0) %}
         {% if sim_slots_fenster | length > 0 and benoetigt_kwh > 0 %}
-          {% for x in range(1, (max_ampere | int(140)) + 1) %}
-            {% if ns.gefunden == 0 %}
+          {% for runde in range(12) %}
+            {% if ns.lo <= ns.hi %}
+              {% set x = (ns.lo + ns.hi) // 2 %}
               {% set ns2 = namespace(summe=0.0) %}
               {% for s in sim_slots_fenster %}
                 {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
                 {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
               {% endfor %}
-              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% endif %}
+              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% set ns.hi = x - 1 %}
+              {% else %}{% set ns.lo = x + 1 %}{% endif %}
             {% endif %}
           {% endfor %}
         {% endif %}
@@ -2393,12 +2402,6 @@ action:
         {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing))
         or states(var_timer_cooldown) == 'active') }}
 
-      schnee_falle_aktiv: >
-        {% set is_winter = now().month in winter_monate %}
-        {% set power_low = pv_power < (pv_forecast / 2) %}
-        {% set diff_high = (pv_forecast - pv_power) > 1000 %}
-        {{ is_winter and power_low and diff_high }}
-
       wp_sperre_aktiv: >
         {{ var_wp_boost_aktiv and states(var_timer_wp_anlauf) == 'active' }}
 
@@ -2599,6 +2602,12 @@ action:
         {% set t = states[var_timer_peak] if var_timer_peak != '' else none %}
         {{ t is not none and t.last_changed is not none and (t.last_changed | as_local).date() == now().date() }}
       blockade_ohne_spitze: "{{ (blockade_heute_beendet or aktueller_modus == 'blockade') and not peak_timer_heute }}"
+      # ABREGELUNG: Oberhalb der Peak-Schwelle regelt der Wechselrichter ab,
+      # sobald er den Strom nicht mehr in die Batterie leiten kann. Genau die
+      # Gegenbedingung zum Peak-Shaving-Zweig, der bei voller Batterie nicht
+      # mehr anlaeuft - erst hier geht Ertrag verloren, nicht schon bei jeder
+      # Ueberschreitung.
+      abregelung_aktiv: "{{ real_export > schwelle_peak_shaving and (aktueller_soc >= 99 or heute_schon_voll) }}"
       # PEAK-SHAVING HAT VORRANG: Die Blockade endet, sobald die Einspeisung die
       # Peak-Schwelle reisst - sonst regelt der Wechselrichter ab, waehrend die
       # Batterie auf 0 A steht. An den entprellten TRIGGER gekoppelt statt an
@@ -2614,14 +2623,17 @@ action:
       # 2h-Mindestdauer nur als START-Schwelle; danach haelt die Blockade bis zum
       # dynamischen Ausstieg durch. Bei komplett offline BMS wird nicht auf 0 A
       # blockiert, sondern mit dem Notlauf-Strom weitergeladen.
+      # Kein Kalender: spitze_erwartet beantwortet standort- und taggenau, ob es
+      # etwas zu kappen gibt, und blockade_dyn_t traegt ueber den Realitaets-
+      # Check die tatsaechliche Erzeugung nach - bei verschneiten Modulen bleibt
+      # es leer und die Blockade startet nicht.
       blockade_aktiv: >
-        {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
+        {{ is_day and aktueller_soc < 99 and vor_blockade_ende
            and spitze_erwartet
            and not packs_offline_bestaetigt
            and states(var_timer_peak) != 'active'
            and (trigger.id != 'export_peak_schwelle'
                 or wp_sperre_aktiv or wp_boost_startet_gleich)
-           and now().month not in winter_monate
            and blockade_dyn_t != ''
            and (aktueller_modus == 'blockade'
                 or (as_datetime(blockade_dyn_t) - now()).total_seconds() >= (blockade_min_dauer_h | float(2)) * 3600)
@@ -3022,6 +3034,7 @@ action:
               'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
               'export_heute_kwh': export_heute_kwh, 'halten_verlust_kwh': halten_verlust_kwh | round(2),
               'spitze_erwartet_w': spitze_erwartet_w | round(0), 'spitze_erwartet': spitze_erwartet,
+              'abregelung_aktiv': abregelung_aktiv,
               'blockade_aktiv': blockade_aktiv, 'blockade_dyn_t': blockade_dyn_t, 'blockade_heute_beendet': blockade_heute_beendet,
               'trend_aktiv': trend_aktiv, 'trend_faktor': trend_faktor | round(3), 'pv_abschlag': pv_abschlag | round(3),
               'freie_kwh': freie_kwh | round(2), 'defizit_kwh': defizit_kwh | round(2), 'benoetigt_kwh': benoetigt_kwh | round(2),
@@ -3806,7 +3819,7 @@ action:
             value_template: "{{ var_wp_boost_aktiv }}"
           # Trigger-Entkopplung: Die Export-Trigger für Peak-Shaving (6500 W)
           # und WP-Boost (6400 W) werden bei steigendem Export fast gleichzeitig
-          # wahr (beide 'for: 30s'). Ohne diese Bedingung liefen zwei Läufe in
+          # wahr (gleiche Entprellung). Ohne diese Bedingung liefen zwei Läufe in
           # derselben Sekunde und hoben den Ladestrom doppelt an. Jeder
           # Export-Trigger bedient jetzt nur noch seinen eigenen Zweig; der
           # 5-Minuten-Takt bedient beide.
@@ -4009,6 +4022,29 @@ action:
         data:
           name: "PV Optimizer"
           message: "{{ log_kopf }} Wärmepumpen-Laufzeit auf {{ wp_nachlauf_min | int(15) }} Minuten gekürzt, da das Warmwasser mit {{ ww_temp | round(1) }} °C die Zieltemperatur {{ var_wp_ziel_temp_pv }} °C erreicht hat. Die Wärmepumpe lädt den Speicher noch fertig; danach steht der Überschuss wieder der Batterie zur Verfügung."
+          entity_id: !input helper_logbook_dummy
+
+
+  # VERLUSTFALL ABREGELUNG: Peak-Shaving kann nichts mehr auffangen, weil die
+  # Batterie voll ist. Der entprellte Export-Trigger meldet je Ueberschreitung
+  # einmal; der Halbstundenlauf haelt eine anhaltende Abregelung sichtbar, ohne
+  # dass jeder 5-Minuten-Takt eine Zeile schreibt.
+  - if:
+      - condition: template
+        value_template: >
+          {{ abregelung_aktiv
+             and (trigger.id == 'export_peak_schwelle'
+                  or (trigger.id == 'monitoring_5min' and now().minute % 30 < 5)) }}
+    then:
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: >-
+            {{ log_kopf }} Abregelung: Wechselrichter regelt ab, Überschuss über der Schwelle geht verloren,
+            da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W
+            und die Batterie voll ist. (Über der Schwelle {{ (real_export - schwelle_peak_shaving) | round(0) }} W;
+            Ladestand (SOC) {{ aktueller_soc | round(0) }} %, freie Ladekapazität {{ freie_kwh | round(1) }} kWh
+            von {{ batterie_kapazitaet | round(1) }} kWh)
           entity_id: !input helper_logbook_dummy
 
 
@@ -4290,7 +4326,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Fehleinschätzung der Prognose: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:

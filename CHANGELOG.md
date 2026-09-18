@@ -10,6 +10,64 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.11.0] - 2026-09-18
+
+### Added
+- A logbook entry for the case in which surplus is actually lost: the inverter curtails once the
+  feed-in passes the peak-shaving threshold and it can no longer route the current into the
+  battery. That is the counter-condition to the peak-shaving branch, which does not start on a
+  full battery, so until now the one situation that costs yield was the only one not reported.
+  The debounced export trigger reports it once per crossing, the half-hour run keeps a lasting
+  curtailment visible.
+
+### Changed
+- The charge-current simulation halves the search interval instead of stepping through it in
+  1 A increments. The simulated capacity is monotonic in the current, so bisection returns the
+  same value in a fixed number of rounds. The stepping scan ran up to the configured maximum
+  whenever the demand could not be covered in the window at all, which is the most common case
+  and the one where the result is only a fallback.
+- The optional parts of the helper package ship commented out instead of asking to delete them.
+  Home Assistant validates each group as a whole, so one forgotten placeholder in the wallbox or
+  backup-circuit blocks dropped the mandatory half-hourly house meter with it, and the error then
+  pointed at an unassigned field rather than at its cause.
+- Traces are kept for 800 runs instead of 400, so a diagnosis still finds the day before last.
+- The diagnostic recording is set up outside the web root. Everything under `/config/www` is
+  served at `/local` without any authentication, and the recording describes the site in detail.
+  The setup releases one directory through `allowlist_external_dirs` and names Samba, the file
+  editor or scp as the way to fetch the file.
+- The weather recording keys each source by its integration instead of its entity id. Entity names
+  carry the site location on some integrations, and only the source matters for comparing forecast
+  error; one entity per integration keeps the mapping unambiguous. Without a registry entry the
+  position in the selection is used, never the entity id.
+- The note appended to the peak-shaving message when no morning blockade ran is marked as
+  informative instead of a misjudgement of the forecast. Shaving a peak is what the branch is for,
+  and it costs nothing while the battery still takes charge; the new curtailment entry reports the
+  case that does.
+
+### Removed
+- The calendar guard that suppressed the morning blockade from November to February, together
+  with the snow detection that hung off it. The detection could never fire, because its own
+  condition required one of those months while the blockade excluded them in the same chain.
+  What the guard was for is answered more precisely elsewhere: the blockade only starts when the
+  forecast expects an export peak worth shaving, and the reality check pulls the available
+  surplus down to what the panels actually produce, so covered panels keep it from starting.
+
+### Fixed
+- Two field descriptions offered a shadow BMS as supplied although the package states it is not
+  included, and the description of the battery power sensor did not name the sign convention the
+  export and discharge detection depend on.
+- The blueprint description named the state before the discharge planning existed. It now says
+  what the automation does today, which is the first text Home Assistant shows in the list.
+- The description of the first time-of-use field promised a nightly recharge from the grid. That
+  behaviour went away when the discharge planning took over the registers. The field now states
+  what it does and names the inverter operation mode the value needs to take effect.
+- Three comments claimed a 30 s debounce for the two export triggers where the code has two
+  minutes for both. The reason for the equal debounce is now written once, at the trigger it
+  belongs to, instead of being restated in contradictory form at three places.
+- The optimizer request in the package waited up to two minutes. The run sits in the same queue
+  as monitoring and peak shaving, so a hanging optimizer delayed control; it now gives up after
+  twenty seconds, which is ample for a local service and diagnosis only anyway.
+
 ## [V6.10.0] - 2026-09-13
 
 ### Added
@@ -647,6 +705,7 @@ Logbuch-Meldung trägt ihn.
   which would mask the actual cause.
 
 [Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...HEAD
+[V6.11.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...V6.11.0
 [V6.10.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...V6.10.0
 [V6.9.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...V6.9.0
 [V6.8.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...V6.8.0

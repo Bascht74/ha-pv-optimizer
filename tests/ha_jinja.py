@@ -258,10 +258,14 @@ class Harness:
         zustaende: dict[str, Zustand],
         jetzt: dt.datetime,
         trigger_id: str = "monitoring_5min",
+        integrationen: dict[str, str] | None = None,
     ):
         self.blueprint = blueprint
         self.inputs = inputs
         self.states = States(zustaende)
+        # Entitaet -> Integration, wie sie die Registry kennt. Nicht eingetragene
+        # Entitaeten haben keinen Config-Entry, genau wie in Home Assistant.
+        self.integrationen = dict(integrationen or {})
         if jetzt.tzinfo is None:
             jetzt = jetzt.replace(tzinfo=TZ)
         self.jetzt = jetzt.astimezone(TZ)
@@ -272,6 +276,7 @@ class Harness:
     def _laufzeit_kontext(self) -> dict:
         jetzt = self.jetzt
         states = self.states
+        integrationen = self.integrationen
 
         def now() -> dt.datetime:
             return jetzt
@@ -292,8 +297,17 @@ class Harness:
         def is_state(entity_id: Any, wert: Any) -> bool:
             return states(entity_id) == wert
 
+        def config_entry_id(entity_id: Any) -> Any:
+            return f"ce_{entity_id}" if entity_id in integrationen else None
+
+        def config_entry_attr(entry_id: Any, attr: str) -> Any:
+            if attr != "domain" or not isinstance(entry_id, str) or not entry_id.startswith("ce_"):
+                return None
+            return integrationen.get(entry_id[3:])
+
         return dict(states=states, state_attr=state_attr, is_state=is_state,
-                    now=now, utcnow=utcnow, today_at=today_at)
+                    now=now, utcnow=utcnow, today_at=today_at,
+                    config_entry_id=config_entry_id, config_entry_attr=config_entry_attr)
 
     # -- Rendern ----------------------------------------------------------
     def render(self, quelle: str, ctx: dict) -> Any:
