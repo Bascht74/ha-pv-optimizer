@@ -17,13 +17,13 @@ blueprint:
         battery_soc_sensor:
           name: "Ladezustand SOC (%)"
           description: >-
-            Sensor mit dem aktuellen Ladezustand der Gesamt-Batterie in Prozent. Steuert die gesamte Prioritäts-Kaskade. Tipp: Wenn du das mitgelieferte Schatten-BMS nutzt, trage hier dessen Sensor ein — er ist meist genauer als der SOC des Wechselrichters.
+            Sensor mit dem aktuellen Ladezustand der Gesamt-Batterie in Prozent. Steuert die gesamte Prioritäts-Kaskade. Tipp: Wenn du ein Schatten-BMS nutzt, trage hier dessen Sensor ein — er ist meist genauer als der SOC des Wechselrichters.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         battery_power_sensor:
           name: "Batterie-Leistung (W)"
           description: >-
-            Sensor mit der aktuellen Lade-/Entladeleistung. Wird unter anderem beim Peak-Shaving genutzt, um zu erkennen, wie viel die Batterie gerade puffert.
+            Vorzeichen wie beim Deye: negativ beim Laden, positiv beim Entladen — ein Sensor mit umgekehrtem Vorzeichen kehrt die Entlade-Erkennung um. Sensor mit der aktuellen Lade-/Entladeleistung. Wird unter anderem beim Peak-Shaving genutzt, um zu erkennen, wie viel die Batterie gerade puffert.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "power"}}
         vmax1_sensor:
@@ -353,7 +353,7 @@ blueprint:
         schatten_bms_sensor:
           name: "Schatten-BMS: SOC-Sensor"
           description: >-
-            Der Template-Sensor des mitgelieferten Schatten-BMS. Er muss das Attribut „raw_drift_soc“ haben (ungeclampter Rohwert). Der Blueprint korrigiert damit die Drift, sobald der Rohwert über 100 % läuft.
+            Der Template-Sensor des optionalen Schatten-BMS (nicht im Package enthalten). Er muss das Attribut „raw_drift_soc“ haben (ungeclampter Rohwert). Der Blueprint korrigiert damit die Drift, sobald der Rohwert über 100 % läuft.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
         helper_tare_charge:
@@ -890,7 +890,7 @@ trigger:
 mode: queued
 max: 20
 trace:
-  stored_traces: 400
+  stored_traces: 800
 
 action:
   # NEUSTART-EINLESEPAUSE
@@ -922,8 +922,6 @@ action:
       log_kopf: "{{ bp_version[:-1] ~ ' · ' ~ lauf_kennung ~ ']' }}"
       # --- Konfigurierbare Parameter (bewusst hier statt als Blueprint-Input,
       #     damit keine Neuzuweisung je Instanz noetig ist) ---
-      # Wintermonate ohne Peak-Shaving: hier laeuft KEINE Morgen-Blockade;
-      winter_monate: [11, 12, 1, 2]
       # Sicherheitspuffer anteilig statt fest, gedeckelt durch puffer_kwh:
       # Ein fester Abzug wirkt umgekehrt proportional (1 kWh von 4 kWh sind 25 %,
       # von 20 kWh nur 5 %) und bremst damit abends am staerksten - gerade dann,
@@ -1642,7 +1640,6 @@ action:
       # Unbekanntes Register: Maximalstrom annehmen, damit kein Anheben ausgeloest wird.
       aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(max_ampere) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
-      pv_power: "{{ states(var_pv_power) | float(0) }}"
       pv_forecast: "{{ states(var_pv_forecast) | float(0) }}"
       vmax1: "{{ states(var_vmax1) | float(0) }}"
       vmax2: "{{ states(var_vmax2) | float(0) }}"
@@ -2157,37 +2154,42 @@ action:
       # steht vorher fest (sim_slots) - unabhängig von X, sonst wäre die
       # Suchfunktion nicht monoton.
       # ==================================================================
-      # Suche in 1-A-Schritten. Zwei Laeufe: einmal im um den Ladevorlauf
-      # gekuerzten Fenster, einmal im vollen. Der GROESSERE gewinnt - ein
-      # Umschalten zwischen beiden waere nicht monoton, mehr Bedarf koennte
-      # dann weniger Strom ergeben. Ist der Vorlauf nicht erreichbar, liefert
-      # sein Lauf 0 und der volle Lauf bestimmt das Ergebnis.
+      # Binaere Suche: Die simulierte Kapazitaet ist monoton in X, Halbieren
+      # findet denselben kleinsten Wert in fester Rundenzahl. Der 1-A-Scan lief
+      # bis max_ampere durch, sobald der Bedarf im Fenster gar nicht zu decken
+      # war - der haeufigste Fall. Zwei Laeufe: gekuerztes und volles Fenster,
+      # der GROESSERE gewinnt, sonst waere die Suche nicht monoton. Ist der
+      # Vorlauf nicht erreichbar, liefert sein Lauf 0.
       sim_a_vorlauf: >
-        {% set ns = namespace(gefunden=0) %}
+        {% set ns = namespace(lo=1, hi=(max_ampere | int(140)), gefunden=0) %}
         {% if sim_slots_gekuerzt | length > 0 and benoetigt_kwh > 0 %}
-          {% for x in range(1, (max_ampere | int(140)) + 1) %}
-            {% if ns.gefunden == 0 %}
+          {% for runde in range(12) %}
+            {% if ns.lo <= ns.hi %}
+              {% set x = (ns.lo + ns.hi) // 2 %}
               {% set ns2 = namespace(summe=0.0) %}
               {% for s in sim_slots_gekuerzt %}
                 {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
                 {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
               {% endfor %}
-              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% endif %}
+              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% set ns.hi = x - 1 %}
+              {% else %}{% set ns.lo = x + 1 %}{% endif %}
             {% endif %}
           {% endfor %}
         {% endif %}
         {{ ns.gefunden }}
       sim_a_fenster: >
-        {% set ns = namespace(gefunden=0) %}
+        {% set ns = namespace(lo=1, hi=(max_ampere | int(140)), gefunden=0) %}
         {% if sim_slots_fenster | length > 0 and benoetigt_kwh > 0 %}
-          {% for x in range(1, (max_ampere | int(140)) + 1) %}
-            {% if ns.gefunden == 0 %}
+          {% for runde in range(12) %}
+            {% if ns.lo <= ns.hi %}
+              {% set x = (ns.lo + ns.hi) // 2 %}
               {% set ns2 = namespace(summe=0.0) %}
               {% for s in sim_slots_fenster %}
                 {% set kap = x * nominale_spannung * (s[1] | float(0)) / 1000 %}
                 {% set ns2.summe = ns2.summe + [ (s[0] | float(0)), kap ] | min %}
               {% endfor %}
-              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% endif %}
+              {% if ns2.summe >= benoetigt_kwh %}{% set ns.gefunden = x %}{% set ns.hi = x - 1 %}
+              {% else %}{% set ns.lo = x + 1 %}{% endif %}
             {% endif %}
           {% endfor %}
         {% endif %}
@@ -2399,12 +2401,6 @@ action:
       top_balancing_noetig: >
         {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing))
         or states(var_timer_cooldown) == 'active') }}
-
-      schnee_falle_aktiv: >
-        {% set is_winter = now().month in winter_monate %}
-        {% set power_low = pv_power < (pv_forecast / 2) %}
-        {% set diff_high = (pv_forecast - pv_power) > 1000 %}
-        {{ is_winter and power_low and diff_high }}
 
       wp_sperre_aktiv: >
         {{ var_wp_boost_aktiv and states(var_timer_wp_anlauf) == 'active' }}
@@ -2627,14 +2623,17 @@ action:
       # 2h-Mindestdauer nur als START-Schwelle; danach haelt die Blockade bis zum
       # dynamischen Ausstieg durch. Bei komplett offline BMS wird nicht auf 0 A
       # blockiert, sondern mit dem Notlauf-Strom weitergeladen.
+      # Kein Kalender: spitze_erwartet beantwortet standort- und taggenau, ob es
+      # etwas zu kappen gibt, und blockade_dyn_t traegt ueber den Realitaets-
+      # Check die tatsaechliche Erzeugung nach - bei verschneiten Modulen bleibt
+      # es leer und die Blockade startet nicht.
       blockade_aktiv: >
-        {{ is_day and aktueller_soc < 99 and vor_blockade_ende and not schnee_falle_aktiv
+        {{ is_day and aktueller_soc < 99 and vor_blockade_ende
            and spitze_erwartet
            and not packs_offline_bestaetigt
            and states(var_timer_peak) != 'active'
            and (trigger.id != 'export_peak_schwelle'
                 or wp_sperre_aktiv or wp_boost_startet_gleich)
-           and now().month not in winter_monate
            and blockade_dyn_t != ''
            and (aktueller_modus == 'blockade'
                 or (as_datetime(blockade_dyn_t) - now()).total_seconds() >= (blockade_min_dauer_h | float(2)) * 3600)

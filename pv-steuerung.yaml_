@@ -11,13 +11,15 @@
 #   2. binary_sensor "Ladesteuerung Eingriff Aktiv"
 #        -> die number-Entitaet des maximalen Ladestroms und deren Maximalwert
 #           (derselbe Wert wie der Blueprint-Input "Maximaler Ladestrom").
-#   3. Nur mit Wallbox: je Ladepunkt die Quelle des Utility-Meters
-#        wallbox_N_halbstuendlich (evcc "Charge Total Import"). Ohne Wallbox
-#        diese Zaehler loeschen. Der offene Ladebedarf braucht keinen Helfer,
-#        die evcc-Sensoren "Charge Remaining Energy" werden direkt ausgewaehlt.
-#   4. Nur mit Notstromausgang: sensor.notstromlast_energie.source
-#        -> die Leistung am Load-UPS-Ausgang des Deye ("Load UPS Power", W).
-#           Ohne Notstromkreis Sensor, Zaehler und Helfer loeschen.
+#   3. Nur mit Wallbox: die Zaehler wallbox_N_halbstuendlich einkommentieren
+#        und je Ladepunkt die Quelle eintragen (evcc "Charge Total Import").
+#        Der offene Ladebedarf braucht keinen Helfer, die evcc-Sensoren
+#        "Charge Remaining Energy" werden direkt ausgewaehlt.
+#   4. Nur mit Notstromausgang: den Integrations-Sensor und den Zaehler
+#        notstromlast_halbstuendlich einkommentieren und als Quelle die
+#        Leistung am Load-UPS-Ausgang des Deye eintragen ("Load UPS Power", W).
+#        Optionale Bloecke bleiben sonst auskommentiert stehen: ein
+#        stehengebliebener Platzhalter verwirft die ganze Gruppe.
 #
 # Alles andere ist standortunabhaengig. Nach dem Einbinden ueber packages:
 # sind die Entitaeten den Blueprint-Inputs zuzuweisen; die Zuordnung steht
@@ -178,27 +180,30 @@ utility_meter:
     delta_values: false
   # Nur mit Wallbox (Sektion 11): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
   # vom Blueprint zusammen mit dem Hausverbrauch-Zaehler genullt. Beide im Feld
-  # "Wallbox-Ladung halbstuendlich" auswaehlen; ohne Wallbox loeschen.
-  wallbox_1_halbstuendlich:
-    source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 1 "Charge Total Import", kWh, steigend
-    name: "Wallbox 1 Halbstündlich"
-    cycle: daily
-    net_consumption: false
-    delta_values: false
-  wallbox_2_halbstuendlich:
-    source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 2 "Charge Total Import"
-    name: "Wallbox 2 Halbstündlich"
-    cycle: daily
-    net_consumption: false
-    delta_values: false
+  # "Wallbox-Ladung halbstuendlich" auswaehlen. Zum Nutzen einkommentieren und
+  # die Quelle eintragen - ein stehengebliebener Platzhalter laesst Home
+  # Assistant die ganze utility_meter-Gruppe verwerfen, auch den Hausverbrauch.
+  # wallbox_1_halbstuendlich:
+  #   source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 1 "Charge Total Import", kWh, steigend
+  #   name: "Wallbox 1 Halbstündlich"
+  #   cycle: daily
+  #   net_consumption: false
+  #   delta_values: false
+  # wallbox_2_halbstuendlich:
+  #   source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 2 "Charge Total Import"
+  #   name: "Wallbox 2 Halbstündlich"
+  #   cycle: daily
+  #   net_consumption: false
+  #   delta_values: false
   # Notstromkreis (optional): Energie am Load-UPS-Ausgang je Halbstunde aus dem
   # Riemann-Sensor unten; der Blueprint nullt den Zaehler alle 30 Minuten.
-  notstromlast_halbstuendlich:        # -> Notstromlast halbstuendlich (kWh, optional)
-    source: sensor.notstromlast_energie
-    name: "Notstromlast Halbstündlich"
-    cycle: daily
-    net_consumption: false
-    delta_values: false
+  # Zusammen mit dem Integrations-Sensor weiter unten einkommentieren.
+  # notstromlast_halbstuendlich:      # -> Notstromlast halbstuendlich (kWh, optional)
+  #   source: sensor.notstromlast_energie
+  #   name: "Notstromlast Halbstündlich"
+  #   cycle: daily
+  #   net_consumption: false
+  #   delta_values: false
   # Auswertung des Verlust-Zaehlers nach Zeitraum, fuer das Dashboard.
   speicherverlust_heute:
     source: input_number.speicherverlust_gesamt
@@ -225,19 +230,20 @@ template:
         unique_id: "optimizer_binary_intervention_active"
         icon: mdi:flash-alert
         state: >
-          {% set maximum = 350 %}                                        {# <HIER EINTRAGEN>: Maximaler Ladestrom #}
+          {% set maximum = 350 %}                                        {# Standard; nur aendern, wenn der Blueprint-Input "Maximaler Ladestrom" abweicht #}
           {% set limit = states('number.<HIER EINTRAGEN>') | float(maximum) %}  {# Stellgroesse max. Ladestrom #}
           {{ limit < maximum and is_state('sun.sun', 'above_horizon') }}
 sensor:
   # Notstromkreis (optional): der Deye liefert am Load-UPS-Ausgang nur Leistung,
-  # die Energie entsteht hier als Riemann-Summe (W -> kWh).
-  - platform: integration
-    source: sensor.<HIER EINTRAGEN>   # Deye "Load UPS Power" (W)
-    name: "Notstromlast Energie"
-    unique_id: "optimizer_sensor_notstromlast_energie"
-    unit_prefix: k
-    round: 3
-    method: left
+  # die Energie entsteht hier als Riemann-Summe (W -> kWh). Zum Nutzen
+  # einkommentieren, zusammen mit dem Zaehler oben.
+  # - platform: integration
+  #   source: sensor.<HIER EINTRAGEN>   # Deye "Load UPS Power" (W)
+  #   name: "Notstromlast Energie"
+  #   unique_id: "optimizer_sensor_notstromlast_energie"
+  #   unit_prefix: k
+  #   round: 3
+  #   method: left
   - platform: history_stats           # -> Diagnose: Eingriffsdauer heute
     name: "Ladesteuerung Eingriff Dauer Heute"
     unique_id: "optimizer_sensor_intervention_duration_today"

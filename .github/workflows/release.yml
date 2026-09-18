@@ -33,11 +33,13 @@ jobs:
       - run: pytest -q
       - name: Version und Release-Notes aus dem Repository lesen
         id: v
+        env:
+          EINGABE: ${{ inputs.version }}
         run: |
           version=$(sed -n '2p' PV-Ladesteuerung.yaml | grep -o 'V[0-9]*\.[0-9]*\.[0-9]*')
           test -n "$version" || { echo "Keine Version in blueprint.name"; exit 1; }
-          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$version" ]; then
-            echo "Eingabe ${{ inputs.version }} passt nicht zu blueprint.name ($version)"; exit 1
+          if [ -n "$EINGABE" ] && [ "$EINGABE" != "$version" ]; then
+            echo "Eingabe $EINGABE passt nicht zu blueprint.name ($version)"; exit 1
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
             echo "Tag $version existiert bereits"; exit 1

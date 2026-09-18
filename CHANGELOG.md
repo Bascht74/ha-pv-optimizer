@@ -21,6 +21,16 @@ Logbuch-Meldung trägt ihn.
   curtailment visible.
 
 ### Changed
+- The charge-current simulation halves the search interval instead of stepping through it in
+  1 A increments. The simulated capacity is monotonic in the current, so bisection returns the
+  same value in a fixed number of rounds. The stepping scan ran up to the configured maximum
+  whenever the demand could not be covered in the window at all, which is the most common case
+  and the one where the result is only a fallback.
+- The optional parts of the helper package ship commented out instead of asking to delete them.
+  Home Assistant validates each group as a whole, so one forgotten placeholder in the wallbox or
+  backup-circuit blocks dropped the mandatory half-hourly house meter with it, and the error then
+  pointed at an unassigned field rather than at its cause.
+- Traces are kept for 800 runs instead of 400, so a diagnosis still finds the day before last.
 - The diagnostic recording is set up outside the web root. Everything under `/config/www` is
   served at `/local` without any authentication, and the recording describes the site in detail.
   The setup releases one directory through `allowlist_external_dirs` and names Samba, the file
@@ -34,7 +44,18 @@ Logbuch-Meldung trägt ihn.
   and it costs nothing while the battery still takes charge; the new curtailment entry reports the
   case that does.
 
+### Removed
+- The calendar guard that suppressed the morning blockade from November to February, together
+  with the snow detection that hung off it. The detection could never fire, because its own
+  condition required one of those months while the blockade excluded them in the same chain.
+  What the guard was for is answered more precisely elsewhere: the blockade only starts when the
+  forecast expects an export peak worth shaving, and the reality check pulls the available
+  surplus down to what the panels actually produce, so covered panels keep it from starting.
+
 ### Fixed
+- Two field descriptions offered a shadow BMS as supplied although the package states it is not
+  included, and the description of the battery power sensor did not name the sign convention the
+  export and discharge detection depend on.
 - The blueprint description named the state before the discharge planning existed. It now says
   what the automation does today, which is the first text Home Assistant shows in the list.
 - The description of the first time-of-use field promised a nightly recharge from the grid. That
