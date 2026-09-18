@@ -1,9 +1,10 @@
 blueprint:
   name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.11.0]"
   description: >-
-    Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
-    Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
-    Top-Balancing inkl. Schatten-BMS Kalibrierung, WP-Boost und historischer Treppen-Filter.
+    Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
+    frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
+    ToU-Programme aus einer rollierenden Halbstundenprognose, hält eine Notstromreserve frei und
+    verschiebt Warmwasser in den PV-Überschuss. Zellausgleich über PV, nie aus dem Netz.
   domain: automation
 
   input:

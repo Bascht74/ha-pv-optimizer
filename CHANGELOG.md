@@ -21,6 +21,10 @@ Logbuch-Meldung trägt ihn.
   curtailment visible.
 
 ### Changed
+- The diagnostic recording is set up outside the web root. Everything under `/config/www` is
+  served at `/local` without any authentication, and the recording describes the site in detail.
+  The setup releases one directory through `allowlist_external_dirs` and names Samba, the file
+  editor or scp as the way to fetch the file.
 - The weather recording keys each source by its integration instead of its entity id. Entity names
   carry the site location on some integrations, and only the source matters for comparing forecast
   error; one entity per integration keeps the mapping unambiguous. Without a registry entry the
@@ -31,9 +35,17 @@ Logbuch-Meldung trägt ihn.
   case that does.
 
 ### Fixed
+- The blueprint description named the state before the discharge planning existed. It now says
+  what the automation does today, which is the first text Home Assistant shows in the list.
+- The description of the first time-of-use field promised a nightly recharge from the grid. That
+  behaviour went away when the discharge planning took over the registers. The field now states
+  what it does and names the inverter operation mode the value needs to take effect.
 - Three comments claimed a 30 s debounce for the two export triggers where the code has two
   minutes for both. The reason for the equal debounce is now written once, at the trigger it
   belongs to, instead of being restated in contradictory form at three places.
+- The optimizer request in the package waited up to two minutes. The run sits in the same queue
+  as monitoring and peak shaving, so a hanging optimizer delayed control; it now gives up after
+  twenty seconds, which is ample for a local service and diagnosis only anyway.
 
 ## [V6.10.0] - 2026-09-13
 

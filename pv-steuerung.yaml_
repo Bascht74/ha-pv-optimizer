@@ -256,4 +256,4 @@ rest_command:
     method: post
     content_type: "application/json"
     payload: "{{ payload if payload is string else (payload | to_json) }}"
-    timeout: 120
+    timeout: 20
