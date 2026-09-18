@@ -82,7 +82,7 @@ def test_alle_kernvariablen_sind_top_level(blueprint):
 @pytest.mark.parametrize("helfer_input", [
     "helper_lade_modus", "helper_batterie_heute_voll", "helper_blockade_beendet",
     "helper_max_soc_heute", "speicherverlust_gesamt",
-    "helper_offener_verlust", "helper_tare_charge", "helper_tare_discharge",
+    "helper_offener_verlust",
     "json_tracking_sensor", "hausverbrauch_json_text", "helper_logbook_dummy",
     "helper_timer_peak", "helper_timer_cooldown", "helper_timer_wp_anlauf", "helper_timer_wp_boost",
     "temperatur_json_text", "notstrom_json_text",

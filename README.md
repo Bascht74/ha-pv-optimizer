@@ -14,7 +14,7 @@ keine Zusatz-Software.
 - **Lastspitzen kappen.** Überschreitet die Netzeinspeisung die Schwelle, nimmt die Batterie den
   Überschuss auf; wahlweise heizt zuerst die Wärmepumpe Warmwasser.
 - **Zellausgleich über PV.** Bei erreichter Zellspannung wird die Erhaltungsspannung angehoben und
-  der interne Ladestand kalibriert; nie aus dem Netz.
+  der Ladestrom auf die Ausgleichs-Rate gesetzt; nie aus dem Netz.
 - **Entlade-Planung.** Die sechs ToU-Register des Wechselrichters bekommen nachts eine Untergrenze aus
   der Halbstunden-Bilanz der nächsten 72 Stunden: so tief, dass das Ziel (90 %) am Ende des besten
   Sonnentags wieder erreicht wird, aber nie so hoch, dass eingespeist würde, was das Haus nachts
@@ -22,7 +22,9 @@ keine Zusatz-Software.
   deshalb springt nichts um Mitternacht.
 - **Selbstkontrolle.** Ein Zähler „Speicherverlust" sammelt Energie, die ins Netz ging, obwohl das
   Haus sie hätte nutzen können, mit der Ursache in der Meldung; Fehleinschätzungen der Prognose
-  werden als Diagnose protokolliert.
+  werden als Diagnose protokolliert. Der Fall, in dem wirklich Ertrag verloren geht — der
+  Wechselrichter regelt ab, weil die Einspeisung über der Schwelle liegt und der Strom nicht mehr
+  in die volle Batterie passt —, bekommt eine eigene Meldung.
 
 ## Installation
 
@@ -35,6 +37,14 @@ keine Zusatz-Software.
 3. **Automation anlegen** und die Felder zuweisen. Pflichtfelder prüft der Blueprint beim Start
    selbst und nennt fehlende im Logbuch. Optionale Felder (Wärmepumpe, dritter Akku-Pack,
    Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
+
+**Ladestand (Sektion 1):** Der Blueprint nimmt den Ladestand als Messwert und rechnet ihn nicht
+selbst aus; zugewiesen wird der Sensor, der am Standort am genauesten ist. Wer dem SOC des
+Wechselrichters nicht traut, kann ein „Schatten-BMS" davorschalten, das den Ladestand aus den
+Lade- und Entladezählern bildet und seinen Nullpunkt setzt, sobald die Zellspannung die Batterie
+als voll ausweist. Das ist eine eigene Automation mit eigenen Helfern und nicht Teil dieses
+Repositories — die Verbindung besteht allein darin, dass ihr Sensor hier als „Ladezustand SOC (%)"
+eingetragen wird. Den Wechselrichter stellt in jedem Fall nur dieser Blueprint.
 
 **Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
 Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
@@ -120,4 +130,7 @@ ihn durch dieselbe Variablenkette; ohne Aufzeichnung überspringen sie diese Pr�
 
 `pip install -r requirements-dev.txt && pytest -q` rendert die Variablenkette des Blueprints
 außerhalb von Home Assistant gegen synthetische Szenarien und gegen die aufgezeichneten Läufe.
+Dazu kommt die Prioritätskaskade selbst: je Zweig ein Szenario, das festhält, welcher Zweig
+gewinnt und was er an den Wechselrichter schreibt. Ein Test liest die Zweige aus dem Blueprint und
+vergleicht sie mit den erreichten, damit ein neuer Zweig nicht ungeprüft bleibt.
 Arbeitsregeln, Prüfliste und Log-Konvention stehen in `CLAUDE.md`. Lizenz: Apache 2.0.

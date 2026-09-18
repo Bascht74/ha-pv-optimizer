@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.11.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -12,6 +12,7 @@ blueprint:
       name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
+        Leer bleiben dürfen: BMS 3 (nur bei drei Türmen) und der Ladezähler (nur fürs Schatten-BMS).
       collapsed: true
       input:
         battery_soc_sensor:
@@ -50,12 +51,6 @@ blueprint:
             Sensor mit dem aufsummierten Gesamt-Ladezähler des Wechselrichters in kWh (nur steigend, wird nie zurückgesetzt). Das Schatten-BMS berechnet daraus zusammen mit dem Entladezähler einen driftfreien Ladezustand.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
-        battery_total_discharge:
-          name: "Zähler: insgesamt entladen (kWh)"
-          description: >-
-            Sensor mit dem aufsummierten Gesamt-Entladezähler in kWh (nur steigend). Gegenstück zum Ladezähler — beide zusammen ergeben die Bilanz für das Schatten-BMS.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
         pack_capacity_ah:
           name: "Kapazität EINES Packs (Ah)"
           description: >-
@@ -78,6 +73,7 @@ blueprint:
       name: "2 – Wechselrichter-Steuerung (Pflicht)"
       description: >-
         Die Stellglieder, über die der Blueprint tatsächlich eingreift. Das sind schreibbare Entitäten (number/switch), keine Sensoren.
+        Leer bleiben dürfen: Float- und Batteriespannung (nur für den Zellausgleich) und der Abschalt-Ladestand (nur für die Notstromreserve).
       collapsed: true
       input:
         wr_max_charge_current:
@@ -164,6 +160,7 @@ blueprint:
       name: "3 – Netz & PV-Leistung (Pflicht)"
       description: >-
         Messwerte für Netzbezug/-einspeisung und die aktuelle PV-Erzeugung.
+        Leer bleiben dürfen: Notstromlast (nur für die Notstromreserve) sowie Außentemperatur und Wetter-Prognose (nur für die Aufzeichnung).
       collapsed: true
       input:
         grid_export_sensor:
@@ -219,6 +216,7 @@ blueprint:
       name: "4 – Solcast-Prognose (Pflicht)"
       description: >-
         Die PV-Vorhersage. Sie ist die Grundlage für die vorausschauende Ladeplanung — ohne sie kann der Blueprint nicht entscheiden, ob er mit dem Laden warten kann.
+        Leer bleiben dürfen die Prognosen morgen bis Tag 4; ohne sie entfällt die Entladeplanung.
       collapsed: true
       input:
         solcast_heute_sensor:
@@ -267,6 +265,7 @@ blueprint:
       name: "5 – Helfer-Entitäten (Pflicht)"
       description: >-
         Diese Helfer speichern den Zustand zwischen zwei Läufen. Sie müssen einmalig angelegt werden (siehe mitgeliefertes Package). Der Blueprint schreibt hier hinein — es sind keine Sensoren.
+        Leer bleiben dürfen die Helfer für Haltephase, Schatten-BMS und Temperatur-/Notstromprofil.
       collapsed: true
       input:
         helper_lade_modus:
@@ -350,24 +349,6 @@ blueprint:
             timer-Entität für die Gesamtlaufzeit des WP-Boosts. Solange er läuft, wird die reguläre Ladekaskade zurückgestellt.
           default: ""
           selector: {"entity": {"domain": "timer"}}
-        schatten_bms_sensor:
-          name: "Schatten-BMS: SOC-Sensor"
-          description: >-
-            Der Template-Sensor des optionalen Schatten-BMS (nicht im Package enthalten). Er muss das Attribut „raw_drift_soc“ haben (ungeclampter Rohwert). Der Blueprint korrigiert damit die Drift, sobald der Rohwert über 100 % läuft.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
-        helper_tare_charge:
-          name: "Schatten-BMS: Tare Ladezähler (kWh)"
-          description: >-
-            input_number. Merkt sich den Stand des Ladezählers zum Zeitpunkt der letzten 100-%-Kalibrierung. Der Blueprint führt ihn automatisch nach — nichts von Hand eintragen.
-          default: ""
-          selector: {"entity": {"domain": "input_number"}}
-        helper_tare_discharge:
-          name: "Schatten-BMS: Tare Entladezähler (kWh)"
-          description: >-
-            input_number, das den Stand des Entladezählers zum Zeitpunkt der letzten 100-%-Kalibrierung speichert. Gegenstück zum Tare-Ladezähler. Der Blueprint pflegt den Wert automatisch — nichts von Hand eintragen.
-          default: ""
-          selector: {"entity": {"domain": "input_number"}}
         hausverbrauch_json_text:
           name: "Helfer: Verbrauchsprofil (JSON)"
           description: >-
@@ -858,16 +839,6 @@ trigger:
     to: "idle"
     from: "active"
     id: float_boost_ende
-  - alias: "Trigger: SOC verlässt 100 % (Nachkalibrierung während Zellausgleich)"
-    # Feuert genau im Moment des Unterschreitens, nicht wiederholt. Dient als
-    # zweiter Auslöser für die Tare-Nachkalibrierung: Fällt der Ladestand
-    # während der Balancing-Phase unter 100 %, ist das der letzte Moment, in
-    # dem die Batterie nachweislich voll WAR — dann wird dort kalibriert statt
-    # erst am Timer-Ende (wo die Messung nicht mehr aussagekräftig ist).
-    platform: numeric_state
-    entity_id: !input battery_soc_sensor
-    below: 100
-    id: soc_verlaesst_voll
   - alias: "Trigger Peak-Shaving ENDE: Hold-Timer abgelaufen"
     platform: state
     entity_id: !input helper_timer_peak
@@ -911,7 +882,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.11.0]"
+      bp_version: "[V6.12.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -990,11 +961,7 @@ action:
       # Bewusst schon hier (nicht erst weiter unten): Der DEYE-RETRY direkt
       # darunter prueft dieses Register mit.
       var_wr_max_charge: !input wr_max_charge_current
-      var_battery_total_discharge: !input battery_total_discharge
-      var_helper_tare_charge: !input helper_tare_charge
       var_helper_blockade_beendet: !input helper_blockade_beendet
-      var_helper_tare_discharge: !input helper_tare_discharge
-      var_schatten_bms: !input schatten_bms_sensor
       var_lade_modus: !input helper_lade_modus
       var_json_tracking: !input json_tracking_sensor
       var_batterie_heute_voll: !input helper_batterie_heute_voll
@@ -1556,7 +1523,6 @@ action:
         {% set pflicht = [
              ('Ladezustand SOC (%)', var_battery_soc),
              ('Batterie-Leistung (W)', var_battery_power),
-             ('Zähler: insgesamt entladen (kWh)', var_battery_total_discharge),
              ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
              ('Netz-Leistung (W)', var_grid_export),
              ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
@@ -1571,7 +1537,6 @@ action:
              ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
              ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
              ('Helfer: Batterie war heute voll', var_batterie_heute_voll),
-             ('Schatten-BMS: Tare Entladezähler (kWh)', var_helper_tare_discharge),
              ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
              ('Timer: Peak-Shaving Hold', var_timer_peak),
              ('Timer: Zellausgleich-Nachlauf', var_timer_cooldown),
@@ -1702,15 +1667,6 @@ action:
       max_ampere: "{{ max_ampere | float(140) }}"
       min_ampere: "{{ min_ampere | float(7) }}"
       peak_ampere: "{{ peak_ampere | float(48) }}"
-
-      # Schatten-BMS Roh-SOC (ungeklemmt, aus Package-Sensor-Attribut).
-      # Wird für die Tare-Nachkalibrierung am Zellausgleich-Ende gebraucht.
-      schatten_raw_soc: >
-        {% if var_schatten_bms == '' or var_helper_tare_charge == '' or var_battery_total_charge == '' %}
-          -1
-        {% else %}
-          {{ state_attr(var_schatten_bms, 'raw_drift_soc') | float(-1) }}
-        {% endif %}
       nominale_spannung: "{{ nominale_spannung | float(51.2) }}"
       top_balancing_voltage: "{{ top_balancing_voltage | float(3.4) }}"
 
@@ -2907,7 +2863,6 @@ action:
              ('vmax2_sensor', var_vmax2, {}),
              ('vmax3_sensor', var_vmax3, {}),
              ('battery_total_charge', var_battery_total_charge, {}),
-             ('battery_total_discharge', var_battery_total_discharge, {}),
              ('wr_max_charge_current', var_wr_max_charge, {}),
              ('wr_float_voltage_sensor', var_wr_float_voltage, {}),
              ('wr_battery_voltage_sensor', var_wr_battery_voltage, {}),
@@ -2947,9 +2902,6 @@ action:
              ('helper_timer_cooldown', var_timer_cooldown, {}),
              ('helper_timer_wp_anlauf', var_timer_wp_anlauf, {}),
              ('helper_timer_wp_boost', var_timer_wp_boost, {'finishes_at': state_attr(var_timer_wp_boost, 'finishes_at')}),
-             ('schatten_bms_sensor', var_schatten_bms, {'raw_drift_soc': state_attr(var_schatten_bms, 'raw_drift_soc')}),
-             ('helper_tare_charge', var_helper_tare_charge, {}),
-             ('helper_tare_discharge', var_helper_tare_discharge, {}),
              ('hausverbrauch_json_text', var_hausverbrauch_json, {}),
              ('eingriff_dauer_sensor', var_eingriff_dauer, {}),
              ('wp_water_heater', var_wp_water_heater, {'temperature': state_attr(var_wp_water_heater, 'temperature')}),
@@ -3598,75 +3550,11 @@ action:
                 data:
                   value: "{{ var_float_balancing }}"
 
-      - alias: "NACHKALIBRIERUNG: Ladestand verlässt 100 % während Zellausgleich"
-        # Zweiter, früherer Auslöser für die Tare-Nachkalibrierung. Greift nur
-        # während der laufenden Balancing-Phase. In diesem Moment war die
-        # Batterie nachweislich gerade noch voll — der ideale Zeitpunkt, um die
-        # Nachladung der Phase zu erfassen. Danach übernimmt der Timer-Ende-Zweig
-        # nur noch, wenn der Ladestand durchgehend bei 100 % geblieben ist.
-        conditions:
-          - condition: trigger
-            id: soc_verlaesst_voll
-          - condition: template
-            value_template: "{{ states(var_timer_cooldown) == 'active' }}"
-          - condition: template
-            value_template: >
-              {{ (schatten_raw_soc | float(-1)) > 100 and
-                 (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
-                 var_helper_tare_charge != '' and var_battery_total_charge != '' }}
-        sequence:
-          - variables:
-              tare_alt: "{{ states(var_helper_tare_charge) | float(0) }}"
-          - action: input_number.set_value
-            target:
-              entity_id: "{{ var_helper_tare_charge }}"
-            data:
-              value: "{{ states(var_battery_total_charge) | float(0) }}"
-          - action: input_number.set_value
-            target:
-              entity_id: "{{ var_helper_tare_discharge }}"
-            data:
-              value: "{{ states(var_battery_total_discharge) | float(0) }}"
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: >
-                {{ log_kopf }} Interne Ladestand-Berechnung nachkalibriert: Nullpunkt (Tara) für 'geladen' von {{ tare_alt | round(2) }} kWh auf {{ states(var_battery_total_charge) | float(0) | round(2) }} kWh nachgeführt und interner Ladestand auf 100 % verankert, da der Ladestand (SOC) während des Zellausgleichs von 100 % wieder gefallen ist (Informativ: Batterie war gerade eben noch voll, rechnerische Abweichung {{ schatten_raw_soc | float(0) | round(2) }} %).
-              entity_id: !input helper_logbook_dummy
-
       - alias: "FLOAT-BOOST BEENDEN (Timer ist abgelaufen)"
         conditions:
           - condition: trigger
             id: float_boost_ende
         sequence:
-          # SCHATTEN-BMS-TARE am Zellausgleich-ENDE: nur noch als Nachkalibrierung,
-          # der harte 100%-Anker sitzt am START. Greift nur, wenn der Ladestand die
-          # ganze Phase über bei 100 % blieb - ist er zwischendurch gefallen, hat
-          # 'soc_verlaesst_voll' bereits kalibriert, als die Messung noch
-          # aussagekräftig war. Eine Spannungsprüfung taugt hier nicht: Am Timer-Ende
-          # bricht die Klemmenspannung ohne Ladestrom ein.
-          - variables:
-              ende_kalibrieren: >
-                {{ (schatten_raw_soc | float(-1)) > 100 and
-                   (aktueller_soc | float(0)) >= 100 and
-                   (states(var_battery_total_charge) | float(0)) > (states(var_helper_tare_charge) | float(0)) and
-                   var_helper_tare_charge != '' and var_battery_total_charge != '' }}
-          - if:
-              - condition: template
-                value_template: "{{ ende_kalibrieren }}"
-            then:
-              - action: input_number.set_value
-                target:
-                  entity_id: "{{ var_helper_tare_charge }}"
-                data:
-                  value: "{{ states(var_battery_total_charge) | float(0) }}"
-              - action: input_number.set_value
-                target:
-                  entity_id: "{{ var_helper_tare_discharge }}"
-                data:
-                  value: "{{ states(var_battery_total_discharge) | float(0) }}"
-          # Float-Reset läuft IMMER (unabhängig von der Kalibrierung), plus Log,
-          # dessen Wortlaut sich danach richtet, ob nachkalibriert wurde.
           - if:
               - condition: template
                 value_template: "{{ var_wr_float_voltage != '' }}"
@@ -3675,7 +3563,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ log_kopf }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt.{% if ende_kalibrieren %} Interner Ladestand (Tara) auf 100 % nachkalibriert.{% else %} Keine Nachkalibrierung nötig.{% endif %}
+                    {{ log_kopf }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt.
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -4111,26 +3999,6 @@ action:
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
-              # SCHATTEN-BMS-TARE: HIER am START. Sobald die Zellspannung die
-              # Balancing-Schwelle erreicht, ist die Batterie physikalisch voll
-              # -> Tare hart auf die aktuellen Zählerstände, interner SOC = 100%.
-              # Vorteil ggü. Ende-Verankerung: Kommt während der Phase Verbrauch,
-              # sinkt der SOC bereits korrekt; am Ende wird nur noch nachkalibriert,
-              # falls die Batterie dann noch voll ist (siehe float_boost_ende).
-              - if:
-                  - condition: template
-                    value_template: "{{ var_helper_tare_charge != '' and var_battery_total_charge != '' }}"
-                then:
-                  - action: input_number.set_value
-                    target:
-                      entity_id: "{{ var_helper_tare_charge }}"
-                    data:
-                      value: "{{ states(var_battery_total_charge) | float(0) }}"
-                  - action: input_number.set_value
-                    target:
-                      entity_id: "{{ var_helper_tare_discharge }}"
-                    data:
-                      value: "{{ states(var_battery_total_discharge) | float(0) }}"
               # 3. Ladestrom direkt setzen + EIN kombinierter Logbuch-Eintrag
               - action: number.set_value
                 target:

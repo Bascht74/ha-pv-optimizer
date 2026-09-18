@@ -10,6 +10,29 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.12.0] - 2026-09-18
+
+### Removed
+- The shadow BMS leaves the blueprint. Deriving a state of charge from the energy counters is a
+  battery concern, not a charge-control one: the blueprint never owned the formula, it only wrote
+  the tare helpers the external sensor read back. It now consumes a state of charge like any other
+  measurement and no longer cares where it comes from. Gone with it are the inputs for the shadow
+  BMS sensor and both tare helpers, the discharge counter that had no other use, the trigger and
+  branch for recalibrating while the battery leaves 100 %, and the tare anchoring in the
+  cell-balancing branch. The charge counter stays: it is also the probe that tells the blueprint
+  the inverter connection is alive.
+- The helper package no longer ships the two tare helpers; they belong to the shadow BMS.
+
+### Added
+- The five mandatory input sections now name the fields inside them that may stay empty, and the
+  function that is lost with each. A section marked mandatory otherwise suggests every field in it
+  has to be assigned, while several of them only gate an optional feature.
+- Tests for the priority cascade: one scenario per branch, stating which branch wins and what it
+  writes to the inverter, plus the couplings in which a change to one branch can quietly disable
+  another. A coverage test reads the branch aliases out of the blueprint and compares them with the
+  ones the scenarios reach, so a new branch turns it red until a scenario covers it.
+
+
 ## [V6.11.0] - 2026-09-18
 
 ### Added
@@ -704,7 +727,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.0...HEAD
+[V6.12.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.11.0...V6.12.0
 [V6.11.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...V6.11.0
 [V6.10.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...V6.10.0
 [V6.9.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...V6.9.0
