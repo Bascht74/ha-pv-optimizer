@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.10.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.11.0]"
   description: >-
     Iterativer 30-Minuten JSON-Vorabscan (jetzt in kWh), Queued-Ausführung, zeitbasierte
     Halbstunden-Ladelogik, Proportion, Fallback (Fall B = Zeit reicht nicht → Max),
@@ -792,20 +792,20 @@ trigger:
     # Polung: Roh-Sensor ist negativ bei Einspeisung -> * -1 ergibt positiven
     # Export, Vergleich mit der positiven Schwelle.
     #
-    # Gleiche Entprellung wie beim WP-Boost-Trigger: Waere sie kuerzer, wuerde
-    # Peak-Shaving zuerst greifen, den Export unter die Boost-Schwelle druecken
-    # und den Boost damit verhindern. Die Waermepumpe soll aber Vorrang haben.
-    # Zwei Minuten Clipping sind hinnehmbar.
+    # Beide Export-Trigger entprellen gleich lang (2 Min). Waere dieser kuerzer,
+    # griffe Peak-Shaving zuerst, drueckte den Export unter die Boost-Schwelle
+    # und verhinderte den Boost. Die Waermepumpe hat Vorrang: Sie verlagert
+    # mehrere kWh Warmwasser in die Sonne, die Abregelung waehrend der
+    # Entprellung kostet nur Wattstunden.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_peak_shaving | float(6500)) }}
     for: "00:02:00"
     id: export_peak_schwelle
   - alias: "Trigger: Netz-Export über WP-Boost-Schwelle (2 Min entprellt)"
-    # Deutlich traeger als der Peak-Shaving-Trigger (30 s): Ein Boost bindet die
-    # Waermepumpe fuer die volle Laufzeit - das lohnt nur bei tragfaehigem
-    # Ueberschuss, den eine kurze Wolkenluecke nicht liefert. Beim Peak-Shaving
-    # reichen 30 s: Dort wird nur der Ladestrom angehoben.
+    # Zwei Minuten wie beim Peak-Shaving-Trigger, Begruendung dort. Ein Boost
+    # bindet die Waermepumpe fuer die volle Laufzeit - das lohnt nur bei
+    # tragfaehigem Ueberschuss, den eine kurze Wolkenluecke nicht liefert.
     platform: template
     value_template: >
       {{ (states(tv_grid_export) | float(0)) * -1 > (tv_schwelle_wp_boost | float(6400)) }}
@@ -910,7 +910,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.10.0]"
+      bp_version: "[V6.11.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1345,7 +1345,11 @@ action:
             data:
               type: hourly
             response_variable: wetter_antwort
+          # Schluessel ist die Integration, nicht die Entitaets-ID: Deren Name
+          # traegt je nach Integration den Standort, und zur Auswertung genuegt
+          # die Quelle. Ohne Registry-Eintrag bleibt die Position der Auswahl.
           - action: notify.send_message
+            continue_on_error: true
             target:
               entity_id: notify.pv_optimizer_aufzeichnung
             data:
@@ -1360,7 +1364,9 @@ action:
                       {% set n2.t = n2.t + [f.temperature | float(none)] %}
                     {% endif %}
                   {% endfor %}
-                  {% set ns.q = ns.q + [[e, {'von': n2.von, 'temp': n2.t}]] %}
+                  {% set ce = config_entry_id(e) %}
+                  {% set integ = config_entry_attr(ce, 'domain') if ce else none %}
+                  {% set ns.q = ns.q + [[integ if integ else 'quelle_' ~ loop.index, {'von': n2.von, 'temp': n2.t}]] %}
                 {% endfor %}
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'wetter',
                     'aussen_temp': tp_mess, 'quellen': dict(ns.q)} | to_json }}
@@ -2599,6 +2605,12 @@ action:
         {% set t = states[var_timer_peak] if var_timer_peak != '' else none %}
         {{ t is not none and t.last_changed is not none and (t.last_changed | as_local).date() == now().date() }}
       blockade_ohne_spitze: "{{ (blockade_heute_beendet or aktueller_modus == 'blockade') and not peak_timer_heute }}"
+      # ABREGELUNG: Oberhalb der Peak-Schwelle regelt der Wechselrichter ab,
+      # sobald er den Strom nicht mehr in die Batterie leiten kann. Genau die
+      # Gegenbedingung zum Peak-Shaving-Zweig, der bei voller Batterie nicht
+      # mehr anlaeuft - erst hier geht Ertrag verloren, nicht schon bei jeder
+      # Ueberschreitung.
+      abregelung_aktiv: "{{ real_export > schwelle_peak_shaving and (aktueller_soc >= 99 or heute_schon_voll) }}"
       # PEAK-SHAVING HAT VORRANG: Die Blockade endet, sobald die Einspeisung die
       # Peak-Schwelle reisst - sonst regelt der Wechselrichter ab, waehrend die
       # Batterie auf 0 A steht. An den entprellten TRIGGER gekoppelt statt an
@@ -3022,6 +3034,7 @@ action:
               'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
               'export_heute_kwh': export_heute_kwh, 'halten_verlust_kwh': halten_verlust_kwh | round(2),
               'spitze_erwartet_w': spitze_erwartet_w | round(0), 'spitze_erwartet': spitze_erwartet,
+              'abregelung_aktiv': abregelung_aktiv,
               'blockade_aktiv': blockade_aktiv, 'blockade_dyn_t': blockade_dyn_t, 'blockade_heute_beendet': blockade_heute_beendet,
               'trend_aktiv': trend_aktiv, 'trend_faktor': trend_faktor | round(3), 'pv_abschlag': pv_abschlag | round(3),
               'freie_kwh': freie_kwh | round(2), 'defizit_kwh': defizit_kwh | round(2), 'benoetigt_kwh': benoetigt_kwh | round(2),
@@ -3806,7 +3819,7 @@ action:
             value_template: "{{ var_wp_boost_aktiv }}"
           # Trigger-Entkopplung: Die Export-Trigger für Peak-Shaving (6500 W)
           # und WP-Boost (6400 W) werden bei steigendem Export fast gleichzeitig
-          # wahr (beide 'for: 30s'). Ohne diese Bedingung liefen zwei Läufe in
+          # wahr (gleiche Entprellung). Ohne diese Bedingung liefen zwei Läufe in
           # derselben Sekunde und hoben den Ladestrom doppelt an. Jeder
           # Export-Trigger bedient jetzt nur noch seinen eigenen Zweig; der
           # 5-Minuten-Takt bedient beide.
@@ -4009,6 +4022,29 @@ action:
         data:
           name: "PV Optimizer"
           message: "{{ log_kopf }} Wärmepumpen-Laufzeit auf {{ wp_nachlauf_min | int(15) }} Minuten gekürzt, da das Warmwasser mit {{ ww_temp | round(1) }} °C die Zieltemperatur {{ var_wp_ziel_temp_pv }} °C erreicht hat. Die Wärmepumpe lädt den Speicher noch fertig; danach steht der Überschuss wieder der Batterie zur Verfügung."
+          entity_id: !input helper_logbook_dummy
+
+
+  # VERLUSTFALL ABREGELUNG: Peak-Shaving kann nichts mehr auffangen, weil die
+  # Batterie voll ist. Der entprellte Export-Trigger meldet je Ueberschreitung
+  # einmal; der Halbstundenlauf haelt eine anhaltende Abregelung sichtbar, ohne
+  # dass jeder 5-Minuten-Takt eine Zeile schreibt.
+  - if:
+      - condition: template
+        value_template: >
+          {{ abregelung_aktiv
+             and (trigger.id == 'export_peak_schwelle'
+                  or (trigger.id == 'monitoring_5min' and now().minute % 30 < 5)) }}
+    then:
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: >-
+            {{ log_kopf }} Abregelung: Wechselrichter regelt ab, Überschuss über der Schwelle geht verloren,
+            da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W
+            und die Batterie voll ist. (Über der Schwelle {{ (real_export - schwelle_peak_shaving) | round(0) }} W;
+            Ladestand (SOC) {{ aktueller_soc | round(0) }} %, freie Ladekapazität {{ freie_kwh | round(1) }} kWh
+            von {{ batterie_kapazitaet | round(1) }} kWh)
           entity_id: !input helper_logbook_dummy
 
 
@@ -4290,7 +4326,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Fehleinschätzung der Prognose: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:

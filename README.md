@@ -102,7 +102,7 @@ schreibt der Blueprint JSON-Zeilen nach `/config/www/pv_optimizer_aufzeichnung.j
 | `lauf` | jede halbe Stunde | alle Eingangswerte inkl. Solcast-Prognose (`entitaeten`, `konfiguration`) und alle Rechenwerte des Laufs (`rechnung`), darunter die geplanten Zeiten `plan_voll_um`, `fallb_voll_um`, `untergrenze_um` und die reale Vollzeit `voll_real_um`; `halten_aktiv` markiert, ab wann die Untergrenze real hält |
 | `entscheidung` | nach jedem Lauf, der ein Register, den Modus oder einen Timer geändert hat | dasselbe, mit den Werten genau dieses Laufs |
 | `slot` | jede halbe Stunde aus dem Profil-Lauf | Hausverbrauch der Halbstunde (ohne Wallbox), Wallbox-Ladung, Energie am Notstromausgang, Halte-Lage der Entlade-Untergrenze, Register |
-| `wetter` | jede halbe Stunde, nur mit Wetter-Entitäten | je Quelle die Temperaturprognose der nächsten 24 Stunden neben dem gemessenen Außenfühler |
+| `wetter` | jede halbe Stunde, nur mit Wetter-Entitäten | je Integration die Temperaturprognose der nächsten 24 Stunden neben dem gemessenen Außenfühler |
 | `optimizer` | stündlich, nur mit Optimizer-Adresse | Fahrplan des evcc-Optimizers (Ladebeginn, Vollzeit, Nacht-Minimum, Ladestand-Verlauf) neben den Werten des Blueprints für denselben Lauf |
 
 Die `kennung` jeder Zeile ist die Lauf-Kennung aus dem Logbuch: Zur Meldung `[V6.6.0 · 08:30:02]`

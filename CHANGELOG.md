@@ -10,6 +10,31 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.11.0] - 2026-09-18
+
+### Added
+- A logbook entry for the case in which surplus is actually lost: the inverter curtails once the
+  feed-in passes the peak-shaving threshold and it can no longer route the current into the
+  battery. That is the counter-condition to the peak-shaving branch, which does not start on a
+  full battery, so until now the one situation that costs yield was the only one not reported.
+  The debounced export trigger reports it once per crossing, the half-hour run keeps a lasting
+  curtailment visible.
+
+### Changed
+- The weather recording keys each source by its integration instead of its entity id. Entity names
+  carry the site location on some integrations, and only the source matters for comparing forecast
+  error; one entity per integration keeps the mapping unambiguous. Without a registry entry the
+  position in the selection is used, never the entity id.
+- The note appended to the peak-shaving message when no morning blockade ran is marked as
+  informative instead of a misjudgement of the forecast. Shaving a peak is what the branch is for,
+  and it costs nothing while the battery still takes charge; the new curtailment entry reports the
+  case that does.
+
+### Fixed
+- Three comments claimed a 30 s debounce for the two export triggers where the code has two
+  minutes for both. The reason for the equal debounce is now written once, at the trigger it
+  belongs to, instead of being restated in contradictory form at three places.
+
 ## [V6.10.0] - 2026-09-13
 
 ### Added
@@ -647,6 +672,7 @@ Logbuch-Meldung trägt ihn.
   which would mask the actual cause.
 
 [Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...HEAD
+[V6.11.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...V6.11.0
 [V6.10.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...V6.10.0
 [V6.9.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.8.0...V6.9.0
 [V6.8.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.7.0...V6.8.0

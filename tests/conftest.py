@@ -113,6 +113,7 @@ def szenario(
     zustands_overrides: dict[str, Zustand] | None = None,
     input_overrides: dict | None = None,
     trigger_id: str = "monitoring_5min",
+    integrationen: dict[str, str] | None = None,
 ) -> Harness:
     if jetzt.tzinfo is None:
         jetzt = jetzt.replace(tzinfo=TZ)
@@ -189,7 +190,7 @@ def szenario(
     tabelle["sun.sun"] = Zustand("sun.sun", "above_horizon" if 6 <= jetzt.hour < 21 else "below_horizon")
     if zustands_overrides:
         tabelle.update(zustands_overrides)
-    return Harness(blueprint, inputs, tabelle, jetzt, trigger_id)
+    return Harness(blueprint, inputs, tabelle, jetzt, trigger_id, integrationen)
 
 
 # --------------------------------------------------------------------------
