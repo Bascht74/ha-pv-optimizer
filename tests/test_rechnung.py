@@ -838,9 +838,34 @@ def test_optimizer_antwort_wird_in_zeiten_uebersetzt(blueprint, tag):
     assert zeile["art"] == "optimizer" and zeile["kennung"] == ctx["lauf_kennung"]
     assert zeile["blueprint"]["f_soc"] == ctx["f_soc"] and zeile["blueprint"]["aktueller_soc"] == 60.0
     assert zeile["anfrage"]["strategie"] == "attenuate_feedin_peaks" and zeile["anfrage"]["verbrauch_kwh"] == pytest.approx(0.19 * 48, abs=0.01)
+    assert o["nacht_abfall"] == 15.0
     # Keine Antwort (rest_command fehlgeschlagen): Zeile kommt trotzdem, mit leerem Fahrplan
     ctx2, zeile2 = _optimizer_zweig(blueprint, h, antwort=None)
     assert zeile2["optimizer"]["status"] == "keine Antwort" and zeile2["optimizer"]["voll_um"] is None
+
+
+def test_optimizer_nachttief_am_horizontrand_gilt_nicht(blueprint, tag):
+    """
+    Der Horizont endet nach 24 Stunden. Dahinter ist nichts zu gewinnen, also
+    parkt der Optimizer die Batterie dort auf 100 % - der Tiefpunkt dieser Nacht
+    beschreibt den Rand, nicht seine Planung, und wird nicht berichtet.
+    """
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=95.0, input_overrides={"optimizer_url": "http://localhost:7050"})
+    kap = h.auswerten(bis="batterie_kapazitaet")["batterie_kapazitaet"] * 1000
+    # Nacht ab Slot 0: 99.5 % bis 96 % = 3.5 Punkte, unter den geforderten 5
+    soc = [kap * 0.995] * 11 + [kap * 0.96] * 11 + [kap] * 26
+    laden = [0.0] * 22 + [800.0] * 8 + [0.0] * 18
+    antwort = {"status": 200, "content": {"status": "Optimal", "batteries": [{"state_of_charge": soc, "charging_power": laden}]}}
+    ctx, _ = _optimizer_zweig(blueprint, h, antwort=antwort)
+    o = ctx["opt_auswertung"]; o = o if isinstance(o, dict) else json.loads(o)
+    assert o["nacht_min_soc"] is None, "Tiefpunkt am Horizontrand darf nicht als Planung gelten"
+    assert o["nacht_abfall"] == 3.5, "der gemessene Abfall benennt den Grund"
+    # Derselbe Verlauf mit echtem Entladen (99.5 -> 90 = 9.5 Punkte) wird berichtet
+    soc2 = [kap * 0.995] * 11 + [kap * 0.90] * 11 + [kap] * 26
+    antwort2 = {"status": 200, "content": {"status": "Optimal", "batteries": [{"state_of_charge": soc2, "charging_power": laden}]}}
+    ctx2, _ = _optimizer_zweig(blueprint, h, antwort=antwort2)
+    o2 = ctx2["opt_auswertung"]; o2 = o2 if isinstance(o2, dict) else json.loads(o2)
+    assert o2["nacht_min_soc"] == 90.0 and o2["nacht_abfall"] == 9.5
 
 
 def test_notstromprofil_lernt_in_wattstunden(blueprint, tag):

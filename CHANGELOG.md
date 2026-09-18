@@ -10,6 +10,18 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.12.1] - 2026-09-18
+
+### Fixed
+- The second opinion recorded a night low for the evcc optimizer that was not one. Its horizon
+  ends after 24 hours, and beyond it there is nothing left to gain, so the solver parks the
+  battery at 100 % for the rest of the plan and covers the house from the grid on paper. Whenever
+  the detected night fell into that stretch, the recorded low described the edge of the horizon
+  rather than a decision, and read as if the optimizer wanted a far higher floor than it does. The
+  low is now reported only when the plan actually discharges over the night; `nacht_abfall` gives
+  the drop it found, so a missing value says why.
+
+
 ## [V6.12.0] - 2026-09-18
 
 ### Removed
@@ -727,7 +739,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.1...HEAD
+[V6.12.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.0...V6.12.1
 [V6.12.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.11.0...V6.12.0
 [V6.11.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.10.0...V6.11.0
 [V6.10.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.9.0...V6.10.0
