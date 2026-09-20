@@ -178,7 +178,11 @@ def test_direkte_entity_inputs_sind_pflichtfelder(blueprint):
                     for k, v in s["variables"].items() if isinstance(v, InputTag)}
     pflicht_tpl = next(s["variables"]["pflichtfelder_fehlend"] for s in blueprint["action"]
                        if isinstance(s, dict) and "pflichtfelder_fehlend" in s.get("variables", {}))
-    pflicht_inputs = {var_zu_input[v] for v in re.findall(r"\bvar_\w+", pflicht_tpl) if v in var_zu_input}
+    # Nur die unbedingte Basisliste zaehlt. Die Bloecke dahinter (Pack 2/3, Waermepumpe)
+    # verlangen ihre Felder nur unter einer Bedingung - direkt eingesetzt wuerden sie die
+    # Automation schon beim Laden zerlegen, lange bevor die Bedingung greift.
+    basis = pflicht_tpl[pflicht_tpl.index("{% set pflicht = ["):].split("] %}")[0]
+    pflicht_inputs = {var_zu_input[v] for v in re.findall(r"\bvar_\w+", basis) if v in var_zu_input}
     # Der Logbuch-Anker steht in der Pruefung selbst - ohne ihn kann sie nichts melden.
     optional_aber_direkt = sorted(direkt - pflicht_inputs)
     assert optional_aber_direkt == [], f"Direkt eingesetzt, aber nicht Pflicht: {optional_aber_direkt}"
