@@ -574,7 +574,7 @@ blueprint:
         crate_5_deg:
           name: "C-Rate bei 5 °C"
           description: >-
-            Ladefaktor bei knapp über null. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Strom. Beispiel: 0,05 × 314 Ah × 2 = 31 A.
+            Ladefaktor bei knapp über null. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Strom. Beispiel: 0,05 × 314 Ah × 2 Packs = 31 A.
           default: 0.05
           selector: {"number": {"min": 0.0, "max": 0.2, "step": 0.01, "mode": "slider"}}
         crate_10_deg:

@@ -17,7 +17,8 @@ Logbuch-Meldung trägt ihn.
   voltage and both cell temperatures) are no longer demanded by the startup check, so a
   single-pack site can leave them empty the way the BMS 3 fields already could. With them
   empty the blueprint computes with one pack throughout: capacity, temperature limit and
-  cell balancing all read pack 1 alone.
+  cell balancing all read pack 1 alone. The worked example behind the charge rates now says
+  which number is the pack count, which only read as obvious while two packs were assumed.
 - The help text of the state-of-charge field read as if the shadow-BMS field below it had to be
   filled in too. Both descriptions now say plainly that the second sensor is optional: left empty,
   the inverter's own reading alone drives the whole cascade, and only a filled-in shadow field
