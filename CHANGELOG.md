@@ -30,6 +30,13 @@ Logbuch-Meldung trägt ihn.
   brings both values into the conversion of the discharge-floor registers.
 
 ### Fixed
+- The help text of the startup-phase timer and of its duration field said the battery drops to
+  0 A while the timer runs. It does not: that branch holds the charge current at the value it
+  last had and leaves lowering to the branches that own it, which the branch comment has said
+  all along. The same wrong picture had been carried from one wording to the next.
+- The logbook line for an interrupted peak-shaving hold named the heat pump as the reason. The
+  condition it reports only tests that the startup-phase timer runs, and anything may have
+  started it, so the line now names the timer instead of guessing the appliance.
 - A pack is now assigned as a whole or not at all: as soon as one of a pack's three sensors is
   set, the startup check demands the other two and names the missing one. A half-assigned pack
   used to compute silently wrong numbers — a missing highest cell temperature was read as 99 °C
