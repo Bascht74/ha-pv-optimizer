@@ -46,6 +46,19 @@ def test_block_feuert_nur_im_halbstundenlauf_und_nur_mit_entitaet(blueprint):
     assert ziel == AUFZEICHNUNG_ENTITY
 
 
+def test_aufzeichnung_haelt_beide_soc_skalen_fest(blueprint, tag):
+    """
+    Ohne die Werte beider BMS und den Versatz laesst sich eine Nacht nicht
+    nachrechnen: Im Logbuch steht die Steuerungs-Skala, am Register die andere.
+    """
+    aufz = aufzeichnen(szenario(blueprint, zeit(tag, 21, 0), soc=50.0, schatten_soc=62.0), blueprint)
+    r = aufz["rechnung"]
+    assert r["soc_deye"] == 50.0 and r["soc_versatz"] == -12.0 and r["schatten_gueltig"] is True
+    assert r["tou_ist_register"] == 20 and r["tou_ist"] == 32
+    assert r["tou_schreibwert"] == r["f_soc"] - 12
+    assert "schatten_soc_sensor" in {e["input"] for e in aufz["entitaeten"]}
+
+
 def test_aufzeichnung_erfasst_jeden_input(blueprint, tag):
     h = szenario(blueprint, zeit(tag, 10, 0))
     aufz = aufzeichnen(h, blueprint)

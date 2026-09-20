@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.3]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.13.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -12,13 +12,19 @@ blueprint:
       name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
-        Leer bleiben darf nur BMS 3 (nur bei drei Türmen).
+        Leer bleiben dürfen nur BMS 3 (nur bei drei Türmen) und das Schatten-BMS.
       collapsed: true
       input:
         battery_soc_sensor:
           name: "Ladezustand SOC (%)"
           description: >-
-            Sensor mit dem aktuellen Ladezustand der Gesamt-Batterie in Prozent. Steuert die gesamte Prioritäts-Kaskade. Tipp: Wenn du ein Schatten-BMS nutzt, trage hier dessen Sensor ein — er ist meist genauer als der SOC des Wechselrichters.
+            Sensor mit dem Ladezustand, den der Wechselrichter selbst sieht (beim Deye der Modbus-Wert seines BMS). Steuert die gesamte Prioritäts-Kaskade. Ein genaueres Schatten-BMS gehört in das Feld darunter — der Blueprint braucht beide Werte, um die Register umzurechnen.
+          default: ""
+          selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
+        schatten_soc_sensor:
+          name: "Schatten-BMS: Ladezustand SOC (%) — optional"
+          description: >-
+            Sensor eines zweiten, genaueren BMS. Ist er gesetzt, regelt der Blueprint danach und rechnet die Entlade-Untergrenze so in die ToU-Register um, dass der Wechselrichter an der hier gemeinten Grenze stoppt. Leer lassen, wenn es kein zweites BMS gibt.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         battery_power_sensor:
@@ -752,6 +758,10 @@ trigger:
     id: optimizer_vergleich
   # Untergrenze nicht gehalten: Ladestand deutlich unter dem Register und die
   # Batterie entlaedt trotzdem. Feuert nur beim Eintritt, also einmal je Nacht.
+  # Beide Seiten stehen absichtlich in der Skala des Wechselrichters: geprueft
+  # wird, ob er seine eigene Grenze haelt. Ein Schatten-BMS gehoert hier nicht
+  # hinein - mit ihm waere der Vergleich derselbe, nur auf beiden Seiten
+  # verschoben.
   - alias: "Trigger: Entlade-Untergrenze wird nicht gehalten (10 Min entprellt)"
     platform: template
     value_template: >
@@ -882,7 +892,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.12.3]"
+      bp_version: "[V6.13.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -916,6 +926,11 @@ action:
       # Die Untergrenze wird erst geschrieben, wenn der Ladestand ihr so nahe
       # kommt (Prozentpunkte): Ein Lauf Vorlauf reicht, darueber wirkt sie nicht.
       tou_schreib_vorlauf: 2
+      # Weichen die beiden BMS um mehr als so viele Punkte voneinander ab, ist
+      # der Schatten-Wert nicht mehr glaubhaft - dann gilt wieder der Wert des
+      # Wechselrichters. Bewusst weit: die Grenze faengt einen toten oder
+      # unsinnigen Sensor, nicht eine Abweichung, die zwei BMS haben duerfen.
+      versatz_max: 40
       # Zweitmeinung: So viele Prozentpunkte muss der Fahrplan des Optimizers in
       # der Nacht abgeben, damit sein Tiefpunkt als Planung gilt. Das Haus zieht
       # ueber Nacht deutlich mehr; wer weniger abgibt, deckt es aus dem Netz und
@@ -1414,6 +1429,7 @@ action:
       var_offener_verlust: !input helper_offener_verlust
       var_halten_bezug: !input helper_halten_bezug
       var_battery_soc: !input battery_soc_sensor
+      var_schatten_soc: !input schatten_soc_sensor
       var_wp_temp: !input wp_temp_sensor
       var_logbook_dummy: !input helper_logbook_dummy
       var_wp_water_heater: !input wp_water_heater
@@ -1602,7 +1618,19 @@ action:
 
   - variables:
       grid_export: "{{ (states(var_grid_export) | float(0)) * -1 }}"
-      aktueller_soc: "{{ states(var_battery_soc) | float(0) }}"
+      # ZWEI SOC-SKALEN: Der Wechselrichter prueft die ToU-Register gegen sein
+      # eigenes BMS, ein Schatten-BMS misst genauer. Gerechnet wird durchgehend
+      # in der Schatten-Skala; nur beim Schreiben und Zuruecklesen der Register
+      # kommt soc_versatz dazu. Ohne Schatten-Sensor ist er 0.
+      soc_deye: "{{ states(var_battery_soc) | float(0) }}"
+      schatten_roh: "{{ (states(var_schatten_soc) | float(-1)) if var_schatten_soc != '' else -1 }}"
+      # Ein ausgefallener Sensor ergaebe ueber float() eine 0 und zoege die
+      # Untergrenze in den Keller; eine zu grosse Abweichung heisst, dass eines
+      # der beiden BMS falsch misst. Beides faellt auf den Wert zurueck, den der
+      # Wechselrichter ohnehin durchsetzt.
+      schatten_gueltig: "{{ schatten_roh > 0 and schatten_roh <= 100 and ((soc_deye - schatten_roh) | abs) <= versatz_max }}"
+      aktueller_soc: "{{ schatten_roh if schatten_gueltig else soc_deye }}"
+      soc_versatz: "{{ (soc_deye - schatten_roh) if schatten_gueltig else 0 }}"
       ww_temp: "{{ states(var_wp_temp) | float(50) }}"
       # Ein nicht verfuegbarer Warmwasser-Sensor laese sich ueber den Fallback als
       # 50 Grad, also "kalt" - das gaebe den Boost frei, statt ihn zu sperren.
@@ -2753,7 +2781,9 @@ action:
         {% endif %}
         {{ {'kwh': ns.best | round(3), 'bis': ns.bis} }}
       shutdown_soc: "{{ (states(var_wr_shutdown_soc) | float(10)) if var_wr_shutdown_soc != '' else 10 }}"
-      reserve_pct: "{{ ((shutdown_soc + reserve_plan.kwh / batterie_kapazitaet * 100) | round(3)) if (notstrom_profil is not none and batterie_kapazitaet > 0) else 0 }}"
+      # Der Abschalt-Ladestand steht in der Skala des Wechselrichters und wird
+      # zurueckgerechnet, bevor das Defizit in Prozentpunkten dazukommt.
+      reserve_pct: "{{ ((shutdown_soc - soc_versatz + reserve_plan.kwh / batterie_kapazitaet * 100) | round(3)) if (notstrom_profil is not none and batterie_kapazitaet > 0) else 0 }}"
       # Auf volle 5 % aufgerundet: ein Sicherheitsnetz rundet nicht nach unten.
       reserve_5: "{{ ((reserve_pct / 5) | round(0, 'ceil')) * 5 }}"
       # Mindest-Ladestand gilt, ausser er erzwaenge Einspeisung; nie tiefer als das Ziel
@@ -2766,12 +2796,19 @@ action:
         {%- set plan = ((f_roh / 5) | round(0, 'floor')) * 5 -%}
         {%- set wert = plan if f_roh <= aktueller_soc else (aktueller_soc | round(0, 'floor')) -%}
         {{ [[wert, default_tou_soc | float(20)] | max, 100] | min | int }}
-      tou_ist: >
+      # In die Skala des Wechselrichters umgerechnet, aufgerundet - eine Grenze
+      # rundet in die Richtung, die frueher haelt - und auf sein Register geklemmt.
+      tou_schreibwert: "{{ [[((f_soc + soc_versatz) | round(0, 'ceil')), 0] | max, 100] | min | int }}"
+      tou_minimum_wert: "{{ [[(((default_tou_soc | float(20)) + soc_versatz) | round(0, 'ceil')), 0] | max, 100] | min | int }}"
+      # Die Register stehen in der Skala des Wechselrichters. Zurueckgerechnet
+      # vergleichen sich Ladestand, Plan und Register alle in derselben Skala.
+      tou_ist_register: >
         {{ [states(var_wr_tou_1) | float(20), states(var_wr_tou_2) | float(20), states(var_wr_tou_3) | float(20),
             states(var_wr_tou_4) | float(20), states(var_wr_tou_5) | float(20), states(var_wr_tou_6) | float(20)] | min }}
+      tou_ist: "{{ tou_ist_register - soc_versatz }}"
       tou_max_ist: >
-        {{ [states(var_wr_tou_1) | float(20), states(var_wr_tou_2) | float(20), states(var_wr_tou_3) | float(20),
-            states(var_wr_tou_4) | float(20), states(var_wr_tou_5) | float(20), states(var_wr_tou_6) | float(20)] | max }}
+        {{ ([states(var_wr_tou_1) | float(20), states(var_wr_tou_2) | float(20), states(var_wr_tou_3) | float(20),
+             states(var_wr_tou_4) | float(20), states(var_wr_tou_5) | float(20), states(var_wr_tou_6) | float(20)] | max) - soc_versatz }}
       # Geschrieben wird nur, wenn es wirken kann: Aenderung ab 5 Punkten und der
       # Ladestand hoechstens tou_schreib_vorlauf Punkte ueber der hoeheren der beiden Grenzen.
       # Halten (Ladestand unter der gewuenschten Grenze) erst, wenn die Batterie
@@ -2863,6 +2900,7 @@ action:
         {% endfor %}
         {% set ents = [
              ('battery_soc_sensor', var_battery_soc, {}),
+             ('schatten_soc_sensor', var_schatten_soc, {}),
              ('battery_power_sensor', var_battery_power, {}),
              ('vmax1_sensor', var_vmax1, {}),
              ('vmax2_sensor', var_vmax2, {}),
@@ -2987,7 +3025,9 @@ action:
               'ziel_soc_eff': ziel_soc_eff, 'zellausgleich_faellig': zellausgleich_faellig, 'tage_seit_voll': tage_seit_voll,
               'f_ziel': f_ziel | round(1), 'f_spill': f_spill | round(1), 'f_roh': f_roh | round(1), 'f_soc': f_soc,
               'shutdown_soc': shutdown_soc, 'reserve_kwh': reserve_plan.kwh, 'reserve_bis': reserve_plan.bis, 'reserve_pct': reserve_pct,
-              'tou_ist': tou_ist, 'tou_schreiben': tou_schreiben,
+              'soc_deye': soc_deye, 'schatten_gueltig': schatten_gueltig, 'soc_versatz': soc_versatz | round(2),
+              'tou_ist': tou_ist, 'tou_ist_register': tou_ist_register, 'tou_schreibwert': tou_schreibwert,
+              'tou_schreiben': tou_schreiben,
               'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
               'export_heute_kwh': export_heute_kwh, 'halten_verlust_kwh': halten_verlust_kwh | round(2),
               'spitze_erwartet_w': spitze_erwartet_w | round(0), 'spitze_erwartet': spitze_erwartet,
@@ -3140,6 +3180,24 @@ action:
                                 'p50_anteil_heute': blend_p50_anteil | float(0.5), 'pv_abschlag': pv_abschlag | round(3)} } | to_json }}
       - stop: "Zweitmeinung des Optimizers aufgezeichnet; dieser Lauf steuert nichts."
 
+  # SCHATTEN-BMS NICHT VERWERTBAR: Entprellt wie die Deye-Warnung, sonst schriebe
+  # jeder 5-Minuten-Lauf denselben Eintrag.
+  - if:
+      - condition: template
+        value_template: >
+          {{ var_schatten_soc != '' and not schatten_gueltig
+             and trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}
+    then:
+      - action: logbook.log
+        data:
+          name: "PV Optimizer"
+          message: >-
+            {{ log_kopf }} Schatten-BMS: Regelung läuft auf den Ladestand (SOC) des Wechselrichters {{ soc_deye | round(0) }} % zurück und die Entlade-Untergrenze wird nicht mehr umgerechnet, da der Schatten-Wert
+            {%- if schatten_roh <= 0 or schatten_roh > 100 %} nicht verfügbar ist
+            {%- else %} {{ schatten_roh | round(0) }} % um {{ (soc_deye - schatten_roh) | abs | round(0) }} % abweicht, mehr als die erlaubten {{ versatz_max }} %{% endif %}.
+            (Informativ: Meldung erscheint höchstens alle 30 Minuten.)
+          entity_id: !input helper_logbook_dummy
+
   # UNTERGRENZE NICHT GEHALTEN: einmal je Eintritt melden, Register stehen lassen.
   - if:
       - condition: trigger
@@ -3149,7 +3207,7 @@ action:
         data:
           name: "PV Optimizer"
           message: >-
-            {{ log_kopf }} Entlade-Untergrenze: Register bleibt auf {{ tou_ist | round(0) }} %, der Wechselrichter hält die Grenze nicht, da Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ tou_ist | round(0) }} % − 3 % bei Entladung {{ batterie_leistung | round(0) }} W seit 10 Minuten.
+            {{ log_kopf }} Entlade-Untergrenze: Register bleibt auf {{ tou_ist_register | round(0) }} %, der Wechselrichter hält die Grenze nicht, da Ladestand (SOC) {{ soc_deye | round(0) }} % < Untergrenze {{ tou_ist_register | round(0) }} % − 3 % bei Entladung {{ batterie_leistung | round(0) }} W seit 10 Minuten.{% if soc_versatz %} (Informativ: Schatten-BMS {{ aktueller_soc | round(0) }} %.){% endif %}
           entity_id: !input helper_logbook_dummy
       - stop: "Untergrenze nicht gehalten gemeldet; dieser Lauf steuert nichts."
 
@@ -3167,7 +3225,7 @@ action:
             - !input wr_tou_5
             - !input wr_tou_6
         data:
-          value: "{{ f_soc }}"
+          value: "{{ tou_schreibwert }}"
       - action: logbook.log
         data:
           name: "PV Optimizer"
@@ -3176,6 +3234,7 @@ action:
             {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0) }} % und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
+            {%- if soc_versatz %} Am Wechselrichter steht dafür {{ tou_schreibwert }} %, da sein eigener Ladestand (SOC) {{ soc_deye | round(0) }} % beträgt, {{ '%+.1f' | format(soc_versatz) }} % gegenüber dem Schatten-BMS.{% endif %}
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
             (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
             {% if plan_start and prognose_tage %}Auffüllung ab {{ (plan_start | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %}{% else %}Kein Überschuss in den nächsten 72 Stunden{% endif %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
@@ -3527,7 +3586,9 @@ action:
           - condition: trigger
             id: maintenance
           - condition: template
-            value_template: "{{ not entlade_aktiv and (tou_ist != (default_tou_soc | float(20)) or tou_max_ist != (default_tou_soc | float(20))) }}"
+            # Ein ganzer Punkt Toleranz: Die Register sind ganzzahlig, aber
+            # zurueckgerechnet traegt jedes den Versatz als Nachkommastelle.
+            value_template: "{{ not entlade_aktiv and (((tou_ist - (default_tou_soc | float(20))) | abs) >= 1 or ((tou_max_ist - (default_tou_soc | float(20))) | abs) >= 1) }}"
         sequence:
           - action: number.set_value
             target:
@@ -3539,11 +3600,11 @@ action:
                 - !input wr_tou_5
                 - !input wr_tou_6
             data:
-              value: "{{ default_tou_soc }}"
+              value: "{{ tou_minimum_wert }}"
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ log_kopf }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist."
+              message: "{{ log_kopf }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist.{% if soc_versatz %} Am Wechselrichter steht dafür {{ tou_minimum_wert }} %.{% endif %}"
               entity_id: !input helper_logbook_dummy
 
   - choose:

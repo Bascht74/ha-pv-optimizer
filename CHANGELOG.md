@@ -10,6 +10,28 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.13.0] - 2026-09-20
+
+### Added
+- An optional second state-of-charge sensor. Where a more accurate BMS measures the same
+  battery, the whole cascade now computes in its scale, and the difference to the inverter's
+  own reading is applied at the register boundary only: added when the discharge floor is
+  written, subtracted when it is read back. The inverter enforces its ToU registers against
+  its own BMS, so a floor derived from the accurate reading was enforced at the wrong state
+  of charge. Without the sensor the difference is zero and nothing changes.
+- A logbook message when the second reading is unusable and control falls back to the
+  inverter's own value. Nothing about the behaviour shows that fallback, and a reading taken
+  as zero would pull the floor to the bottom.
+
+### Changed
+- The state-of-charge field is now explicitly the value the inverter itself sees; the more
+  accurate sensor belongs in the new field. Instances that followed the earlier hint and put
+  a shadow sensor in the old field have to swap the two before the new one takes effect.
+- The inverter's shutdown state of charge is converted into the control scale before the
+  backup reserve builds on it, because that reserve is what holds in an outage.
+- Without discharge planning the ToU minimum is written converted as well, so the configured
+  percentage means the same state of charge everywhere it is used.
+
 ## [V6.12.3] - 2026-09-20
 
 ### Fixed
@@ -766,7 +788,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...HEAD
+[V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
 [V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
 [V6.12.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.1...V6.12.2
 [V6.12.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.0...V6.12.1
