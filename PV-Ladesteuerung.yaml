@@ -342,7 +342,7 @@ blueprint:
         helper_timer_wp_anlauf:
           name: "Timer: Anlaufphase Großverbraucher"
           description: >-
-            timer-Entität. Eine eigene Automation startet sie, wenn ein großer Verbraucher anläuft; solange sie läuft, hebt die Lastspitzen-Kappung den Ladestrom nicht an. Beim Wärmepumpen-Boost startet der Blueprint sie selbst und setzt die Batterie zusätzlich auf 0 A.
+            timer-Entität. Eine eigene Automation startet sie, wenn ein großer Verbraucher anläuft; solange sie läuft, hebt die Lastspitzen-Kappung den Ladestrom nicht an. Mit eingeschaltetem Wärmepumpen-Boost startet der Blueprint sie selbst und hält den Ladestrom zusätzlich fest.
           default: ""
           selector: {"entity": {"domain": "timer"}}
         helper_timer_wp_boost:
@@ -482,7 +482,7 @@ blueprint:
         duration_wp_anlauf:
           name: "Dauer der Anlaufphase"
           description: >-
-            Zeitdauer (hh:mm:ss), die als Anlaufphase der Wärmepumpe gilt. In dieser Zeit geht die Batterie auf 0 A, damit der gesamte PV-Überschuss zur Wärmepumpe fließt und nicht in den Speicher. Sollte etwa der Zeit entsprechen, die deine Wärmepumpe braucht, um auf Leistung zu kommen.
+            Zeitdauer (hh:mm:ss), die als Anlaufphase der Wärmepumpe gilt. In dieser Zeit bleibt der Ladestrom stehen und die Lastspitzen-Kappung greift nicht, damit der Überschuss zur Wärmepumpe fließt. Sollte etwa der Zeit entsprechen, die deine Wärmepumpe braucht, um auf Leistung zu kommen.
           default: "00:30:00"
           selector: {"time": {}}
         duration_wp_laufzeit:
@@ -2419,11 +2419,11 @@ action:
            and wp_boost_karenz_ok
            and ww_temp_gueltig }}
 
-      # ZEITLICH BEGRENZTE BATTERIE-0A-SPERRE (nur PRIO 3)
+      # ZEITLICH BEGRENZTES FESTHALTEN DES LADESTROMS (nur PRIO 3)
       #
       # wp_sperre_aktiv steuert unveraendert die Peak-Shaving-Timer-Logik -
-      # waehrend der WP-Anlaufphase soll Peak-Shaving immer unterbleiben. Nur
-      # die harte 0A-Verriegelung in Prio 3 endet mit der Blockade: Startet die
+      # waehrend der Anlaufphase soll Peak-Shaving immer unterbleiben. Nur das
+      # Festhalten des Ladestroms in Prio 3 endet mit der Blockade: Startet die
       # WP danach (nachmittags bei viel Sonne), darf die Batterie weiterladen.
       #
       # blockade_heute_beendet ist hier noch nicht definiert - daher inline.
@@ -3598,7 +3598,7 @@ action:
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
-                      message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Nachlauf-Timer abgebrochen, damit der PV-Überschuss zur anlaufenden Wärmepumpe fließt, da die Wärmepumpen-Anlaufsperre aktiv ist. Kappung startet neu, sobald Netzeinspeisung nach der Wärmepumpen-Phase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
+                      message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) unterbrochen: Nachlauf-Timer abgebrochen, damit der PV-Überschuss dem anlaufenden Verbraucher zugutekommt, da die Anlaufsperre aktiv ist. Kappung startet neu, sobald Netzeinspeisung nach der Anlaufphase wieder über {{ schwelle_peak_shaving | round(0) }} W ansteigt."
                       entity_id: !input helper_logbook_dummy
             default:
               - action: logbook.log
