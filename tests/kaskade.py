@@ -1,8 +1,9 @@
 """
-Welcher Zweig der Prioritaetskaskade gewinnt - und was er schreibt.
+Welcher Zweig einer choose:-Gruppe gewinnt - und was er schreibt.
 
 Das Harness in ha_jinja.py rendert die Variablenkette. Hier kommt die Stufe
-darueber dazu: die Auswahl im grossen choose: und die Aktionen des gewinnenden
+darueber dazu: die Auswahl in den choose:-Gruppen auf oberster Ebene - der
+Prioritaetskaskade und den Gruppen daneben - und die Aktionen des gewinnenden
 Zweigs. Absichtlich nur die Bedingungs- und Schrittarten, die der Blueprint
 heute benutzt - eine neue Art laesst die Tests scheitern, statt still als
 'trifft nicht zu' durchzugehen.
@@ -27,13 +28,26 @@ class Stopp(Exception):
     """Ein stop:-Schritt hat die Sequenz beendet."""
 
 
-def gruppe(blueprint: dict, erster_alias: str) -> list[dict]:
-    """Eine choose:-Gruppe auf oberster Ebene, erkannt am Alias ihres ersten Zweigs."""
-    for schritt in blueprint["action"]:
-        zweige = schritt.get("choose") if isinstance(schritt, dict) else None
-        if zweige and str(zweige[0].get("alias", "")).startswith(erster_alias):
-            return zweige
-    raise AssertionError(f"choose-Gruppe {erster_alias!r} nicht gefunden")
+def gruppen(blueprint: dict) -> list[list[dict]]:
+    """Alle choose:-Gruppen auf oberster Ebene, in der Reihenfolge des Blueprints."""
+    return [s["choose"] for s in blueprint["action"]
+            if isinstance(s, dict) and s.get("choose")]
+
+
+def gruppe(blueprint: dict, alias_anfang: str) -> list[dict]:
+    """
+    Die choose:-Gruppe, die einen Zweig mit diesem Alias-Anfang enthaelt.
+
+    Mehrdeutig ist ein Fehler, kein Zufallstreffer: Passt der Anfang auf Zweige
+    zweier Gruppen, wuerde ein Szenario still gegen die falsche geprueft.
+    """
+    treffer = [z for z in gruppen(blueprint)
+               if any(str(x.get("alias", "")).startswith(alias_anfang) for x in z)]
+    if not treffer:
+        raise AssertionError(f"choose-Gruppe zu {alias_anfang!r} nicht gefunden")
+    if len(treffer) > 1:
+        raise AssertionError(f"Alias-Anfang {alias_anfang!r} passt auf {len(treffer)} Gruppen")
+    return treffer[0]
 
 
 def kaskade(blueprint: dict) -> list[dict]:
@@ -92,7 +106,8 @@ def _lauf(h: Harness, schritte: list, ctx: dict, aktionen: list) -> None:
         elif "action" in s:
             daten = h._aufloesen(s.get("data") or {}, ctx)
             ziel = h._aufloesen((s.get("target") or {}).get("entity_id"), ctx)
-            wert = next((daten[k] for k in ("value", "option", "duration", "message") if k in daten), None)
+            wert = next((daten[k] for k in ("value", "option", "duration", "temperature", "message")
+                         if k in daten), None)
             aktionen.append((s["action"], ziel, wert))
         elif "delay" in s or "repeat" in s or "wait_template" in s:
             raise UnbekannteArt(f"Schrittart {sorted(s)[0]!r} ist hier nicht nachgebildet")
@@ -100,19 +115,31 @@ def _lauf(h: Harness, schritte: list, ctx: dict, aktionen: list) -> None:
             raise UnbekannteArt(f"Schrittart {sorted(s)} ist hier nicht nachgebildet")
 
 
+def gewinner(h: Harness, zweige: list[dict], ctx: dict | None = None) -> dict | None:
+    """
+    Der erste Zweig, dessen Bedingungen zutreffen - ohne seine Sequenz zu spielen.
+
+    Getrennt von zweig_und_aktionen, weil die Abdeckung nur die Auswahl braucht:
+    Einige Zweige ausserhalb der Kaskade benutzen repeat:/delay:, die der
+    Ausfuehrer bewusst verweigert, statt sie falsch nachzubilden.
+    """
+    ctx = h.auswerten() if ctx is None else ctx
+    return next((z for z in zweige if _alle(h, z["conditions"], ctx)), None)
+
+
 def zweig_und_aktionen(h: Harness, blueprint: dict, ctx: dict | None = None,
                        zweige: list[dict] | None = None) -> tuple[str | None, list]:
     """(Alias des gewinnenden Zweigs, [(service, entity_id, wert), ...])."""
     ctx = h.auswerten() if ctx is None else ctx
-    for z in (zweige if zweige is not None else kaskade(blueprint)):
-        if _alle(h, z["conditions"], ctx):
-            aktionen: list = []
-            try:
-                _lauf(h, z["sequence"], ctx, aktionen)
-            except Stopp:
-                pass
-            return z["alias"], aktionen
-    return None, []
+    z = gewinner(h, zweige if zweige is not None else kaskade(blueprint), ctx)
+    if z is None:
+        return None, []
+    aktionen: list = []
+    try:
+        _lauf(h, z["sequence"], ctx, aktionen)
+    except Stopp:
+        pass
+    return z["alias"], aktionen
 
 
 def zweig(h: Harness, blueprint: dict, ctx: dict | None = None) -> str | None:
@@ -121,6 +148,7 @@ def zweig(h: Harness, blueprint: dict, ctx: dict | None = None) -> str | None:
     return alias.split(":")[0] if alias else None
 
 
-def schreibt(aktionen: list, service: str = "number.set_value") -> list:
-    """Die Werte, die ein Service bekommen hat."""
-    return [w for s, _, w in aktionen if s == service]
+def schreibt(aktionen: list, service: str = "number.set_value", ziel: str | None = None) -> list:
+    """Die Werte, die ein Service bekommen hat; mit ziel nur die an diese Entitaet."""
+    return [w for s, e, w in aktionen
+            if s == service and (ziel is None or ziel == e or (isinstance(e, list) and ziel in e))]
