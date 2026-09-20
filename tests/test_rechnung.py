@@ -182,6 +182,90 @@ def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
+# Ein Pack ist Pflicht, jedes weitere optional
+# --------------------------------------------------------------------------
+EIN_PACK = {"vmax2_sensor": "", "bms2_temp_min_sensor": "", "bms2_temp_max_sensor": ""}
+
+
+def test_ein_pack_laeuft_ohne_zugewiesenes_bms_2(blueprint, tag):
+    """
+    Ein Standort mit einem Pack laesst die drei BMS-2-Felder leer. Die
+    Startpruefung darf nicht abbrechen, und keine Groesse darf auf ihren
+    Ersatzwert fallen - besonders temp_max_live nicht auf 99 Grad, was ueber
+    crate_45_deg den Ladestrom auf 0 A druecken wuerde.
+    """
+    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=EIN_PACK).auswerten(bis="freie_kwh")
+    assert ctx["pflicht_liste"] == []
+    assert ctx["packs_konfiguriert"] == 1 and ctx["packs_online"] == 1
+    assert ctx["packs_offline_bestaetigt"] is False
+    assert ctx["batterie_kapazitaet"] == pytest.approx(314 * 51.2 / 1000, abs=0.05)
+    # Temperaturen von Pack 1 (22.0 / 24.0 Grad), nicht die Ersatzwerte -99 / 99
+    assert ctx["temp_min_live"] == pytest.approx(22.0) and ctx["temp_max_live"] == pytest.approx(24.0)
+    # C-Rate 0.70 x 314 Ah x 1 Pack = 220 A (mit zwei Packs deckelt max_ampere bei 350 A)
+    assert ctx["temperatur_limit_ampere"] == pytest.approx(220, abs=0.5)
+
+
+@pytest.mark.parametrize("leer, erwartet", [
+    ("vmax2_sensor", "BMS 2: höchste Zellspannung (V)"),
+    ("bms2_temp_min_sensor", "BMS 2: niedrigste Zelltemperatur"),
+    ("bms2_temp_max_sensor", "BMS 2: höchste Zelltemperatur"),
+])
+def test_halb_zugewiesenes_pack_bricht_den_start_ab(blueprint, tag, leer, erwartet):
+    """
+    Ein Pack wird ganz oder gar nicht zugewiesen. Halb belegt rechnete der
+    Blueprint still falsch weiter, statt das fehlende Feld zu nennen.
+    """
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={leer: ""})
+    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == [
+        erwartet + " (Pack 2 nur teilweise zugewiesen)"]
+
+
+def test_pack_1_braucht_auch_seine_niedrigste_zelltemperatur(blueprint, tag):
+    """
+    Pack 1 ist Pflicht. Ohne seine niedrigste Zelltemperatur gilt es als nicht
+    vorhanden: bei einem Pack zaehlt dann kein Pack mehr als online, die Anlage
+    laeuft dauerhaft auf dem Notlauf-Strom und meldet "BMS-Sensoren offline",
+    statt beim Start das fehlende Feld zu nennen.
+    """
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"bms1_temp_min_sensor": ""})
+    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == ["BMS 1: niedrigste Zelltemperatur"]
+    # Der Zustand, den die Pflicht verhindert: mit einem Pack bleibt kein Sensor uebrig
+    ohne = {**EIN_PACK, "bms1_temp_min_sensor": ""}
+    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=ohne).auswerten(bis="freie_kwh")
+    assert ctx["packs_online"] == 0 and ctx["packs_offline_bestaetigt"] is True
+    assert ctx["temperatur_limit_ampere"] == pytest.approx(float(ctx["notfall_ampere"]))
+
+
+def test_halb_zugewiesenes_pack_3_bricht_den_start_ab(blueprint, tag):
+    """Dieselbe Regel fuer das dritte Pack: nur die Zellspannung zugewiesen."""
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"vmax3_sensor": "sensor.vmax3"})
+    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == [
+        "BMS 3: niedrigste Zelltemperatur (Pack 3 nur teilweise zugewiesen)",
+        "BMS 3: höchste Zelltemperatur (Pack 3 nur teilweise zugewiesen)"]
+
+
+def test_zellausgleich_startet_ohne_zweites_bms_und_nennt_pack_1(blueprint, tag):
+    """
+    Ohne Pack 2 ist vmax2 der Ersatzwert 0.0 V. Er darf den Zellausgleich weder
+    ausloesen noch verhindern, und die Meldung muss die Zellspannung von Pack 1
+    nennen statt der 0.0 V.
+    """
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides=EIN_PACK)
+    e = h.inputs["vmax1_sensor"]
+    h.states.tabelle[e] = Zustand(e, "3.46")
+    ctx = h.auswerten(bis="top_balancing_noetig")
+    assert ctx["vmax2"] == 0.0
+    assert ctx["top_balancing_noetig"] is True
+    assert "3.46 V" in ctx["balancing_grund"] and "0.0 V" not in ctx["balancing_grund"]
+
+
+def test_kein_zellausgleich_wenn_pack_1_unter_der_schwelle_bleibt(blueprint, tag):
+    """Gegenprobe: der Ersatzwert 0.0 V loest fuer sich genommen nichts aus."""
+    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=EIN_PACK).auswerten(bis="top_balancing_noetig")
+    assert ctx["top_balancing_noetig"] is False
+
+
+# --------------------------------------------------------------------------
 # Boost-Start nur mit gueltigem Warmwasser-Sensor
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("ww_state, erwartet", [
