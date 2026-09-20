@@ -10,6 +10,23 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.13.0] - 2026-09-20
+
+### Removed
+- The blueprint no longer writes any voltage to the inverter. Raising the float voltage for a
+  cell-balancing run, setting it back when the cooldown timer expires and the midnight check that
+  caught a voltage left raised by a lost timer are gone, together with the two float-voltage
+  inputs and the timer triggers that existed only to drive them. Writing a setpoint the charger
+  already manages means owning its failure modes for no gain: cell balancing works through the
+  throttled charge current alone.
+
+### Changed
+- The balancing voltage stays as an input, now only as the threshold at which the measured pack
+  voltage counts as full while every BMS is offline — the fallback that starts a balancing run
+  when no cell voltages are readable. It is named and described for that role; value and effect
+  are unchanged.
+
+
 ## [V6.12.3] - 2026-09-20
 
 ### Fixed
@@ -766,7 +783,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...HEAD
+[V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
 [V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
 [V6.12.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.1...V6.12.2
 [V6.12.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.0...V6.12.1
