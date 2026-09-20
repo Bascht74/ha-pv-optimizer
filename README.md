@@ -13,8 +13,9 @@ keine Zusatz-Software.
   hält eine Morgen-Blockade Platz dafür frei.
 - **Lastspitzen kappen.** Überschreitet die Netzeinspeisung die Schwelle, nimmt die Batterie den
   Überschuss auf; wahlweise heizt zuerst die Wärmepumpe Warmwasser.
-- **Zellausgleich über PV.** Bei erreichter Zellspannung wird die Erhaltungsspannung angehoben und
-  der Ladestrom auf die Ausgleichs-Rate gesetzt; nie aus dem Netz.
+- **Zellausgleich über PV.** Bei erreichter Zellspannung wird der Ladestrom auf die Ausgleichs-Rate
+  gedrosselt, damit die Zellen oben genug Zeit zum Ausgleichen bekommen; nie aus dem Netz.
+  Die Erhaltungsspannung stellt der Wechselrichter selbst, der Blueprint schreibt keine Spannung.
 - **Entlade-Planung.** Die sechs ToU-Register des Wechselrichters bekommen nachts eine Untergrenze aus
   der Halbstunden-Bilanz der nächsten 72 Stunden: so tief, dass das Ziel (90 %) am Ende des besten
   Sonnentags wieder erreicht wird, aber nie so hoch, dass eingespeist würde, was das Haus nachts
