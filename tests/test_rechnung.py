@@ -220,6 +220,22 @@ def test_halb_zugewiesenes_pack_bricht_den_start_ab(blueprint, tag, leer, erwart
         erwartet + " (Pack 2 nur teilweise zugewiesen)"]
 
 
+def test_pack_1_braucht_auch_seine_niedrigste_zelltemperatur(blueprint, tag):
+    """
+    Pack 1 ist Pflicht. Ohne seine niedrigste Zelltemperatur gilt es als nicht
+    vorhanden: bei einem Pack zaehlt dann kein Pack mehr als online, die Anlage
+    laeuft dauerhaft auf dem Notlauf-Strom und meldet "BMS-Sensoren offline",
+    statt beim Start das fehlende Feld zu nennen.
+    """
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"bms1_temp_min_sensor": ""})
+    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == ["BMS 1: niedrigste Zelltemperatur"]
+    # Der Zustand, den die Pflicht verhindert: mit einem Pack bleibt kein Sensor uebrig
+    ohne = {**EIN_PACK, "bms1_temp_min_sensor": ""}
+    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=ohne).auswerten(bis="freie_kwh")
+    assert ctx["packs_online"] == 0 and ctx["packs_offline_bestaetigt"] is True
+    assert ctx["temperatur_limit_ampere"] == pytest.approx(float(ctx["notfall_ampere"]))
+
+
 def test_halb_zugewiesenes_pack_3_bricht_den_start_ab(blueprint, tag):
     """Dieselbe Regel fuer das dritte Pack: nur die Zellspannung zugewiesen."""
     h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"vmax3_sensor": "sensor.vmax3"})

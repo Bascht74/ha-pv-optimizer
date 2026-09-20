@@ -1509,11 +1509,11 @@ action:
 
   # ====================================================================
   # PFLICHTFELD-PRUEFUNG - direkt hinter den Input-Variablen, vor jedem Zweig,
-  # der Messwerte verrechnet. Nur Entitaets-Felder ohne Leer-Behandlung im Code:
-  # dort wird states('') zu 'unknown' und per float()-Default still zu einem
-  # Ersatzwert - die Regelung liefe mit erfundenen Zahlen weiter. Felder mit
-  # eigenem Fallback bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall
-  # (Deye-Retry davor).
+  # der Messwerte verrechnet. Verlangt sind Entitaets-Felder ohne Leer-Behandlung
+  # im Code - states('') wird 'unknown' und per float()-Default still zu einem
+  # Ersatzwert - und die Temperaturen von Pack 1, deren Leer-Behandlung die Anlage
+  # dauerhaft in den Notlauf schickt. Felder mit tragfaehigem Fallback bleiben
+  # aussen vor; 'unavailable' ist ein Anbindungsausfall (Deye-Retry davor).
   # ====================================================================
   - variables:
       pflichtfelder_fehlend: >
@@ -1540,6 +1540,7 @@ action:
              ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
              ('Timer: WP-Laufzeit', var_timer_wp_boost),
              ('BMS 1: höchste Zellspannung (V)', var_vmax1),
+             ('BMS 1: niedrigste Zelltemperatur', var_bms1_temp_min),
              ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
              ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
              ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),

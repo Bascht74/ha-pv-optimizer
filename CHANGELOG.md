@@ -30,6 +30,10 @@ Logbuch-Meldung trägt ihn.
   used to compute silently wrong numbers — a missing highest cell temperature was read as 99 °C
   and throttled the charge current to zero, a missing lowest one left the pack out of the
   capacity, and a missing cell voltage left it unwatched during cell balancing.
+- The lowest cell temperature of pack 1 is a mandatory field now. Left empty, no pack counted
+  as reachable and the whole system ran on the emergency charge current for good, reporting
+  the BMS as offline — a state that is indistinguishable from a real outage in the logbook,
+  while the cause was an unassigned field the startup check could have named.
 
 ## [V6.13.0] - 2026-09-20
 
