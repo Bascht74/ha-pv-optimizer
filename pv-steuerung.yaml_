@@ -6,8 +6,7 @@
 #
 #   1. utility_meter.hausverbrauch_halbstuendlich.source
 #        -> der Tageszaehler des Hausverbrauchs (kWh, steigend). Der Blueprint
-#           nullt diesen Zaehler selbst alle 30 Minuten; der "cycle: daily"
-#           ist nur die Sicherung fuer den Fall, dass ein Lauf ausfaellt.
+#           nullt diesen Zaehler selbst alle 30 Minuten.
 #   2. binary_sensor "Ladesteuerung Eingriff Aktiv"
 #        -> die number-Entitaet des maximalen Ladestroms und deren Maximalwert
 #           (derselbe Wert wie der Blueprint-Input "Maximaler Ladestrom").
@@ -82,7 +81,10 @@ input_select:
       # Wird derzeit von keinem Zweig gesetzt. Bleibt fuer eine kuenftige
       # Netzlade-Logik erhalten, damit bestehende Instanzen die Option behalten.
       - zwangsladung
-    initial: normal
+    # Kein "initial:" - das ueberspraenge beim Start die Wiederherstellung und
+    # setzte fest "normal". Der Modus ist aber Gedaechtnis: Morgen-Blockade und
+    # Fall B erkennen an ihm, dass sie schon laufen. Ohne "initial:" steht ein
+    # frisch angelegter Helfer ohnehin auf der ersten Option.
 
 input_text:
   pv_optimizer_log:                   # -> Helfer: Logbuch-Anker
@@ -167,10 +169,14 @@ timer:
     restore: true
 
 utility_meter:
+  # Die drei Halbstunden-Zaehler tragen bewusst KEIN "cycle": Der Blueprint nullt
+  # sie selbst alle 30 Minuten. Ein eigener Zyklus setzte den Zaehler genau auf
+  # die Sekunde zurueck, in der der Lauf ihn ausliest - der Slot vor dem Reset
+  # lernte dann eine 0 und zoege sich ueber den Mittelwert Nacht fuer Nacht
+  # weiter nach unten.
   hausverbrauch_halbstuendlich:       # -> Hausverbrauch halbstuendlich (kWh)
     source: sensor.<HIER EINTRAGEN>   # Tageszaehler Hausverbrauch, kWh, steigend
     name: "Hausverbrauch Halbstündlich"
-    cycle: daily
     net_consumption: false
     delta_values: false
   # Nur mit Wallbox (Sektion 11): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
@@ -181,13 +187,11 @@ utility_meter:
   # wallbox_1_halbstuendlich:
   #   source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 1 "Charge Total Import", kWh, steigend
   #   name: "Wallbox 1 Halbstündlich"
-  #   cycle: daily
   #   net_consumption: false
   #   delta_values: false
   # wallbox_2_halbstuendlich:
   #   source: sensor.<HIER EINTRAGEN>   # evcc Ladepunkt 2 "Charge Total Import"
   #   name: "Wallbox 2 Halbstündlich"
-  #   cycle: daily
   #   net_consumption: false
   #   delta_values: false
   # Notstromkreis (optional): Energie am Load-UPS-Ausgang je Halbstunde aus dem
@@ -196,7 +200,6 @@ utility_meter:
   # notstromlast_halbstuendlich:      # -> Notstromlast halbstuendlich (kWh, optional)
   #   source: sensor.notstromlast_energie
   #   name: "Notstromlast Halbstündlich"
-  #   cycle: daily
   #   net_consumption: false
   #   delta_values: false
   # Auswertung des Verlust-Zaehlers nach Zeitraum, fuer das Dashboard.

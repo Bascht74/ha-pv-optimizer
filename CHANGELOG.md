@@ -30,6 +30,17 @@ Logbuch-Meldung trägt ihn.
   brings both values into the conversion of the discharge-floor registers.
 
 ### Fixed
+- The helper template no longer gives the half-hourly meters a cycle of their own. The blueprint
+  zeroes them every thirty minutes anyway, and a daily cycle put the meter's own reset on the
+  same second as the run that reads the last slot before midnight, which the run loses because
+  it queues behind the five-minute run. That slot then learned a zero and the running mean
+  pulled it down further every night. A site that already copied the template has to drop the
+  three `cycle:` lines itself; re-importing the blueprint does not touch its package.
+- The helper template no longer pins the charge mode to `normal` at startup. The mode is
+  memory, not decoration: the morning blockade holds through the end of its window only by
+  recognising itself, and the top-up branch leaves case B alone for the same reason. With
+  `initial:` set, Home Assistant skips restoring the value, so every restart quietly dropped
+  that memory. Without it a freshly created helper still starts on the first option.
 - The help text of the startup-phase timer and of its duration field said the battery drops to
   0 A while the timer runs. It does not: that branch holds the charge current at the value it
   last had and leaves lowering to the branches that own it, which the branch comment has said
