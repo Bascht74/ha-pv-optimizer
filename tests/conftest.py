@@ -157,7 +157,7 @@ def szenario(
         z("bms1_temp_max_sensor", 24.0), z("bms2_temp_max_sensor", 24.5), z("bms3_temp_max_sensor", "unavailable"),
         # Wechselrichter
         z("wr_max_charge_current", ladestrom, last_changed=jetzt - dt.timedelta(minutes=45)),
-        z("wr_float_voltage_sensor", 53.6), z("wr_battery_voltage_sensor", 53.0),
+        z("wr_battery_voltage_sensor", 53.0),
         *[z(f"wr_tou_{i}", 20) for i in range(1, 7)],
         # Netz & PV
         z("grid_export_sensor", -500), z("grid_export_kwh_heute", 3.2),

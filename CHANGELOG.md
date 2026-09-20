@@ -31,6 +31,18 @@ Logbuch-Meldung trägt ihn.
   backup reserve builds on it, because that reserve is what holds in an outage.
 - Without discharge planning the ToU minimum is written converted as well, so the configured
   percentage means the same state of charge everywhere it is used.
+- The balancing voltage stays as an input, now only as the threshold at which the measured pack
+  voltage counts as full while every BMS is offline — the fallback that starts a balancing run
+  when no cell voltages are readable. It is named and described for that role; value and effect
+  are unchanged.
+
+### Removed
+- The blueprint no longer writes any voltage to the inverter. Raising the float voltage for a
+  cell-balancing run, setting it back when the cooldown timer expires and the midnight check that
+  caught a voltage left raised by a lost timer are gone, together with the two float-voltage
+  inputs and the timer triggers that existed only to drive them. Writing a setpoint the charger
+  already manages means owning its failure modes for no gain: cell balancing works through the
+  throttled charge current alone.
 
 ## [V6.12.3] - 2026-09-20
 

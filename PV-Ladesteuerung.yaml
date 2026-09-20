@@ -79,7 +79,7 @@ blueprint:
       name: "2 – Wechselrichter-Steuerung (Pflicht)"
       description: >-
         Die Stellglieder, über die der Blueprint tatsächlich eingreift. Das sind schreibbare Entitäten (number/switch), keine Sensoren.
-        Leer bleiben dürfen: Float- und Batteriespannung (nur für den Zellausgleich) und der Abschalt-Ladestand (nur für die Notstromreserve).
+        Leer bleiben dürfen: die Batteriespannung (nur für den Zellausgleich) und der Abschalt-Ladestand (nur für die Notstromreserve).
       collapsed: true
       input:
         wr_max_charge_current:
@@ -88,16 +88,10 @@ blueprint:
             Die number-Entität des Wechselrichters für den maximalen Batterie-Ladestrom. Das ist der zentrale Hebel: Darüber drosselt oder öffnet der Blueprint die Ladung.
           default: ""
           selector: {"entity": {"domain": "number"}}
-        wr_float_voltage_sensor:
-          name: "Stellgröße: Float-Spannung (V) — optional"
-          description: >-
-            Die number-Entität für die Erhaltungsladespannung. Der Blueprint hebt sie während des Zellausgleichs kurzzeitig an (Abschnitt 8) und setzt sie danach zurück. Leer lassen, wenn dein Wechselrichter das nicht unterstützt — dann entfällt nur die Spannungsanhebung, das Balancing läuft trotzdem.
-          default: ""
-          selector: {"entity": {"domain": "number"}}
         wr_battery_voltage_sensor:
           name: "Messwert: Batteriespannung (V) — optional"
           description: >-
-            Sensor mit der gemessenen Batterie-Gesamtspannung (nicht die Stellgröße). Dient als Ersatz-Auslöser für den Zellausgleich, wenn alle
+            Sensor mit der gemessenen Batterie-Gesamtspannung. Dient als Ersatz-Auslöser für den Zellausgleich, wenn alle
             BMS-Packs ausgefallen sind und keine Zellspannungen mehr vorliegen. Leer lassen, wenn nicht vorhanden.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
@@ -340,7 +334,7 @@ blueprint:
         helper_timer_cooldown:
           name: "Timer: Zellausgleich-Nachlauf"
           description: >-
-            timer-Entität. Läuft nach Erreichen der Zellausgleich-Spannung und hält die erhöhte Erhaltungsspannung, bis er abgelaufen ist.
+            timer-Entität. Läuft nach Erreichen der Zellausgleich-Spannung und hält den gedrosselten Ladestrom, bis er abgelaufen ist.
           default: ""
           selector: {"entity": {"domain": "timer"}}
         helper_timer_wp_anlauf:
@@ -516,16 +510,10 @@ blueprint:
           default: "01:00:00"
           selector: {"time": {}}
         float_voltage_balancing:
-          name: "Float-Spannung während Zellausgleich (V)"
+          name: "Batteriespannung: Batterie gilt als voll (V)"
           description: >-
-            Auf diesen Wert hebt der Blueprint die Erhaltungsladespannung während des Balancings an. Nur wirksam, wenn du in Abschnitt 2 eine Float-Entität hinterlegt hast.
+            Gesamtspannung, ab der die Batterie als voll gilt. Wird nur als Ersatz-Schwelle für den Zellausgleich gebraucht, wenn alle BMS-Packs ausgefallen sind — dafür muss die Batteriespannung aus Abschnitt 2 zugewiesen sein.
           default: 55.2
-          selector: {"number": {"min": 50.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
-        float_voltage_normal:
-          name: "Float-Spannung normal (V)"
-          description: >-
-            Erhaltungsladespannung in Volt für den Normalbetrieb. Auf diesen Wert stellt der Blueprint zurück, sobald der Zellausgleich beendet ist. Sollte dem Standardwert deines Wechselrichters entsprechen (bei 16S-LiFePO4 typisch 54,4 V).
-          default: 53.6
           selector: {"number": {"min": 50.0, "max": 60.0, "step": 0.1, "unit_of_measurement": "V"}}
         default_tou_soc:
           name: "ToU Min-SOC Minimum (%)"
@@ -837,18 +825,6 @@ trigger:
     to: "idle"
     from: "active"
     id: wp_boost_ende
-  - alias: "Trigger Float-Boost START: Zellausgleich-Timer läuft los"
-    platform: state
-    entity_id: !input helper_timer_cooldown
-    to: "active"
-    from: "idle"
-    id: float_boost_start
-  - alias: "Trigger Float-Boost ENDE: Zellausgleich-Timer abgelaufen"
-    platform: state
-    entity_id: !input helper_timer_cooldown
-    to: "idle"
-    from: "active"
-    id: float_boost_ende
   - alias: "Trigger Peak-Shaving ENDE: Hold-Timer abgelaufen"
     platform: state
     entity_id: !input helper_timer_peak
@@ -1486,7 +1462,6 @@ action:
       var_timer_peak: !input helper_timer_peak
       var_timer_cooldown: !input helper_timer_cooldown
       var_wp_boost_aktiv: !input wp_boost_aktiv
-      var_wr_float_voltage: !input wr_float_voltage_sensor
       var_wr_battery_voltage: !input wr_battery_voltage_sensor
       var_schwelle_peak_shaving: !input schwelle_peak_shaving
       var_schwelle_wp_boost: !input schwelle_wp_boost
@@ -1520,7 +1495,6 @@ action:
       vertrauen_tag4: !input vertrauen_tag4
       nacht_p50_anteil: !input nacht_p50_anteil
       top_balancing_voltage: !input top_balancing_voltage
-      var_float_normal: !input float_voltage_normal
       var_float_balancing: !input float_voltage_balancing
       var_wp_ziel_temp_pv: !input wp_ziel_temp_pv
       var_wp_ziel_number: !input wp_ziel_temp_number
@@ -2372,8 +2346,8 @@ action:
       #
       # Fallen alle BMS-Packs aus, sind vmax1-3 'unavailable' -> float(0), der
       # zellspannungsbasierte Start kann also nie ausloesen. Ersatzweise zaehlt
-      # die gemessene Batterie-Gesamtspannung: Erreicht sie die Zellausgleich-
-      # Spannung, ist die Batterie voll genug. Ladestand-unabhaengig, weil er dann
+      # die gemessene Batterie-Gesamtspannung: Erreicht sie die Voll-Schwelle,
+      # ist die Batterie voll genug. Ladestand-unabhaengig, weil er dann
       # aus einer Quelle ausserhalb des BMS kaeme. Der Ladestrom ist hier auf den
       # Notlaufwert gedeckelt, das Balancing laeuft also sanft. Das Ende regelt
       # wie sonst der Cooldown-Timer: heute_schon_voll wird beim Start gesetzt,
@@ -2386,7 +2360,7 @@ action:
       # Zellspannungen 0.0 V - die Meldung darf dann nicht "0.0 V >= 3.46 V"
       # behaupten, sondern muss den Ersatz-Auslöser nennen.
       balancing_grund: >-
-        {% if bms_ausfall_balancing %}alle BMS-Packs ausgefallen sind und die gemessene Batteriespannung {{ batterie_spannung | round(2) }} V die Zellausgleich-Spannung {{ var_float_balancing | round(2) }} V erreicht hat{% else %}höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V{% endif %}
+        {% if bms_ausfall_balancing %}alle BMS-Packs ausgefallen sind und die gemessene Batteriespannung {{ batterie_spannung | round(2) }} V die Voll-Schwelle {{ var_float_balancing | round(2) }} V erreicht hat{% else %}höchste Zellspannung {{ [vmax1, vmax2, vmax3] | max | round(3) }} V ≥ Schwelle {{ top_balancing_voltage | round(3) }} V{% endif %}
       top_balancing_noetig: >
         {{ ((not heute_schon_voll and (vmax1 >= top_balancing_voltage or vmax2 >= top_balancing_voltage or (pack3_online and vmax3 >= top_balancing_voltage) or bms_ausfall_balancing))
         or states(var_timer_cooldown) == 'active') }}
@@ -2907,7 +2881,6 @@ action:
              ('vmax3_sensor', var_vmax3, {}),
              ('battery_total_charge', var_battery_total_charge, {}),
              ('wr_max_charge_current', var_wr_max_charge, {}),
-             ('wr_float_voltage_sensor', var_wr_float_voltage, {}),
              ('wr_battery_voltage_sensor', var_wr_battery_voltage, {}),
              ('wr_tou_1', var_wr_tou_1, {}),
              ('wr_tou_2', var_wr_tou_2, {}),
@@ -2993,7 +2966,6 @@ action:
               'top_balancing_voltage': top_balancing_voltage,
               'duration_top_balancing': aufz_duration_top_balancing,
               'float_voltage_balancing': var_float_balancing,
-              'float_voltage_normal': var_float_normal,
               'default_tou_soc': default_tou_soc,
               'reserve_soc': reserve_soc,
               'ziel_soc': ziel_soc,
@@ -3354,27 +3326,6 @@ action:
                   name: "PV Optimizer"
                   message: "{{ log_kopf }} Mitternachts-Check: Wärmepumpen-Warmwasser-Zieltemperatur von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt (Hysterese {{ var_wp_hysterese_normal }} °C), da sie noch auf dem PV-Boost-Wert stand{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %}."
                   entity_id: !input helper_logbook_dummy
-          # FLOAT-MITTERNACHTS-CHECK: Wenn der Cooldown-Timer (Balancing) verloren
-          # ging, feuert float_boost_ende nie und die Float-Spannung bleibt auf
-          # dem Balancing-Wert hängen. Timer idle + Float noch angehoben -> Reset.
-          - if:
-              - condition: template
-                value_template: >
-                  {{ var_wr_float_voltage != '' and
-                     states(var_timer_cooldown) == 'idle' and
-                     (var_float_balancing | float(0) | round(1)) != (var_float_normal | float(0) | round(1)) and
-                     (states(var_wr_float_voltage) | float(0) | round(1)) == (var_float_balancing | float(0) | round(1)) }}
-            then:
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wr_float_voltage }}"
-                data:
-                  value: "{{ var_float_normal }}"
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ log_kopf }} Mitternachts-Check: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt, da sie noch auf dem Zellausgleich-Wert stand, obwohl der Nachlauf-Timer inaktiv ist (Timer vermutlich verloren)."
-                  entity_id: !input helper_logbook_dummy
           # NACHT-MITTERNACHTS-CHECK: Der "Feierabend" (Sonnenuntergang) ist die
           # einzige Stelle, die den Ladestrom fuer die Nacht auf Max oeffnet.
           # Faellt dieser einmalige Trigger aus (Reload/Neustart nach
@@ -3608,47 +3559,6 @@ action:
               entity_id: !input helper_logbook_dummy
 
   - choose:
-      - alias: "FLOAT-BOOST STARTEN (Timer läuft an)"
-        conditions:
-          - condition: trigger
-            id: float_boost_start
-        sequence:
-          - if:
-              - condition: template
-                value_template: "{{ var_wr_float_voltage != '' }}"
-            then:
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: "{{ log_kopf }} Zellausgleich (Top-Balancing) gestartet: Erhaltungsspannung (Float) am Wechselrichter von {{ var_float_normal | round(3) }} V auf {{ var_float_balancing | round(3) }} V angehoben."
-                  entity_id: !input helper_logbook_dummy
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wr_float_voltage }}"
-                data:
-                  value: "{{ var_float_balancing }}"
-
-      - alias: "FLOAT-BOOST BEENDEN (Timer ist abgelaufen)"
-        conditions:
-          - condition: trigger
-            id: float_boost_ende
-        sequence:
-          - if:
-              - condition: template
-                value_template: "{{ var_wr_float_voltage != '' }}"
-            then:
-              - action: logbook.log
-                data:
-                  name: "PV Optimizer"
-                  message: >
-                    {{ log_kopf }} Zellausgleich (Top-Balancing) beendet: Erhaltungsspannung (Float) von {{ var_float_balancing | round(3) }} V auf {{ var_float_normal | round(3) }} V zurückgesetzt.
-                  entity_id: !input helper_logbook_dummy
-              - action: number.set_value
-                target:
-                  entity_id: "{{ var_wr_float_voltage }}"
-                data:
-                  value: "{{ var_float_normal }}"
-
       - alias: "PEAK-SHAVING ENDE"
         conditions:
           - condition: trigger
@@ -4420,7 +4330,7 @@ action:
       entscheidung_im_lauf: >
         {% set start = as_datetime(lauf_start) %}
         {% set ns = namespace(w=false) %}
-        {% for e in [var_wr_max_charge, var_wr_tou_1, var_wr_float_voltage, var_lade_modus, var_wp_ziel_number,
+        {% for e in [var_wr_max_charge, var_wr_tou_1, var_lade_modus, var_wp_ziel_number,
                      var_speicherverlust, var_offener_verlust, var_halten_bezug, var_timer_peak, var_timer_cooldown, var_timer_wp_boost]
               if e != '' and states[e] is not none and states[e].last_changed is not none %}
           {% if states[e].last_changed >= start %}{% set ns.w = true %}{% endif %}
