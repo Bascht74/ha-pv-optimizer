@@ -352,6 +352,128 @@ def test_trigger_untergrenze_verletzt(blueprint, tag):
         assert h._aufloesen(trig["value_template"], dict(tv)) is erwartet, (soc_w, p_w)
 
 
+# --------------------------------------------------------------------------
+# Schatten-BMS: gerechnet wird in seiner Skala, der Wechselrichter bekommt seine
+# eigene. Ohne zugewiesenen Sensor ist der Versatz 0 und nichts aendert sich.
+# --------------------------------------------------------------------------
+def _plan60(blueprint, tag, **kw):
+    """Morgen 14 kWh: Rohwert 61,4 -> Plan 60. Register per Vorgabe."""
+    tou = kw.pop("tou", 20)
+    return szenario(blueprint, zeit(tag, 21, 0), prognose_tage_kwh=(14, 5, 5),
+                    zustands_overrides=_tou(tou), **kw).auswerten(bis="tou_schreiben")
+
+
+def test_schatten_bms_verschiebt_den_registerwert(blueprint, tag):
+    """
+    Der Fall aus dem Betrieb: Plan 60 %, Schatten-BMS 62 %, Wechselrichter 50 %.
+    Ins Register gehoeren 48, damit der Wechselrichter bei 60 % Schatten-Ladestand
+    aufhoert zu entladen - er kennt nur sein eigenes BMS.
+    """
+    ctx = _plan60(blueprint, tag, soc=50.0, schatten_soc=62.0)
+    assert ctx["schatten_gueltig"] is True
+    assert ctx["soc_deye"] == 50.0 and ctx["aktueller_soc"] == 62.0 and ctx["soc_versatz"] == -12.0
+    assert ctx["f_soc"] == 60 and ctx["tou_schreibwert"] == 48
+    # Zurueckgelesen steht das Register in der Steuerungs-Skala, sonst vergliche
+    # die halbe Kaskade Ladestand gegen Registerwert.
+    assert ctx["tou_ist_register"] == 20 and ctx["tou_ist"] == 32
+    assert ctx["tou_schreiben"] is True
+
+
+def test_ohne_schatten_bms_bleibt_die_skala_unveraendert(blueprint, tag):
+    """Der Normalfall: kein zweiter Sensor, kein Versatz, jeder Ausdruck wie zuvor."""
+    ctx = _plan60(blueprint, tag, soc=62.0)
+    assert ctx["schatten_gueltig"] is False and ctx["soc_versatz"] == 0
+    assert ctx["aktueller_soc"] == ctx["soc_deye"] == 62.0
+    assert ctx["tou_ist"] == ctx["tou_ist_register"] == 20
+    assert ctx["tou_schreibwert"] == ctx["f_soc"] == 60
+
+
+@pytest.mark.parametrize("wert", ["unavailable", "unknown", 0, -5, 101])
+def test_schatten_bms_ohne_brauchbaren_wert_faellt_zurueck(blueprint, tag, wert):
+    """
+    Ueber | float() wuerde ein ausgefallener Sensor als 0 % durchgehen und die
+    Untergrenze in den Keller ziehen. Dann gilt wieder der Wert des Wechselrichters.
+    """
+    ctx = _plan60(blueprint, tag, soc=62.0, schatten_soc=wert)
+    assert ctx["schatten_gueltig"] is False
+    assert ctx["aktueller_soc"] == 62.0 and ctx["soc_versatz"] == 0
+    assert ctx["tou_schreibwert"] == ctx["f_soc"]
+
+
+@pytest.mark.parametrize("schatten, gueltig", [
+    (90.0, True),    # 40 Punkte Abstand: gerade noch hingenommen
+    (90.5, False),   # darueber misst eines der beiden BMS falsch
+    (9.5, False),    # 40,5 Punkte nach unten, gleiche Grenze
+])
+def test_schatten_bms_gilt_nur_bis_zur_zulaessigen_abweichung(blueprint, tag, schatten, gueltig):
+    ctx = _plan60(blueprint, tag, soc=50.0, schatten_soc=schatten)
+    assert ctx["schatten_gueltig"] is gueltig
+    assert ctx["soc_versatz"] == (50.0 - schatten if gueltig else 0)
+
+
+def test_registerwert_wird_aufgerundet_und_auf_das_register_geklemmt(blueprint, tag):
+    """
+    Aufrunden ist die Richtung, die frueher haelt: 48,4 wird zu 49. Nach unten ist
+    bei 0 Schluss - tiefer kennt das Register nicht.
+    """
+    krumm = _plan60(blueprint, tag, soc=50.4, schatten_soc=62.0)
+    assert krumm["soc_versatz"] == pytest.approx(-11.6) and krumm["f_soc"] == 60
+    assert krumm["tou_schreibwert"] == 49
+    # Minimum 10 %, Wechselrichter 40 Punkte unter dem Schatten-BMS: 10 - 40 -> 0
+    tief = szenario(blueprint, zeit(tag, 21, 0), soc=22.0, schatten_soc=62.0,
+                    prognose_tage_kwh=(40, 40, 40), zustands_overrides=_tou(20),
+                    input_overrides={"default_tou_soc": 10}).auswerten(bis="tou_schreiben")
+    assert tief["soc_versatz"] == -40.0 and tief["f_soc"] == 10
+    assert tief["tou_schreibwert"] == 0
+
+
+def test_registerwert_wird_dem_wandernden_versatz_nachgezogen(blueprint, tag):
+    """
+    Der Versatz ist nicht fest. Steht das Register auf 48 und laufen die beiden BMS
+    aufeinander zu, sackt die wirksame Grenze ab; die 5-Punkte-Schwelle faengt das,
+    ohne dass sich der Plan geaendert haette.
+    """
+    sitzt = _plan60(blueprint, tag, soc=50.0, schatten_soc=62.0, tou=48)
+    assert sitzt["tou_ist"] == 60.0 and sitzt["tou_schreiben"] is False
+    naeher = _plan60(blueprint, tag, soc=55.0, schatten_soc=62.0, tou=48)
+    assert naeher["soc_versatz"] == -7.0 and naeher["tou_ist"] == 55.0
+    assert naeher["tou_schreiben"] is True and naeher["tou_schreibwert"] == 53
+
+
+def test_notstromreserve_rechnet_den_abschaltwert_zurueck(blueprint, tag):
+    """
+    Der Abschalt-Ladestand gilt am BMS des Wechselrichters. In der Schatten-Skala
+    liegt er um den Versatz hoeher, sonst hat das Sicherheitsnetz ein Loch.
+    Gleiche Lage wie test_notstromreserve_hebt_die_untergrenze: Reserve dort 27,6 %.
+    """
+    basis = dict(forecast=prognose_gleichmaessig(tag, 2.0), prognose_tage_kwh=(40, 40, 40),
+                 zustands_overrides=_notstrom_zustaende([200] * 48))
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, schatten_soc=89.0, **basis).auswerten(bis="f_soc")
+    assert ctx["soc_versatz"] == -4.0 and ctx["shutdown_soc"] == 10
+    assert ctx["reserve_pct"] == pytest.approx(31.648, abs=0.01)
+    assert ctx["reserve_5"] == 35 and ctx["f_soc"] == 35
+
+
+def test_tou_minimum_wird_ebenfalls_umgerechnet(blueprint, tag):
+    """Auch der Rueckfallwert ohne Entlade-Planung meint den echten Ladestand."""
+    ctx = _plan60(blueprint, tag, soc=50.0, schatten_soc=62.0)
+    assert ctx["default_tou_soc"] == 20 and ctx["tou_minimum_wert"] == 8
+    ohne = _plan60(blueprint, tag, soc=50.0)
+    assert ohne["tou_minimum_wert"] == ohne["default_tou_soc"] == 20
+
+
+def test_meldung_schatten_bms_nennt_den_rueckfall(blueprint, tag):
+    """Ohne Meldung bliebe der Rueckfall unbemerkt - am Verhalten sieht man ihn nicht."""
+    block = next(st for st in blueprint["action"]
+                 if isinstance(st, dict) and "if" in st and "schatten_gueltig" in str(st["if"]))
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, schatten_soc="unavailable")
+    text = " ".join(h.render(block["then"][0]["data"]["message"], h.auswerten()).split())
+    assert "Ladestand (SOC) des Wechselrichters 50 %" in text and "nicht verfügbar ist" in text
+    weit = szenario(blueprint, zeit(tag, 21, 0), soc=50.0, schatten_soc=95.0)
+    text2 = " ".join(h.render(block["then"][0]["data"]["message"], weit.auswerten()).split())
+    assert "95 % um 45 % abweicht, mehr als die erlaubten 40 %" in text2
+
+
 def test_meldung_untergrenze_nicht_gehalten(blueprint, tag):
     h = szenario(blueprint, zeit(tag, 2, 0), soc=66.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(70), **_leistung(326)})
     ctx = h.auswerten()

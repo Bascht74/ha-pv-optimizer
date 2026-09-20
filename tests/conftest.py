@@ -103,6 +103,7 @@ def szenario(
     jetzt: dt.datetime,
     *,
     soc: float = 84.0,
+    schatten_soc: float | str | None = None,
     forecast: list[dict] | None = None,
     profil_kwh: float | list[float] = 0.19,
     hausverbrauch_slot_kwh: float = 0.0,
@@ -120,6 +121,10 @@ def szenario(
     inputs = standard_inputs(blueprint)
     # Zwei Packs, wie an beiden Standorten: die optionalen Pack-3-Inputs bleiben leer.
     inputs.update({"vmax3_sensor": "", "bms3_temp_min_sensor": "", "bms3_temp_max_sensor": ""})
+    # Schatten-BMS: ohne Angabe nicht zugewiesen - der Standardfall, in dem der
+    # Blueprint allein mit dem Ladestand des Wechselrichters rechnet.
+    if schatten_soc is None:
+        inputs["schatten_soc_sensor"] = ""
     # Entlade-Planung: Tagesprognosen morgen / Tag 3 / Tag 4; None schaltet sie aus.
     if prognose_tage_kwh is None:
         inputs.update({"solcast_morgen_sensor": "", "solcast_tag3_sensor": "", "solcast_tag4_sensor": ""})
@@ -185,6 +190,9 @@ def szenario(
         z("helper_timer_wp_boost", "idle", last_changed=jetzt - dt.timedelta(seconds=boost_timer_idle_seit_s)),
     ]
     tabelle = {zs.entity_id: zs for zs in zustaende}
+    if schatten_soc is not None:
+        tabelle[inputs["schatten_soc_sensor"]] = Zustand(
+            inputs["schatten_soc_sensor"], str(schatten_soc), {}, vor_1h)
     tabelle["sun.sun"] = Zustand("sun.sun", "above_horizon" if 6 <= jetzt.hour < 21 else "below_horizon")
     if zustands_overrides:
         tabelle.update(zustands_overrides)
