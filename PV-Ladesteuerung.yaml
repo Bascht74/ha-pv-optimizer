@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.13.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.14.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -12,19 +12,21 @@ blueprint:
       name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
-        Leer bleiben dürfen nur BMS 3 (nur bei drei Türmen) und das Schatten-BMS.
+        Pflicht ist ein Pack; Pack 2 und Pack 3 werden nur zugewiesen, wenn es sie gibt — dann
+        aber vollständig, mit Zellspannung und beiden Zelltemperaturen (Abschnitt 9). Das
+        Schatten-BMS ist optional.
       collapsed: true
       input:
         battery_soc_sensor:
           name: "Ladezustand SOC (%)"
           description: >-
-            Sensor mit dem Ladezustand, den der Wechselrichter selbst sieht (beim Deye der Modbus-Wert seines BMS). Steuert die gesamte Prioritäts-Kaskade. Ein genaueres Schatten-BMS gehört in das Feld darunter — der Blueprint braucht beide Werte, um die Register umzurechnen.
+            Sensor mit dem Ladezustand, den der Wechselrichter selbst sieht (beim Deye der Modbus-Wert seines BMS). Pflichtfeld: Bleibt das Schatten-BMS darunter leer, steuert dieser Wert allein die gesamte Prioritäts-Kaskade. Ist es belegt, dient er zusätzlich der Umrechnung der Register.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         schatten_soc_sensor:
           name: "Schatten-BMS: Ladezustand SOC (%) — optional"
           description: >-
-            Sensor eines zweiten, genaueren BMS. Ist er gesetzt, regelt der Blueprint danach und rechnet die Entlade-Untergrenze so in die ToU-Register um, dass der Wechselrichter an der hier gemeinten Grenze stoppt. Leer lassen, wenn es kein zweites BMS gibt.
+            Optional, Sensor eines zweiten, genaueren BMS. Bleibt das Feld leer, rechnet der Blueprint allein mit dem Wert darüber. Ist es belegt, regelt er danach und rechnet die Entlade-Untergrenze so in die Register um, dass der Wechselrichter an der gemeinten Grenze stoppt.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         battery_power_sensor:
@@ -40,9 +42,9 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "voltage"}}
         vmax2_sensor:
-          name: "BMS 2: höchste Zellspannung (V)"
+          name: "BMS 2: höchste Zellspannung (V) — optional"
           description: >-
-            Sensor mit der höchsten Einzelzellspannung von Pack 2 (wie bei BMS 1). Bei nur einem Pack leer lassen — der Blueprint rechnet dann nur mit Pack 1.
+            Sensor mit der höchsten Einzelzellspannung von Pack 2 (wie bei BMS 1). Nur ausfüllen, wenn du ein zweites Pack hast; sonst leer lassen — der Blueprint rechnet dann nur mit Pack 1.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "voltage"}}
         vmax3_sensor:
@@ -524,7 +526,7 @@ blueprint:
     sec_temperature:
       name: "9 – Temperatur-Limits & C-Raten (Feintuning)"
       description: >-
-        Lithium-Zellen dürfen bei Kälte nur langsam (oder gar nicht) geladen werden. Der Blueprint begrenzt den Ladestrom deshalb temperaturabhängig. Die Voreinstellungen sind konservativ und passen für die meisten LiFePO4-Systeme.
+        Lithium-Zellen dürfen bei Kälte nur langsam (oder gar nicht) geladen werden. Der Blueprint begrenzt den Ladestrom deshalb temperaturabhängig. Die Voreinstellungen sind konservativ und passen für die meisten LiFePO4-Systeme. Pro Pack gehören beide Temperatur-Sensoren zusammen.
       collapsed: true
       input:
         bms1_temp_min_sensor:
@@ -534,9 +536,9 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
         bms2_temp_min_sensor:
-          name: "BMS 2: niedrigste Zelltemperatur"
+          name: "BMS 2: niedrigste Zelltemperatur — optional"
           description: >-
-            Sensor mit der kältesten Zelle von Pack 2. Bei nur einem Pack leer lassen — der Blueprint rechnet dann nur mit Pack 1.
+            Sensor mit der kältesten Zelle von Pack 2. Nur ausfüllen, wenn du ein zweites Pack hast; sonst leer lassen — der Blueprint rechnet dann nur mit Pack 1.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
         bms3_temp_min_sensor:
@@ -552,9 +554,9 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
         bms2_temp_max_sensor:
-          name: "BMS 2: höchste Zelltemperatur"
+          name: "BMS 2: höchste Zelltemperatur — optional"
           description: >-
-            Sensor mit der wärmsten Zelle von Pack 2. Bei nur einem Pack leer lassen.
+            Sensor mit der wärmsten Zelle von Pack 2. Nur ausfüllen, wenn du ein zweites Pack hast.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
         bms3_temp_max_sensor:
@@ -572,7 +574,7 @@ blueprint:
         crate_5_deg:
           name: "C-Rate bei 5 °C"
           description: >-
-            Ladefaktor bei knapp über null. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Strom. Beispiel: 0,05 × 314 Ah × 2 = 31 A.
+            Ladefaktor bei knapp über null. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Strom. Beispiel: 0,05 × 314 Ah × 2 Packs = 31 A.
           default: 0.05
           selector: {"number": {"min": 0.0, "max": 0.2, "step": 0.01, "mode": "slider"}}
         crate_10_deg:
@@ -868,7 +870,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.13.0]"
+      bp_version: "[V6.14.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1507,11 +1509,11 @@ action:
 
   # ====================================================================
   # PFLICHTFELD-PRUEFUNG - direkt hinter den Input-Variablen, vor jedem Zweig,
-  # der Messwerte verrechnet. Nur Entitaets-Felder ohne Leer-Behandlung im Code:
-  # dort wird states('') zu 'unknown' und per float()-Default still zu einem
-  # Ersatzwert - die Regelung liefe mit erfundenen Zahlen weiter. Felder mit
-  # eigenem Fallback bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall
-  # (Deye-Retry davor).
+  # der Messwerte verrechnet. Verlangt sind Entitaets-Felder ohne Leer-Behandlung
+  # im Code - states('') wird 'unknown' und per float()-Default still zu einem
+  # Ersatzwert - und die Temperaturen von Pack 1, deren Leer-Behandlung die Anlage
+  # dauerhaft in den Notlauf schickt. Felder mit tragfaehigem Fallback bleiben
+  # aussen vor; 'unavailable' ist ein Anbindungsausfall (Deye-Retry davor).
   # ====================================================================
   - variables:
       pflichtfelder_fehlend: >
@@ -1538,9 +1540,8 @@ action:
              ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
              ('Timer: WP-Laufzeit', var_timer_wp_boost),
              ('BMS 1: höchste Zellspannung (V)', var_vmax1),
-             ('BMS 2: höchste Zellspannung (V)', var_vmax2),
+             ('BMS 1: niedrigste Zelltemperatur', var_bms1_temp_min),
              ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
-             ('BMS 2: höchste Zelltemperatur', var_bms2_temp_max),
              ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
              ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
              ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
@@ -1549,6 +1550,23 @@ action:
              ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6),
              ('Helfer: Logbuch-Anker', var_logbook_dummy)
            ] %}
+        {# Ein weiteres Pack wird ganz oder gar nicht zugewiesen. Halb belegt liefert es
+           stille Falschwerte: ohne höchste Zelltemperatur rechnet der Blueprint mit 99 °C
+           und drosselt auf 0 A, ohne niedrigste zählt das Pack nicht zur Kapazität, ohne
+           Zellspannung bleibt es beim Zellausgleich unbeobachtet. #}
+        {% set np = namespace(liste=pflicht) %}
+        {% for nr, vmax, t_min, t_max in [
+             ('2', var_vmax2, var_bms2_temp_min, var_bms2_temp_max),
+             ('3', var_vmax3, var_bms3_temp_min, var_bms3_temp_max)] %}
+          {% if vmax != '' or t_min != '' or t_max != '' %}
+            {% set zusatz = ' (Pack ' ~ nr ~ ' nur teilweise zugewiesen)' %}
+            {% set np.liste = np.liste + [
+                 ('BMS ' ~ nr ~ ': höchste Zellspannung (V)' ~ zusatz, vmax),
+                 ('BMS ' ~ nr ~ ': niedrigste Zelltemperatur' ~ zusatz, t_min),
+                 ('BMS ' ~ nr ~ ': höchste Zelltemperatur' ~ zusatz, t_max)] %}
+          {% endif %}
+        {% endfor %}
+        {% set pflicht = np.liste %}
         {# Die Wärmepumpen-Felder sind nur Pflicht, wenn der Boost eingeschaltet ist. #}
         {% if var_wp_boost_aktiv %}
           {% set pflicht = pflicht + [
