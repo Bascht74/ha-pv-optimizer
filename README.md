@@ -42,12 +42,14 @@ keine Zusatz-Software.
    Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
 
 **Ladestand (Sektion 1):** Der Blueprint nimmt den Ladestand als Messwert und rechnet ihn nicht
-selbst aus; zugewiesen wird der Sensor, der am Standort am genauesten ist. Wer dem SOC des
-Wechselrichters nicht traut, kann ein „Schatten-BMS" davorschalten, das den Ladestand aus den
-Lade- und Entladezählern bildet und seinen Nullpunkt setzt, sobald die Zellspannung die Batterie
-als voll ausweist. Das ist eine eigene Automation mit eigenen Helfern und nicht Teil dieses
-Repositories — die Verbindung besteht allein darin, dass ihr Sensor hier als „Ladezustand SOC (%)"
-eingetragen wird. Den Wechselrichter stellt in jedem Fall nur dieser Blueprint.
+selbst aus. In „Ladezustand SOC (%)" gehört der Wert, den der Wechselrichter selbst sieht — er prüft
+seine ToU-Register gegen sein eigenes BMS. Wer dem nicht traut, kann ein „Schatten-BMS" daneben
+stellen, das den Ladestand aus den Lade- und Entladezählern bildet und seinen Nullpunkt setzt,
+sobald die Zellspannung die Batterie als voll ausweist. Das ist eine eigene Automation mit eigenen
+Helfern und nicht Teil dieses Repositories; ihr Sensor kommt in das optionale Feld darunter. Ist es
+gesetzt, rechnet der Blueprint durchgehend in dessen Skala und rechnet die Untergrenze erst beim
+Schreiben in die Skala des Wechselrichters um — der kennt nur sein eigenes BMS. Den Wechselrichter
+stellt in jedem Fall nur dieser Blueprint.
 
 **Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
 Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
@@ -61,7 +63,8 @@ ToU-Register des Deye. Fällt der Ladestand nachts trotzdem mehr als drei Punkte
 Batterie entlädt, hält der Wechselrichter die Grenze nicht. Häufigste Ursache beim Deye: „Battery
 Operation Mode“ steht auf „Voltage“, dann rechnet er die Programme mit den Spannungsfeldern und
 ignoriert die SOC-Felder; auf „Capacity“ stellen, dazu „Charging“ der Programme auf „Disabled“.
-Weitere Ursachen: Zeitsteuerung aus, oder seine eigene Ladestand-Anzeige weicht vom Sensor ab. Das
+Weitere Ursache: Zeitsteuerung aus. Weicht seine eigene Ladestand-Anzeige vom genaueren Sensor ab,
+ist dafür das Schatten-BMS-Feld da — dann trifft die Grenze wieder den gemeinten Ladestand. Das
 Logbuch meldet das einmal je Nacht; die Grenze wird dann nicht nachgezogen.
 
 **Zweitmeinung vom evcc-Optimizer:** Mit der Adresse des Optimizer-Add-ons im Feld „evcc-Optimizer:

@@ -12,6 +12,30 @@ Logbuch-Meldung trägt ihn.
 
 ## [V6.13.0] - 2026-09-20
 
+### Added
+- An optional second state-of-charge sensor. Where a more accurate BMS measures the same
+  battery, the whole cascade now computes in its scale, and the difference to the inverter's
+  own reading is applied at the register boundary only: added when the discharge floor is
+  written, subtracted when it is read back. The inverter enforces its ToU registers against
+  its own BMS, so a floor derived from the accurate reading was enforced at the wrong state
+  of charge. Without the sensor the difference is zero and nothing changes.
+- A logbook message when the second reading is unusable and control falls back to the
+  inverter's own value. Nothing about the behaviour shows that fallback, and a reading taken
+  as zero would pull the floor to the bottom.
+
+### Changed
+- The state-of-charge field is now explicitly the value the inverter itself sees; the more
+  accurate sensor belongs in the new field. Instances that followed the earlier hint and put
+  a shadow sensor in the old field have to swap the two before the new one takes effect.
+- The inverter's shutdown state of charge is converted into the control scale before the
+  backup reserve builds on it, because that reserve is what holds in an outage.
+- Without discharge planning the ToU minimum is written converted as well, so the configured
+  percentage means the same state of charge everywhere it is used.
+- The balancing voltage stays as an input, now only as the threshold at which the measured pack
+  voltage counts as full while every BMS is offline — the fallback that starts a balancing run
+  when no cell voltages are readable. It is named and described for that role; value and effect
+  are unchanged.
+
 ### Removed
 - The blueprint no longer writes any voltage to the inverter. Raising the float voltage for a
   cell-balancing run, setting it back when the cooldown timer expires and the midnight check that
@@ -19,13 +43,6 @@ Logbuch-Meldung trägt ihn.
   inputs and the timer triggers that existed only to drive them. Writing a setpoint the charger
   already manages means owning its failure modes for no gain: cell balancing works through the
   throttled charge current alone.
-
-### Changed
-- The balancing voltage stays as an input, now only as the threshold at which the measured pack
-  voltage counts as full while every BMS is offline — the fallback that starts a balancing run
-  when no cell voltages are readable. It is named and described for that role; value and effect
-  are unchanged.
-
 
 ## [V6.12.3] - 2026-09-20
 
