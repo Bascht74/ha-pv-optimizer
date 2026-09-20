@@ -144,18 +144,27 @@ input_number:
     mode: box
 
 timer:
+  # restore ueberall: Ohne das faellt ein laufender Timer beim Neustart aus, und
+  # der Zweig, den er absichert, sieht einen Zustand, den es nicht mehr gibt.
   zellausgleich_nachlauf:             # -> Timer: Zellausgleich-Nachlauf
     name: "Zellausgleich Nachlauf"
     icon: mdi:timer-sand
+    restore: true
   peak_shaving_hold:                  # -> Timer: Peak-Shaving Hold
     name: "Peak Shaving Hold"
     icon: mdi:timer-flash
-  wp_anlaufphase:                     # -> Timer: WP-Anlaufphase
-    name: "Wärmepumpe Anlaufphase"
+    restore: true
+  # Nicht nur fuer die Waermepumpe: Solange dieser Timer laeuft, hebt die
+  # Lastspitzen-Kappung den Ladestrom nicht an. Eine eigene Automation darf ihn
+  # fuer jeden grossen Verbraucher starten.
+  anlaufphase_grossverbraucher:       # -> Timer: Anlaufphase Großverbraucher
+    name: "Anlaufphase Großverbraucher"
     icon: mdi:timer-sand
+    restore: true
   wp_boost:                           # -> Timer: WP-Laufzeit
     name: "Wärmepumpe PV-Boost Dauer"
     icon: mdi:timer-star
+    restore: true
 
 utility_meter:
   hausverbrauch_halbstuendlich:       # -> Hausverbrauch halbstuendlich (kWh)

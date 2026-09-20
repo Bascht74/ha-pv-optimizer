@@ -340,9 +340,9 @@ blueprint:
           default: ""
           selector: {"entity": {"domain": "timer"}}
         helper_timer_wp_anlauf:
-          name: "Timer: WP-Anlaufphase"
+          name: "Timer: Anlaufphase Großverbraucher"
           description: >-
-            timer-Entität. Läuft während der Anlaufphase der Wärmepumpe. In dieser Zeit geht die Batterie auf 0 A, damit der PV-Überschuss der Wärmepumpe zugutekommt.
+            timer-Entität. Eine eigene Automation startet sie, wenn ein großer Verbraucher anläuft; solange sie läuft, hebt die Lastspitzen-Kappung den Ladestrom nicht an. Beim Wärmepumpen-Boost startet der Blueprint sie selbst und setzt die Batterie zusätzlich auf 0 A.
           default: ""
           selector: {"entity": {"domain": "timer"}}
         helper_timer_wp_boost:
@@ -1537,7 +1537,7 @@ action:
              ('Diagnose: Eingriffsdauer heute', var_eingriff_dauer),
              ('Timer: Peak-Shaving Hold', var_timer_peak),
              ('Timer: Zellausgleich-Nachlauf', var_timer_cooldown),
-             ('Timer: WP-Anlaufphase', var_timer_wp_anlauf),
+             ('Timer: Anlaufphase Großverbraucher', var_timer_wp_anlauf),
              ('Timer: WP-Laufzeit', var_timer_wp_boost),
              ('BMS 1: höchste Zellspannung (V)', var_vmax1),
              ('BMS 1: niedrigste Zelltemperatur', var_bms1_temp_min),

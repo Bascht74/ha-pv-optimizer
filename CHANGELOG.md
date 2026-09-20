@@ -13,6 +13,11 @@ Logbuch-Meldung trägt ihn.
 ## [V6.14.0] - 2026-09-20
 
 ### Changed
+- The mandatory startup-phase timer is no longer named after the heat pump. Whatever starts it,
+  peak shaving leaves the charge current alone while it runs, and that holds with or without the
+  heat-pump boost configured, so the timer is the way to keep the battery out of the way of any
+  large appliance. Field label and help text say that now; the field itself is unchanged, so no
+  instance needs reassigning.
 - One battery pack is mandatory, every further one is optional. The three BMS 2 fields (cell
   voltage and both cell temperatures) are no longer demanded by the startup check, so a
   single-pack site can leave them empty the way the BMS 3 fields already could. With them
