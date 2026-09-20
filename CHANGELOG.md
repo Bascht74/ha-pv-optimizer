@@ -10,6 +10,15 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.12.3] - 2026-09-20
+
+### Fixed
+- The mandatory-helpers section still offered the shadow BMS helpers as fields that may stay
+  empty, and a comment on the fallback for a total BMS outage still explained itself through the
+  shadow BMS. Both were written in the release that removed it, and they name something the
+  blueprint no longer has.
+
+
 ## [V6.12.2] - 2026-09-18
 
 ### Fixed
@@ -757,7 +766,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...HEAD
+[V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
 [V6.12.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.1...V6.12.2
 [V6.12.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.0...V6.12.1
 [V6.12.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.11.0...V6.12.0

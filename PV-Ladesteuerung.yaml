@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.12.3]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -265,7 +265,7 @@ blueprint:
       name: "5 – Helfer-Entitäten (Pflicht)"
       description: >-
         Diese Helfer speichern den Zustand zwischen zwei Läufen. Sie müssen einmalig angelegt werden (siehe mitgeliefertes Package). Der Blueprint schreibt hier hinein — es sind keine Sensoren.
-        Leer bleiben dürfen die Helfer für Haltephase, Schatten-BMS und Temperatur-/Notstromprofil.
+        Leer bleiben dürfen die Helfer für Haltephase sowie Temperatur- und Notstromprofil.
       collapsed: true
       input:
         helper_lade_modus:
@@ -882,7 +882,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.12.2]"
+      bp_version: "[V6.12.3]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -2345,8 +2345,8 @@ action:
       # Fallen alle BMS-Packs aus, sind vmax1-3 'unavailable' -> float(0), der
       # zellspannungsbasierte Start kann also nie ausloesen. Ersatzweise zaehlt
       # die gemessene Batterie-Gesamtspannung: Erreicht sie die Zellausgleich-
-      # Spannung, ist die Batterie voll genug. SOC-unabhaengig, weil der SOC dann
-      # ohnehin nur aus dem Schatten-BMS kaeme. Der Ladestrom ist hier auf den
+      # Spannung, ist die Batterie voll genug. Ladestand-unabhaengig, weil er dann
+      # aus einer Quelle ausserhalb des BMS kaeme. Der Ladestrom ist hier auf den
       # Notlaufwert gedeckelt, das Balancing laeuft also sanft. Das Ende regelt
       # wie sonst der Cooldown-Timer: heute_schon_voll wird beim Start gesetzt,
       # damit faellt dieser Ausloeser weg.
