@@ -10,6 +10,14 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.13.1] - 2026-09-20
+
+### Changed
+- The help text of the state-of-charge field read as if the shadow-BMS field below it had to be
+  filled in too. Both descriptions now say plainly that the second sensor is optional: left empty,
+  the inverter's own reading alone drives the whole cascade, and only a filled-in shadow field
+  brings both values into the conversion of the discharge-floor registers.
+
 ## [V6.13.0] - 2026-09-20
 
 ### Added
@@ -800,7 +808,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.1...HEAD
+[V6.13.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.13.1
 [V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
 [V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
 [V6.12.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.1...V6.12.2

@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.13.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.13.1]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -18,13 +18,13 @@ blueprint:
         battery_soc_sensor:
           name: "Ladezustand SOC (%)"
           description: >-
-            Sensor mit dem Ladezustand, den der Wechselrichter selbst sieht (beim Deye der Modbus-Wert seines BMS). Steuert die gesamte Prioritäts-Kaskade. Ein genaueres Schatten-BMS gehört in das Feld darunter — der Blueprint braucht beide Werte, um die Register umzurechnen.
+            Sensor mit dem Ladezustand, den der Wechselrichter selbst sieht (beim Deye der Modbus-Wert seines BMS). Pflichtfeld: Bleibt das Schatten-BMS darunter leer, steuert dieser Wert allein die gesamte Prioritäts-Kaskade. Ist es belegt, dient er zusätzlich der Umrechnung der Register.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         schatten_soc_sensor:
           name: "Schatten-BMS: Ladezustand SOC (%) — optional"
           description: >-
-            Sensor eines zweiten, genaueren BMS. Ist er gesetzt, regelt der Blueprint danach und rechnet die Entlade-Untergrenze so in die ToU-Register um, dass der Wechselrichter an der hier gemeinten Grenze stoppt. Leer lassen, wenn es kein zweites BMS gibt.
+            Optional, Sensor eines zweiten, genaueren BMS. Bleibt das Feld leer, rechnet der Blueprint allein mit dem Wert darüber. Ist es belegt, regelt er danach und rechnet die Entlade-Untergrenze so in die Register um, dass der Wechselrichter an der gemeinten Grenze stoppt.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "battery"}}
         battery_power_sensor:
@@ -868,7 +868,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.13.0]"
+      bp_version: "[V6.13.1]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
