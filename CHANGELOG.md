@@ -10,6 +10,26 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.14.0] - 2026-09-20
+
+### Changed
+- One battery pack is mandatory, every further one is optional. The three BMS 2 fields (cell
+  voltage and both cell temperatures) are no longer demanded by the startup check, so a
+  single-pack site can leave them empty the way the BMS 3 fields already could. With them
+  empty the blueprint computes with one pack throughout: capacity, temperature limit and
+  cell balancing all read pack 1 alone.
+- The help text of the state-of-charge field read as if the shadow-BMS field below it had to be
+  filled in too. Both descriptions now say plainly that the second sensor is optional: left empty,
+  the inverter's own reading alone drives the whole cascade, and only a filled-in shadow field
+  brings both values into the conversion of the discharge-floor registers.
+
+### Fixed
+- A pack is now assigned as a whole or not at all: as soon as one of a pack's three sensors is
+  set, the startup check demands the other two and names the missing one. A half-assigned pack
+  used to compute silently wrong numbers — a missing highest cell temperature was read as 99 °C
+  and throttled the charge current to zero, a missing lowest one left the pack out of the
+  capacity, and a missing cell voltage left it unwatched during cell balancing.
+
 ## [V6.13.0] - 2026-09-20
 
 ### Added
@@ -800,7 +820,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...HEAD
+[V6.14.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.14.0
 [V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
 [V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
 [V6.12.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.1...V6.12.2
