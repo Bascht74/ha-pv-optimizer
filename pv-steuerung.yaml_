@@ -27,8 +27,10 @@
 #
 # Das Schatten-BMS ist nicht mehr Teil der Ladesteuerung: Es rechnet den
 # Ladestand aus den Lade-/Entladezaehlern und bringt Sensor, Helfer und
-# Kalibrier-Automation selbst mit. Sein SOC-Sensor wird hier nur noch als
-# "Ladezustand SOC (%)" zugewiesen, wenn er genutzt wird.
+# Kalibrier-Automation selbst mit. Zugewiesen werden beide Werte getrennt: der
+# Ladestand des Wechselrichters als "Ladezustand SOC (%)", der des Schatten-BMS
+# in das optionale Feld darunter. Der Blueprint braucht beide, um die
+# Entlade-Untergrenze in die Skala des Wechselrichters umzurechnen.
 #
 # Optional: Diagnose-Aufzeichnung. Existiert notify.pv_optimizer_aufzeichnung,
 # schreibt der Blueprint JSON-Zeilen mit allen Eingangs- und Rechenwerten: je
