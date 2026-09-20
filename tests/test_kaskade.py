@@ -1,10 +1,16 @@
 """
-Die Prioritaetskaskade: welcher Zweig gewinnt, und was er schreibt.
+Die choose:-Gruppen: welcher Zweig gewinnt, und was er schreibt.
 
 Die uebrigen Tests pruefen die Zahlen, die in die Entscheidung eingehen. Hier
 geht es um die Entscheidung selbst - die Reihenfolge der Zweige und ihre
-Kopplungen. test_jeder_zweig_ist_abgedeckt haelt die Abdeckung vollstaendig:
-Kommt ein Zweig dazu, wird der Test rot, bis ein Szenario ihn erreicht.
+Kopplungen. Erfasst sind alle Gruppen auf oberster Ebene, nicht nur die
+Prioritaetskaskade: test_jeder_zweig_ist_abgedeckt haelt die Abdeckung
+vollstaendig, kommt ein Zweig dazu, wird der Test rot, bis ein Szenario ihn
+erreicht.
+
+Die Abdeckung prueft nur die Auswahl (gewinner), nicht die Sequenz: Drei Zweige
+benutzen repeat:/delay:, die der Ausfuehrer bewusst verweigert. Was ein Zweig
+schreibt, steht darunter je Zweig - dort, wo der Schreibvorgang etwas aussagt.
 """
 from __future__ import annotations
 
@@ -12,19 +18,20 @@ import datetime as dt
 
 import pytest
 
-from conftest import fake_entity, szenario, zeit
+from conftest import fake_entity, standard_inputs, szenario, zeit
 from ha_jinja import Zustand
-from kaskade import gruppe, kaskade, schreibt, zweig, zweig_und_aktionen
-
-TIMER = ("helper_timer_peak", "helper_timer_wp_anlauf", "helper_timer_wp_boost", "helper_timer_cooldown")
+from kaskade import gewinner, gruppe, gruppen, schreibt, zweig, zweig_und_aktionen
 
 
-def _z(name: str, wert: str, **kw) -> dict:
-    """Ein Zustands-Override fuer eine der Fake-Entitaeten."""
-    domain = "timer" if name in TIMER else (
-        "binary_sensor" if name.endswith("_kompressor_sensor") else (
-            "input_boolean" if name.startswith("helper_") else "sensor"))
-    eid = fake_entity(name, domain)
+def _z(blueprint: dict, name: str, wert: str, **kw) -> dict:
+    """
+    Ein Zustands-Override fuer eine der Fake-Entitaeten.
+
+    Die Domain kommt aus dem Blueprint, nicht aus dem Namen: Eine falsch
+    geratene Domain ergibt eine andere Entitaets-ID, der Override liefe ins
+    Leere und das Szenario pruefte still etwas anderes als es behauptet.
+    """
+    eid = standard_inputs(blueprint)[name]
     return {eid: Zustand(eid, wert, **kw)}
 
 
@@ -34,13 +41,14 @@ def _z(name: str, wert: str, **kw) -> dict:
 # --------------------------------------------------------------------------
 def p0_temperaturdeckel(blueprint, tag):
     """Kalte Zellen senken die zulaessige Laderate unter den Sollwert."""
-    ov = {**_z("bms1_temp_min_sensor", "12.0"), **_z("bms2_temp_min_sensor", "12.0")}
+    ov = {**_z(blueprint, "bms1_temp_min_sensor", "12.0"), **_z(blueprint, "bms2_temp_min_sensor", "12.0")}
     return szenario(blueprint, zeit(tag, 12, 0), ladestrom=200.0, zustands_overrides=ov)
 
 
 def p1_zellausgleich(blueprint, tag):
     """Eine Zellspannung erreicht die Balancing-Schwelle, die Batterie war heute noch nicht voll."""
-    return szenario(blueprint, zeit(tag, 12, 0), soc=98.0, zustands_overrides=_z("vmax1_sensor", "3.45"))
+    return szenario(blueprint, zeit(tag, 12, 0), soc=98.0,
+                    zustands_overrides=_z(blueprint, "vmax1_sensor", "3.45"))
 
 
 def p2_fall_b(blueprint, tag):
@@ -51,17 +59,18 @@ def p2_fall_b(blueprint, tag):
 def p3_wp_anlaufsperre(blueprint, tag):
     """Der Anlauf-Timer der Waermepumpe laeuft, der Ladestrom wird gehalten."""
     return szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_boost_aktiv": True},
-                    zustands_overrides=_z("helper_timer_wp_anlauf", "active"))
+                    zustands_overrides=_z(blueprint, "helper_timer_wp_anlauf", "active"))
 
 
 def p4_wp_kompressor(blueprint, tag):
     """Der Verdichter laeuft, der Ueberschuss gehoert ihm."""
-    return szenario(blueprint, zeit(tag, 12, 0), zustands_overrides=_z("wp_kompressor_sensor", "on"))
+    return szenario(blueprint, zeit(tag, 12, 0),
+                    zustands_overrides=_z(blueprint, "wp_kompressor_sensor", "on"))
 
 
 def p5_peak_shaving(blueprint, tag):
     """Der Kappungs-Timer laeuft und die Einspeisung liegt ueber der Schwelle."""
-    ov = {**_z("helper_timer_peak", "active"), **_z("grid_export_sensor", "-8000")}
+    ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000")}
     return szenario(blueprint, zeit(tag, 12, 0), soc=84.0, zustands_overrides=ov)
 
 
@@ -87,18 +96,128 @@ ZWEIGE = [
 ]
 
 
+# --------------------------------------------------------------------------
+# Die Gruppen neben der Kaskade. Sie konkurrieren nicht um den Ladestrom,
+# sondern haengen an einem eigenen Trigger oder an einer eigenen Lage.
+# --------------------------------------------------------------------------
+def mitternacht(blueprint, tag):
+    """Der Wartungslauf um 23:58; die drei Mitternachts-Gruppen haengen nur am Trigger."""
+    return szenario(blueprint, zeit(tag, 23, 58), trigger_id="maintenance")
+
+
+def tou_minimum(blueprint, tag):
+    """Wartungslauf ohne Entlade-Planung, die Register stehen noch auf einem Nachtwert."""
+    ov = {}
+    for i in range(1, 7):
+        ov.update(_z(blueprint, f"wr_tou_{i}", "55"))
+    return szenario(blueprint, zeit(tag, 23, 58), trigger_id="maintenance",
+                    prognose_tage_kwh=None, zustands_overrides=ov)
+
+
+def sonnenuntergang(blueprint, tag):
+    """Der Sonnenuntergangs-Lauf parkt den Verlust-Kandidaten des Tages."""
+    return szenario(blueprint, zeit(tag, 21, 30), trigger_id="sunset_check")
+
+
+def verlust_verbuchen(blueprint, tag):
+    """Nachts unter die Untergrenze gefallen, ein Kandidat vom Vorabend steht offen."""
+    return szenario(blueprint, zeit(tag, 3, 0), soc=19.0,
+                    zustands_overrides=_z(blueprint, "helper_offener_verlust", "2.0"))
+
+
+def float_boost_start(blueprint, tag):
+    """Der Zellausgleich hat den Nachlauf-Timer gestartet."""
+    return szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_start")
+
+
+def float_boost_ende(blueprint, tag):
+    """Derselbe Timer ist abgelaufen."""
+    return szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_ende")
+
+
+def peak_shaving_ende(blueprint, tag):
+    """Der Kappungs-Timer ist von active auf idle gefallen."""
+    return szenario(blueprint, zeit(tag, 12, 0), trigger_id="peak_shaving_ende")
+
+
+def peak_timer_aufziehen(blueprint, tag):
+    """
+    Einspeisung ueber der Kappungs-Schwelle. Das Warmwasser ist warm, sonst
+    nimmt der Waermepumpen-Boost den Ueberschuss und der Timer bliebe aus.
+    """
+    ov = {**_z(blueprint, "grid_export_sensor", "-8000"), **_z(blueprint, "wp_temp_sensor", "58.0")}
+    return szenario(blueprint, zeit(tag, 12, 0), soc=84.0, zustands_overrides=ov)
+
+
+def peak_timer_loeschen(blueprint, tag):
+    """Die Anlaufsperre der Waermepumpe greift, der Kappungs-Timer wird abgebrochen."""
+    return szenario(blueprint, zeit(tag, 12, 0), soc=84.0, input_overrides={"wp_boost_aktiv": True},
+                    zustands_overrides=_z(blueprint, "helper_timer_wp_anlauf", "active"))
+
+
+def wp_boost_start(blueprint, tag):
+    """Einspeisung ueber der Boost-Schwelle, das Warmwasser liegt unter dem Startwert."""
+    ov = {**_z(blueprint, "grid_export_sensor", "-8000"), **_z(blueprint, "wp_temp_sensor", "30.0")}
+    return szenario(blueprint, zeit(tag, 12, 0), zustands_overrides=ov)
+
+
+def wp_boost_ende(blueprint, tag):
+    """Der Laufzeit-Timer ist abgelaufen, das Ziel steht noch auf dem PV-Wert."""
+    return szenario(blueprint, zeit(tag, 12, 0), trigger_id="wp_boost_ende",
+                    zustands_overrides=_z(blueprint, "wp_water_heater", "heat", attributes={"temperature": 59}))
+
+
+def wp_boost_watchdog(blueprint, tag):
+    """Kein Timer laeuft mehr, das Ziel steht trotzdem noch auf dem PV-Wert."""
+    return szenario(blueprint, zeit(tag, 12, 0),
+                    zustands_overrides=_z(blueprint, "wp_water_heater", "heat", attributes={"temperature": 59}))
+
+
+WEITERE_ZWEIGE = [
+    ("100%-Tage-Tracking", mitternacht),
+    ("Tageshelfer zurücksetzen", mitternacht),
+    ("Tägliches Aufräumen", mitternacht),
+    ("ToU auf Minimum", tou_minimum),
+    ("Aktionen bei Sonnenuntergang", sonnenuntergang),
+    ("Speicherverlust verbuchen", verlust_verbuchen),
+    ("FLOAT-BOOST STARTEN", float_boost_start),
+    ("FLOAT-BOOST BEENDEN", float_boost_ende),
+    ("PEAK-SHAVING ENDE", peak_shaving_ende),
+    ("Zieht den Peak-Shaving Timer auf", peak_timer_aufziehen),
+    ("Löscht den Peak-Shaving Timer", peak_timer_loeschen),
+    ("WP-BOOST: START", wp_boost_start),
+    ("WP-BOOST: ENDE", wp_boost_ende),
+    ("WP-BOOST: WATCHDOG", wp_boost_watchdog),
+]
+
+ALLE_ZWEIGE = ZWEIGE + WEITERE_ZWEIGE
+
+
 @pytest.mark.parametrize("prio, bauen", ZWEIGE, ids=[p for p, _ in ZWEIGE])
 def test_zweig_gewinnt_in_seinem_szenario(blueprint, tag, prio, bauen):
     assert zweig(bauen(blueprint, tag), blueprint) == prio
 
 
+@pytest.mark.parametrize("alias_anfang, bauen", WEITERE_ZWEIGE, ids=[a for a, _ in WEITERE_ZWEIGE])
+def test_zweig_der_weiteren_gruppen_gewinnt(blueprint, tag, alias_anfang, bauen):
+    """Nur die Auswahl: drei dieser Zweige spielt der Ausfuehrer nicht (repeat:/delay:)."""
+    z = gewinner(bauen(blueprint, tag), gruppe(blueprint, alias_anfang))
+    assert z is not None and z["alias"].startswith(alias_anfang), \
+        f"getroffen: {z['alias'] if z else None}"
+
+
 def test_jeder_zweig_ist_abgedeckt(blueprint, tag):
     """
-    Die Szenarien oben erreichen JEDEN Zweig der Kaskade. Kommt einer dazu oder
-    wird einer so eng, dass ihn kein Szenario mehr trifft, wird dieser Test rot.
+    Die Szenarien oben erreichen JEDEN Zweig JEDER choose:-Gruppe auf oberster
+    Ebene. Kommt einer dazu - auch in einer neuen Gruppe - oder wird einer so
+    eng, dass ihn kein Szenario mehr trifft, wird dieser Test rot.
     """
-    erwartet = {z["alias"].split(":")[0] for z in kaskade(blueprint)}
-    getroffen = {zweig(bauen(blueprint, tag), blueprint) for _, bauen in ZWEIGE}
+    erwartet = {z["alias"] for g in gruppen(blueprint) for z in g}
+    getroffen = set()
+    for alias_anfang, bauen in ALLE_ZWEIGE:
+        z = gewinner(bauen(blueprint, tag), gruppe(blueprint, alias_anfang))
+        if z is not None:
+            getroffen.add(z["alias"])
     assert getroffen == erwartet, f"nicht abgedeckt: {sorted(erwartet - getroffen)}"
 
 
@@ -141,13 +260,13 @@ def test_float_boost_hebt_die_erhaltungsspannung_und_nimmt_sie_zurueck(blueprint
     Float-Register zur Verfuegung, schreibt keiner von beiden.
     """
     zweige = gruppe(blueprint, "FLOAT-BOOST STARTEN")
-    h = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_start")
+    h = float_boost_start(blueprint, tag)
     ctx = h.auswerten()
     alias, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=zweige)
     assert alias.startswith("FLOAT-BOOST STARTEN")
     assert schreibt(aktionen) == [ctx["var_float_balancing"]]
 
-    h2 = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, trigger_id="float_boost_ende")
+    h2 = float_boost_ende(blueprint, tag)
     ctx2 = h2.auswerten()
     alias2, aktionen2 = zweig_und_aktionen(h2, blueprint, ctx2, zweige=zweige)
     assert alias2.startswith("FLOAT-BOOST BEENDEN")
@@ -209,8 +328,8 @@ def test_dynamisches_laden_schreibt_den_gedrosselten_sollwert(blueprint, tag):
 # --------------------------------------------------------------------------
 def test_waermepumpe_hat_vorrang_vor_der_kappung(blueprint, tag):
     """Laufen beide Timer, haelt die Anlaufsperre - sonst nimmt die Kappung der Pumpe den Ueberschuss."""
-    ov = {**_z("helper_timer_peak", "active"), **_z("helper_timer_wp_anlauf", "active"),
-          **_z("grid_export_sensor", "-8000")}
+    ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "helper_timer_wp_anlauf", "active"),
+          **_z(blueprint, "grid_export_sensor", "-8000")}
     h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, input_overrides={"wp_boost_aktiv": True},
                  zustands_overrides=ov)
     assert zweig(h, blueprint) == "PRIO 3"
@@ -218,8 +337,8 @@ def test_waermepumpe_hat_vorrang_vor_der_kappung(blueprint, tag):
 
 def test_volle_batterie_laesst_kappung_und_nachladen_aus(blueprint, tag):
     """Ueber 99 % nimmt die Batterie nichts mehr auf: kein Zweig greift."""
-    ov = {**_z("helper_timer_peak", "active"), **_z("helper_batterie_heute_voll", "on"),
-          **_z("grid_export_sensor", "-8000")}
+    ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "helper_batterie_heute_voll", "on"),
+          **_z(blueprint, "grid_export_sensor", "-8000")}
     assert zweig(szenario(blueprint, zeit(tag, 12, 0), soc=99.5, zustands_overrides=ov), blueprint) is None
 
 
@@ -241,9 +360,73 @@ def test_fall_b_legt_das_dynamische_laden_still(blueprint, tag):
 def test_kappung_wartet_den_mindestabstand_ab(blueprint, tag):
     """Wurde das Register gerade geschrieben, gewinnt Prio 5, schreibt aber nicht."""
     eid = fake_entity("wr_max_charge_current", "number")
-    ov = {**_z("helper_timer_peak", "active"), **_z("grid_export_sensor", "-8000"),
+    ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000"),
           eid: Zustand(eid, "200.0", last_changed=zeit(tag, 12, 0) - dt.timedelta(seconds=10))}
     h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, zustands_overrides=ov)
     alias, aktionen = zweig_und_aktionen(h, blueprint)
     assert alias.startswith("PRIO 5")
     assert schreibt(aktionen) == []
+
+
+# --------------------------------------------------------------------------
+# Was die Zweige neben der Kaskade schreiben. Nicht fuer jeden - nur dort, wo
+# der Schreibvorgang selbst eine Aussage traegt.
+# --------------------------------------------------------------------------
+def test_sonnenuntergang_parkt_den_verlust_kandidaten(blueprint, tag):
+    """
+    Der Kandidat ist die ungenutzte Ladekapazitaet beim hoechsten Tages-SOC,
+    gedeckelt auf die Einspeisung des Tages: Mehr als eingespeist wurde, kann
+    nicht verschenkt worden sein. Ob daraus ein Verlust wird, entscheidet erst
+    die Nacht.
+    """
+    h = sonnenuntergang(blueprint, tag)
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Aktionen bei Sonnenuntergang"))
+    freie_kapazitaet = ctx["batterie_kapazitaet"] * (1 - float(h.states(ctx["var_max_soc_heute"])) / 100)
+    export = float(h.states(ctx["var_grid_export_kwh"]))
+    assert freie_kapazitaet > export, "sonst prueft das Szenario den Deckel nicht"
+    assert schreibt(aktionen, "input_number.set_value", ctx["var_offener_verlust"]) == [pytest.approx(export)]
+
+
+def test_tou_minimum_setzt_alle_sechs_register(blueprint, tag):
+    """Ohne Entlade-Planung gehoeren die Register niemandem - sie fallen auf den Mindestwert zurueck."""
+    h = tou_minimum(blueprint, tag)
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "ToU auf Minimum"))
+    ziele = [e for s, e, _ in aktionen if s == "number.set_value"]
+    assert schreibt(aktionen) == [ctx["default_tou_soc"]]
+    assert ziele == [[standard_inputs(blueprint)[f"wr_tou_{i}"] for i in range(1, 7)]]
+
+
+def test_peak_shaving_ende_trennt_abbruch_vom_ablauf(blueprint, tag):
+    """
+    Der Trigger feuert bei abgelaufenem UND bei abgebrochenem Timer. Beide
+    Faelle bekommen ihre eigene Meldung; auf den Wortlaut kommt es nicht an,
+    nur darauf, dass keiner der beiden Wege tot ist.
+    """
+    zweige = gruppe(blueprint, "PEAK-SHAVING ENDE")
+    ohne_sperre = peak_shaving_ende(blueprint, tag)
+    mit_sperre = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, trigger_id="peak_shaving_ende",
+                          input_overrides={"wp_boost_aktiv": True},
+                          zustands_overrides=_z(blueprint, "helper_timer_wp_anlauf", "active"))
+    assert ohne_sperre.auswerten()["wp_sperre_aktiv"] is False
+    assert mit_sperre.auswerten()["wp_sperre_aktiv"] is True
+    _, abgelaufen = zweig_und_aktionen(ohne_sperre, blueprint, zweige=zweige)
+    _, abgebrochen = zweig_und_aktionen(mit_sperre, blueprint, zweige=zweige)
+    assert len(schreibt(abgelaufen, "logbook.log")) == 1
+    assert schreibt(abgebrochen, "logbook.log") != schreibt(abgelaufen, "logbook.log")
+
+
+def test_wp_boost_start_hebt_das_ziel_und_startet_beide_timer(blueprint, tag):
+    """
+    Zieltemperatur, Hysterese und beide Timer gehoeren zusammen: Ohne den
+    Anlauf-Timer nimmt Prio 3 der anlaufenden Pumpe den Ueberschuss nicht frei,
+    ohne den Laufzeit-Timer faellt das Ziel nie auf den Normalwert zurueck.
+    """
+    h = wp_boost_start(blueprint, tag)
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "WP-BOOST: START"))
+    assert schreibt(aktionen, "water_heater.set_temperature") == [ctx["var_wp_ziel_temp_pv"]]
+    assert schreibt(aktionen, "number.set_value", ctx["var_wp_ziel_number"]) == [ctx["var_wp_ziel_temp_pv"]]
+    assert schreibt(aktionen, "number.set_value", ctx["var_wp_hysterese_number"]) == [ctx["var_wp_hysterese_pv"]]
+    assert [e for s, e, _ in aktionen if s == "timer.start"] == [ctx["var_timer_wp_anlauf"], ctx["var_timer_wp_boost"]]
