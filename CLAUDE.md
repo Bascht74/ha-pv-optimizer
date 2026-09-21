@@ -51,6 +51,12 @@ against this list.
 - **MINOR** — new function, or an intentional behavior change that's backward-compatible (existing instances keep working unconfigured).
 - **MAJOR** — breaking change: new required inputs, removed/renamed inputs, or a behavior change that would misbehave on existing instances without reconfiguration.
 
+The level follows what an instance has to do, not what the diff looks like. A removed or renamed
+input is MAJOR when existing instances have to reassign something because of it, or when behavior
+changes for them — otherwise MINOR. A field no calculation ever read is the clear case: Home
+Assistant ignores a key the blueprint no longer declares, so nothing is left to do and nothing
+behaves differently.
+
 Bumping rules:
 - The working file always carries the *next*, not-yet-published version number.
 - Within one unpublished cycle, do not increment the same level twice (e.g. stay at 3.0.1, don't go to 3.0.2 for a second patch in the same cycle) — instead raise the *scheme level* if the accumulated changes warrant it (patch → minor if a real behavior change joins the cycle; → major on a breaking change).
