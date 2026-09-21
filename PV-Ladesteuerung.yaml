@@ -647,12 +647,6 @@ blueprint:
             und die Eskalation auf vollen Ladestrom („Fall B") greift eher. Bei wechselhaftem Wetter erhöhen.
           default: 1.0
           selector: {"number": {"min": 0.0, "max": 5.0, "step": 0.1}}
-        fallback_max_soc:
-          name: "Eskalation: SOC-Obergrenze (%)"
-          description: >-
-            Ladezustand in Prozent, oberhalb dessen nicht mehr eskaliert wird. Ist die Batterie schon so voll, bringt Vollgas-Laden nichts mehr — der Blueprint bleibt dann bei der feinen Regelung.
-          default: 95
-          selector: {"number": {"min": 50, "max": 100, "step": 1, "unit_of_measurement": "%"}}
         fallback_min_kwh:
           name: "Eskalation: Bagatellgrenze (kWh)"
           description: >-
@@ -1343,6 +1337,7 @@ action:
           hb_helfer: !input helper_halten_bezug
           hb_planung: !input solcast_morgen_sensor
           hb_soc: !input battery_soc_sensor
+          hb_schatten: !input schatten_soc_sensor
           hb_tou_min: !input default_tou_soc
           hb_tou_1: !input wr_tou_1
           hb_tou_2: !input wr_tou_2
@@ -1358,15 +1353,28 @@ action:
           hb_tou_ist: >
             {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
+          # soc_versatz wie in der Hauptkette nachgebildet, weil die hier nicht
+          # laeuft: Das Register steht in der Skala des Wechselrichters, der
+          # eingestellte Mindestwert in der des Schatten-BMS. Ohne die
+          # Umrechnung gilt eine Untergrenze eine 5-%-Stufe ueber dem Minimum
+          # als "haelt nicht", und die zurueckgehaltene Energie faellt um den
+          # Versatz zu klein aus.
+          hb_versatz: >
+            {% set r = (states(hb_schatten) | float(-1)) if hb_schatten != '' else -1 %}
+            {% set dey = states(hb_soc) | float(0) %}
+            {{ (dey - r) if (r > 0 and r <= 100 and ((dey - r) | abs) <= versatz_max) else 0 }}
+          hb_tou_soll: "{{ hb_tou_ist - hb_versatz }}"
           # Halte-Lage unabhaengig vom Helfer, damit die Aufzeichnung sie auch
-          # ohne zugewiesenen Helfer festhaelt.
+          # ohne zugewiesenen Helfer festhaelt. Der Ladestand wird gegen das rohe
+          # Register geprueft - beide in der Skala des Wechselrichters, der die
+          # Grenze durchsetzt.
           hb_lage: >
             {{ hb_planung != '' and not is_state('sun.sun', 'above_horizon')
-               and hb_tou_ist > (hb_tou_min | float(20))
+               and hb_tou_soll > (hb_tou_min | float(20))
                and (states(hb_soc) | float(100)) <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
           hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
-          hb_zurueck_kwh: "{{ [(hb_tou_ist - (hb_tou_min | float(20))) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
+          hb_zurueck_kwh: "{{ [(hb_tou_soll - (hb_tou_min | float(20))) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
       # AUFZEICHNUNG DES SLOTS: Der Halbstunden-Verbrauch ist nur hier lesbar,
       # der Halbstundenlauf sieht den Zaehler schon genullt. Mit dieser Zeile
       # laesst sich die Bezugssumme im Halten ohne den Helfer nachrechnen.
@@ -1382,7 +1390,8 @@ action:
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
                     'slot_kwh': last_half_hour_kwh | round(3), 'wallbox_kwh': wallbox_slot_kwh | round(3), 'notstrom_kwh': np_kwh, 'halten': hb_lage,
                     'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': states(hb_soc) | float(0),
-                    'tou_ist': hb_tou_ist, 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
+                    'soc_versatz': hb_versatz | round(2),
+                    'tou_ist': hb_tou_soll | round(2), 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
                     'halten_bezug_kwh': (states(hb_helfer) | float(0)) if hb_helfer != '' else none} | to_json }}
       - if:
           - condition: template
@@ -1480,7 +1489,6 @@ action:
 
       var_ladevorlauf: !input ladevorlauf_stunden
       faktor_fallback: !input faktor_fallback
-      fallback_max_soc: !input fallback_max_soc
       fallback_min_kwh: !input fallback_min_kwh
       min_reststunden: !input min_reststunden
       max_ampere: !input max_ampere
@@ -3002,7 +3010,6 @@ action:
               'ladevorlauf_stunden': aufz_ladevorlauf_stunden,
               'faktor_fallback': faktor_fallback,
               'puffer_kwh': puffer_kwh,
-              'fallback_max_soc': fallback_max_soc,
               'fallback_min_kwh': fallback_min_kwh,
               'min_reststunden': aufz_min_reststunden,
               'optimizer_url': var_optimizer_url,

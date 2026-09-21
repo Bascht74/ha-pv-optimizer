@@ -36,6 +36,10 @@ Removed
 PATCH  Bugfix, Umsortierung, Log-Text, Kommentare — kein Verhaltenswechsel
 MINOR  neue Funktion oder gewollte Verhaltensänderung, bestehende Instanzen laufen unkonfiguriert weiter
 MAJOR  neue Pflichtfelder, entfernte/umbenannte Inputs, oder Verhalten, das ohne Neukonfiguration danebengreift
+
+Entfernte oder umbenannte Inputs sind MAJOR, wenn bestehende Instanzen deswegen etwas nachziehen
+müssen oder sich Verhalten ändert — sonst MINOR. Maßgeblich ist der Aufwand für die Instanz, nicht
+die Art des Diffs.
 -->
 
 ## Beleg
