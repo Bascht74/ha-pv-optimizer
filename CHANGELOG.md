@@ -10,7 +10,7 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
-## [V6.14.0] - 2026-09-20
+## [V6.14.0] - 2026-09-21
 
 ### Changed
 - The mandatory startup-phase timer is no longer named after the heat pump. Whatever starts it,
