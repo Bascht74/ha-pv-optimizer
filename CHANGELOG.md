@@ -10,6 +10,30 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.15.0] - 2026-09-21
+
+### Added
+- Hot water can be made from a sunny day, not only from a feed-in peak. The boost used to start
+  only once the grid export passed its threshold — surplus the battery was already refusing — so
+  on an ordinary autumn day nothing released it and the heat pump took the tank from the battery
+  in the evening or before sunrise. A second gate now reads the day's forecast instead: if one
+  charge's worth of energy can be taken out and the escalation still does not trigger, the
+  surplus is there whether or not it happens to be flowing to the grid at that moment. It carries
+  a tank-temperature limit of its own, because curtailed energy at the feed-in gate is free while
+  forecast surplus is not; whichever of the two limits is the tighter one governs. It stands down
+  during the morning blockade, whose own charging start is figured with a buffer that knows
+  nothing of a hot-water draw, and while the battery does not hold a charge's worth of energy
+  above its discharge floor, so a cloud gap is carried by the battery rather than by the grid. The new
+  field "Strom je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the
+  blueprint behaves as before and no configured instance changes.
+
+### Changed
+- The hot-water boost no longer tops up an almost full tank. Its hysteresis is the distance below
+  the boost target at which a boost may begin, and the default moves to a wider gap. Every charge
+  costs the same pipe and start-up heat whatever its size, so a short top-up returns far less per
+  kilowatt-hour than a full one, and a narrow gap lets a run of sunny days produce one small charge
+  a day. Only the default and the help text change; an instance that sets the field keeps its value.
+
 ## [V6.14.0] - 2026-09-21
 
 ### Changed
@@ -883,7 +907,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...HEAD
+[V6.15.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...V6.15.0
 [V6.14.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.14.0
 [V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
 [V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
