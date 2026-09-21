@@ -27,7 +27,7 @@ Logbuch-Meldung trägt ihn.
   je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the blueprint
   behaves as before and no configured instance changes.
 
-## [V6.14.0] - 2026-09-20
+## [V6.14.0] - 2026-09-21
 
 ### Changed
 - The mandatory startup-phase timer is no longer named after the heat pump. Whatever starts it,
