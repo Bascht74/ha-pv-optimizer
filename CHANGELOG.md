@@ -57,6 +57,14 @@ Logbuch-Meldung trägt ihn.
   as reachable and the whole system ran on the emergency charge current for good, reporting
   the BMS as offline — a state that is indistinguishable from a real outage in the logbook,
   while the cause was an unassigned field the startup check could have named.
+- The second-opinion request to the optimizer now describes the battery the inverter actually
+  enforces. Its minimum state of charge is the ToU register in force instead of the general
+  minimum, so the schedules it returns can be compared with the blueprint's own plan; a request
+  built on a floor the inverter does not release yields schedules that could never have been
+  run. The floor is capped at the current state of charge, because a floor above the starting
+  point leaves no feasible schedule at all. Charge and discharge efficiency now come from the
+  same constants the blueprint's own planning uses, so both sides of the comparison assume the
+  same battery. Diagnosis only; no register is written on that run.
 
 ## [V6.13.0] - 2026-09-20
 
