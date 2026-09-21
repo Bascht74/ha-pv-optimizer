@@ -18,14 +18,14 @@ Logbuch-Meldung trägt ihn.
   on an ordinary autumn day nothing released it and the heat pump took the tank from the battery
   in the evening or before sunrise. A second gate now reads the day's forecast instead: if one
   charge's worth of energy can be taken out and the escalation still does not trigger, the
-  surplus is there whether or not it happens to be flowing to the grid at that moment. It asks
-  for a colder tank than the feed-in gate does, because curtailed energy is free while forecast
-  surplus is not and a tank that is still warm gives back more through standing loss than the
-  shift wins. It stands down during the morning blockade, whose own charging start is figured
-  with a buffer that knows nothing of a hot-water draw, and while the battery cannot cover the
-  draw above its discharge floor, so a run can never turn into grid import. The new field "Strom
-  je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the blueprint
-  behaves as before and no configured instance changes.
+  surplus is there whether or not it happens to be flowing to the grid at that moment. It carries
+  a tank-temperature limit of its own, because curtailed energy at the feed-in gate is free while
+  forecast surplus is not; whichever of the two limits is the tighter one governs. It stands down
+  during the morning blockade, whose own charging start is figured with a buffer that knows
+  nothing of a hot-water draw, and while the battery does not hold a charge's worth of energy
+  above its discharge floor, so a cloud gap is carried by the battery rather than by the grid. The new
+  field "Strom je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the
+  blueprint behaves as before and no configured instance changes.
 
 ### Changed
 - The hot-water boost no longer tops up an almost full tank. Its hysteresis is the distance below

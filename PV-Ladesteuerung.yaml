@@ -2432,14 +2432,13 @@ action:
           true
         {% endif %}
 
-      # TAG-TOR (ww_energie_kwh > 0): Warmwasser auch ohne Einspeisespitze. Statt der
-      # Momentaneinspeisung entscheidet die Tagesbilanz: Nimmt man eine Ladung aus der
-      # Prognose heraus und greift die Eskalation immer noch nicht, ist sie uebrig.
-      # Das schliesst die beiden Energie-Arme von Fall B aus, nicht den Zeit-Arm -
-      # not fall_b_aktiv steht deshalb hier und ist nicht redundant.
-      # Temperaturgrenze enger als beim Einspeise-Tor: abgeregelte Energie ist geschenkt.
-      # potential_export haelt den Boost aus dem Schatten; die Aufnahme der Waermepumpe
-      # steht bewusst nicht darin, die puffert die Batterie (gedeckelt in ww_tag_start).
+      # TAG-TOR (ww_energie_kwh > 0): Warmwasser auch ohne Einspeisespitze. Nimmt man
+      # eine Ladung aus der Prognose heraus und greift die Eskalation immer noch nicht,
+      # ist sie uebrig. Das schliesst die beiden Energie-Arme von Fall B aus, nicht den
+      # Zeit-Arm - not fall_b_aktiv ist deshalb nicht redundant. Eigene Temperaturgrenze,
+      # weil abgeregelte Energie geschenkt ist und Prognose-Ueberschuss nicht; wirksam
+      # ist die engere der beiden. potential_export haelt den Boost aus dem Schatten, die
+      # Aufnahme der Waermepumpe puffert die Batterie (gedeckelt in ww_tag_start).
       ww_tag_frei: >
         {{ var_wp_boost_aktiv and ww_energie_kwh > 0 and is_day
            and ww_temp_gueltig
@@ -3838,7 +3837,7 @@ action:
               message: >
                 {{ log_kopf }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Warmwasser-Ziel von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben (Hysterese {{ var_wp_hysterese_pv }} °C). Anlauf- und Laufzeit-Timer gestartet,
                 {%- if real_export > schwelle_wp_boost %} da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C).
-                {%- else %} da Tagesüberschuss {{ ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(1) }} kWh > Strom je Ladung {{ ww_energie_kwh | round(1) }} kWh, also auch ohne Einspeisespitze genug übrig (Tagesüberschuss = Restüberschuss {{ brutto_ueberschuss_rest | round(1) }} kWh − Puffer {{ puffer_fall_b | round(1) }} kWh − Bedarf der Batterie {{ benoetigt_kwh | round(1) }} kWh × Faktor {{ faktor_fallback }}; Warmwasser {{ ww_temp | round(1) }} °C < Zieltemperatur normal {{ var_wp_ziel_temp_normal | round(0) }} °C; Batteriepuffer über der Entlade-Untergrenze {{ ww_puffer_kwh | round(1) }} kWh).
+                {%- else %} da Tagesüberschuss {{ ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(1) }} kWh ≥ Strom je Ladung {{ ww_energie_kwh | round(1) }} kWh, also auch ohne Einspeisespitze genug übrig (Tagesüberschuss = Restüberschuss {{ brutto_ueberschuss_rest | round(1) }} kWh − Puffer {{ puffer_fall_b | round(1) }} kWh − Bedarf der Batterie {{ benoetigt_kwh | round(1) }} kWh × Faktor {{ faktor_fallback }}; Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ [(var_wp_ziel_temp_pv - var_wp_hysterese_pv), var_wp_ziel_temp_normal] | min | round(1) }} °C; Batteriepuffer über der Entlade-Untergrenze {{ ww_puffer_kwh | round(1) }} kWh).
                 {%- endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
               entity_id: !input helper_logbook_dummy
 
