@@ -10,6 +10,19 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.15.1] - 2026-09-21
+
+### Fixed
+- The top-balancing start message no longer claims to calibrate anything. It still announced an
+  internal state of charge set to 100 %, a step that went out with the shadow BMS, so the line
+  reported an action the blueprint has not taken since and contradicted the charge level it
+  printed in the same breath.
+- Every message that prints the state of charge now says which one it is. Where a shadow BMS is
+  assigned, the blueprint plans on its reading while the inverter shows its own, and two messages
+  already named the source; the three that did not left the reader to guess which scale a number
+  belonged to. They now name the shadow BMS and give the inverter's value beside it, and stay as
+  they were where no shadow BMS is assigned.
+
 ## [V6.15.0] - 2026-09-21
 
 ### Added
@@ -911,7 +924,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...HEAD
+[V6.15.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...V6.15.1
 [V6.15.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...V6.15.0
 [V6.14.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.14.0
 [V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
