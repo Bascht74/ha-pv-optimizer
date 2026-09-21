@@ -30,12 +30,12 @@ Logbuch-Meldung trägt ihn.
   brings both values into the conversion of the discharge-floor registers.
 
 ### Removed
-- The escalation ceiling on the state of charge is gone. The field promised that no escalation to
-  full charge current happens above the state of charge it named, and no branch ever read it — the
-  condition it described did not exist. Building it would have been dead code: the escalation
-  already requires more energy to be missing than its own triviality threshold allows near a full
-  battery, so a ceiling would never have decided anything. An instance that still assigns the key
-  is unaffected, the blueprint simply ignores it.
+- The escalation ceiling on the state of charge is gone as an input. No branch ever read the
+  field, while the escalation itself stops at a fixed 97 % that sits in its own entry condition —
+  so the field could only ever have lowered a ceiling that already held, and it never did. The
+  fixed limit stays; what goes is the field that made it look adjustable per site. An instance
+  that still assigns the key is unaffected, the blueprint simply ignores it, and from this release
+  the configuration block of the diagnostic recording carries one key fewer than older lines.
 
 ### Fixed
 - The helper template no longer gives the half-hourly meters a cycle of their own. The blueprint
@@ -43,12 +43,20 @@ Logbuch-Meldung trägt ihn.
   same second as the run that reads the last slot before midnight, which the run loses because
   it queues behind the five-minute run. That slot then learned a zero and the running mean
   pulled it down further every night. A site that already copied the template has to drop the
-  three `cycle:` lines itself; re-importing the blueprint does not touch its package.
+  `cycle:` line from each half-hourly meter it actually runs — house consumption, each wallbox,
+  the backup circuit; the counters evaluated per period keep theirs. Re-importing the blueprint
+  does not touch its package.
 - The helper template no longer pins the charge mode to `normal` at startup. The mode is
   memory, not decoration: the morning blockade holds through the end of its window only by
   recognising itself, and the top-up branch leaves case B alone for the same reason. With
   `initial:` set, Home Assistant skips restoring the value, so every restart quietly dropped
-  that memory. Without it a freshly created helper still starts on the first option.
+  that memory. Without it a freshly created helper still starts on the first option. Here too a
+  site that already copied the template has to delete the `initial:` line itself.
+- The helper template gives every timer `restore: true`. Without it a timer that was running when
+  Home Assistant restarts comes back idle, and the branch it guards then reads a state that no
+  longer exists: the cell-balancing cooldown, the peak-shaving hold, the startup phase and the
+  boost runtime each end silently mid-run. A site that already copied the template has to add the
+  four lines itself.
 - The help text of the startup-phase timer and of its duration field said the battery drops to
   0 A while the timer runs. It does not: that branch holds the charge current at the value it
   last had and leaves lowering to the branches that own it, which the branch comment has said
@@ -72,7 +80,9 @@ Logbuch-Meldung trägt ihn.
   run. The floor is capped at the current state of charge, because a floor above the starting
   point leaves no feasible schedule at all. Charge and discharge efficiency now come from the
   same constants the blueprint's own planning uses, so both sides of the comparison assume the
-  same battery. Diagnosis only; no register is written on that run.
+  same battery. Diagnosis only; no register is written on that run. In the recording, `s_min_pct`
+  of the request now reports the floor that was actually sent instead of the general minimum, so
+  those lines cannot be compared across this release.
 - The run that learns the consumption profiles now converts the discharge floor into the same
   scale as the rest of the blueprint. It keeps its own copies of the hold detection because the
   variable chain does not run there, and those copies compared the raw register against a minimum
