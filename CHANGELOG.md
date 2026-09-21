@@ -10,7 +10,7 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
-## [V6.14.0] - 2026-09-21
+## [V6.15.0] - 2026-09-21
 
 ### Added
 - Hot water can be made from a sunny day, not only from a feed-in peak. The boost used to start
@@ -26,6 +26,8 @@ Logbuch-Meldung trägt ihn.
   draw above its discharge floor, so a run can never turn into grid import. The new field "Strom
   je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the blueprint
   behaves as before and no configured instance changes.
+
+## [V6.14.0] - 2026-09-20
 
 ### Changed
 - The mandatory startup-phase timer is no longer named after the heat pump. Whatever starts it,
@@ -898,7 +900,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...HEAD
+[V6.15.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...V6.15.0
 [V6.14.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.14.0
 [V6.13.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.3...V6.13.0
 [V6.12.3]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.12.2...V6.12.3
