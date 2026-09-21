@@ -29,6 +29,14 @@ Logbuch-Meldung trägt ihn.
   the inverter's own reading alone drives the whole cascade, and only a filled-in shadow field
   brings both values into the conversion of the discharge-floor registers.
 
+### Removed
+- The escalation ceiling on the state of charge is gone. The field promised that no escalation to
+  full charge current happens above the state of charge it named, and no branch ever read it — the
+  condition it described did not exist. Building it would have been dead code: the escalation
+  already requires more energy to be missing than its own triviality threshold allows near a full
+  battery, so a ceiling would never have decided anything. An instance that still assigns the key
+  is unaffected, the blueprint simply ignores it.
+
 ### Fixed
 - The helper template no longer gives the half-hourly meters a cycle of their own. The blueprint
   zeroes them every thirty minutes anyway, and a daily cycle put the meter's own reset on the
@@ -65,6 +73,15 @@ Logbuch-Meldung trägt ihn.
   point leaves no feasible schedule at all. Charge and discharge efficiency now come from the
   same constants the blueprint's own planning uses, so both sides of the comparison assume the
   same battery. Diagnosis only; no register is written on that run.
+- The run that learns the consumption profiles now converts the discharge floor into the same
+  scale as the rest of the blueprint. It keeps its own copies of the hold detection because the
+  variable chain does not run there, and those copies compared the raw register against a minimum
+  that is meant in the second BMS's scale. Where the two scales differ, a floor one step above the
+  minimum counted as "not holding", so the night side of the loss accounting stayed silently at
+  zero, and the cap on the accumulated night import came out short by the offset. Without a second
+  sensor the offset is zero and nothing changes. The slot line of the recording now carries the
+  offset itself, and its floor and held-back energy are in the same scale as the run line, where
+  they previously were not despite the same names.
 
 ## [V6.13.0] - 2026-09-20
 
