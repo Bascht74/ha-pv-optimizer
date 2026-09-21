@@ -16,16 +16,20 @@ Logbuch-Meldung trägt ihn.
 - Hot water can be made from a sunny day, not only from a feed-in peak. The boost used to start
   only once the grid export passed its threshold — surplus the battery was already refusing — so
   on an ordinary autumn day nothing released it and the heat pump took the tank from the battery
-  in the evening or before sunrise. A second gate now reads the day's forecast instead: if one
-  charge's worth of energy can be taken out and the escalation still does not trigger, the
-  surplus is there whether or not it happens to be flowing to the grid at that moment. It carries
-  a tank-temperature limit of its own, because curtailed energy at the feed-in gate is free while
-  forecast surplus is not; whichever of the two limits is the tighter one governs. It stands down
-  during the morning blockade, whose own charging start is figured with a buffer that knows
-  nothing of a hot-water draw, and while the battery does not hold a charge's worth of energy
-  above its discharge floor, so a cloud gap is carried by the battery rather than by the grid. The new
-  field "Strom je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the
-  blueprint behaves as before and no configured instance changes.
+  in the evening or before sunrise. A second gate now reads the day's forecast: if one charge's
+  worth of energy can be taken out of the remaining surplus and the escalation still does not
+  trigger, the energy is there even when none of it is reaching the grid. The moment has to carry
+  the draw as well, so the gate also asks that sun minus house consumption exceeds the power the
+  charging plan wants — read before the battery takes its share, because a charging battery holds
+  the grid export at zero — and that enough surplus hours are left for the boost's run time and
+  its charging lead. It carries a tank-temperature limit of its own, because curtailed energy at
+  the feed-in gate is free while forecast surplus is not; whichever of the two limits is the
+  tighter one governs. It stands down during the morning blockade, whose own charging start is
+  figured with a buffer that knows nothing of a hot-water draw, and while the battery does not
+  hold a charge plus the general buffer above its discharge floor, so a cloud gap is carried by
+  the battery rather than by the grid. The new field "Strom je Warmwasser-Ladung (kWh)" carries
+  the amount and is the switch: left at 0, the blueprint behaves as before and no configured
+  instance changes.
 
 ### Changed
 - The hot-water boost no longer tops up an almost full tank. Its hysteresis is the distance below
