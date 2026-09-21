@@ -464,8 +464,8 @@ blueprint:
         wp_hysterese_pv:
           name: "Hysterese bei PV-Überschuss (K)"
           description: >-
-            Einschalt-Hysterese in Kelvin für den Boost-Betrieb. Klein wählen (z. B. 5 K), damit die Wärmepumpe früh anspringt und den Überschuss auch wirklich nutzt.
-          default: 5
+            Abstand unter die Zieltemperatur, ab dem der PV-Boost startet. Nicht zu klein wählen: jede Ladung kostet gleich viel Leitungs- und Anlaufwärme, egal wie kurz sie ist — ein Nachschlag auf einen fast vollen Speicher lohnt nicht. Zu groß, und der Boost findet keinen Sonnentag mehr.
+          default: 10
           selector: {"number": {"min": 1, "max": 20, "step": 1}}
         wp_ziel_temp_normal:
           name: "Zieltemperatur normal (°C)"

@@ -27,6 +27,13 @@ Logbuch-Meldung trägt ihn.
   je Warmwasser-Ladung (kWh)" carries the amount and is the switch: left at 0, the blueprint
   behaves as before and no configured instance changes.
 
+### Changed
+- The hot-water boost no longer tops up an almost full tank. Its hysteresis is the distance below
+  the boost target at which a boost may begin, and the default moves to a wider gap. Every charge
+  costs the same pipe and start-up heat whatever its size, so a short top-up returns far less per
+  kilowatt-hour than a full one, and a narrow gap lets a run of sunny days produce one small charge
+  a day. Only the default and the help text change; an instance that sets the field keeps its value.
+
 ## [V6.14.0] - 2026-09-21
 
 ### Changed

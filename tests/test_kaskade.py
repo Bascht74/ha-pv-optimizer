@@ -391,6 +391,25 @@ def test_wp_boost_start_hebt_das_ziel_und_startet_beide_timer(blueprint, tag):
     assert [e for s, e, _ in aktionen if s == "timer.start"] == [ctx["var_timer_wp_anlauf"], ctx["var_timer_wp_boost"]]
 
 
+def test_boost_laesst_den_fast_vollen_speicher_in_ruhe(blueprint, tag):
+    """
+    Die Boost-Hysterese entscheidet, wie leer der Speicher sein muss, bevor sich
+    eine Ladung lohnt: Leitung und Anlauf kosten je Ladung dasselbe, ein kurzer
+    Nachschlag traegt diesen Festbetrag also auf wenige Kelvin. Mit der Vorgabe
+    bleibt ein Speicher knapp unter der alten 54-Grad-Marke unangetastet.
+    """
+    ov = _z(blueprint, "grid_export_sensor", "-8000")
+    startwert = (standard_inputs(blueprint)["wp_ziel_temp_pv"]
+                 - standard_inputs(blueprint)["wp_hysterese_pv"])
+    assert startwert <= 49, "Vorgabe der Boost-Hysterese ist wieder zu eng geworden"
+    voll = szenario(blueprint, zeit(tag, 12, 0),
+                    zustands_overrides={**ov, **_z(blueprint, "wp_temp_sensor", "53.0")})
+    leer = szenario(blueprint, zeit(tag, 12, 0),
+                    zustands_overrides={**ov, **_z(blueprint, "wp_temp_sensor", str(startwert - 1))})
+    assert voll.auswerten()["wp_boost_startet_gleich"] is False
+    assert leer.auswerten()["wp_boost_startet_gleich"] is True
+
+
 # --------------------------------------------------------------------------
 # Das Tag-Tor: Warmwasser ohne Einspeisespitze
 # --------------------------------------------------------------------------
