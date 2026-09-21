@@ -479,6 +479,12 @@ blueprint:
             Einschalt-Hysterese in Kelvin für den Normalbetrieb. Größer wählen als beim Boost (z. B. 10 K) — so taktet die Wärmepumpe seltener und läuft dafür länger am Stück, was sie schont.
           default: 10
           selector: {"number": {"min": 1, "max": 20, "step": 1}}
+        ww_energie_kwh:
+          name: "Strom je Warmwasser-Ladung (kWh)"
+          description: >-
+            Schaltet den Tag-Boost ein: Warmwasser auch ohne Einspeisespitze, sobald die Prognose diese Menge zusätzlich hergibt. Am besten an einer beobachteten Ladung ablesen. 0 lässt es beim bisherigen Verhalten.
+          default: 0
+          selector: {"number": {"min": 0, "max": 10, "step": 0.1, "unit_of_measurement": "kWh"}}
         duration_wp_anlauf:
           name: "Dauer der Anlaufphase"
           description: >-
@@ -1469,6 +1475,7 @@ action:
       var_eingriff_dauer: !input eingriff_dauer_sensor
       var_timer_wp_anlauf: !input helper_timer_wp_anlauf
       var_dauer_wp_anlauf: !input duration_wp_anlauf
+      var_dauer_wp_laufzeit: !input duration_wp_laufzeit
       var_timer_wp_boost: !input helper_timer_wp_boost
       var_timer_peak: !input helper_timer_peak
       var_timer_cooldown: !input helper_timer_cooldown
@@ -1511,6 +1518,7 @@ action:
       var_wp_hysterese_pv: !input wp_hysterese_pv
       var_wp_ziel_temp_normal: !input wp_ziel_temp_normal
       var_wp_hysterese_normal: !input wp_hysterese_normal
+      var_ww_energie: !input ww_energie_kwh
       puffer_kwh: !input puffer_kwh
       var_zeit_blockade: !input zeit_blockade_ende
 
@@ -1646,6 +1654,13 @@ action:
       is_day: "{{ is_state('sun.sun', 'above_horizon') }}"
       schwelle_peak_shaving: "{{ var_schwelle_peak_shaving | float(6500) }}"
       schwelle_wp_boost: "{{ var_schwelle_wp_boost | float(6400) }}"
+      # 0 = Tag-Boost aus. Die Zahl traegt zwei Rollen: Energie einer Ladung und -
+      # weil eine Ladung rund eine Stunde dauert - zugleich die Leistung, die der
+      # Verdichter dabei zieht.
+      ww_energie_kwh: "{{ var_ww_energie | float(0) }}"
+      wp_laufzeit_h: >
+        {% set p = (var_dauer_wp_laufzeit | string).split(':') %}
+        {{ ((p[0] | int(0)) + (p[1] | int(0)) / 60) if p | length >= 2 else 2.0 }}
 
       pack_capacity_ah: "{{ pack_capacity_ah | float(314) }}"
       crate_2_deg: "{{ crate_2_deg | float(0.00) }}"
@@ -2418,9 +2433,27 @@ action:
           true
         {% endif %}
 
+      # TAG-TOR (ww_energie_kwh > 0): Warmwasser auch ohne Einspeisespitze.
+      # Das Einspeise-Tor verlangt Ueberschuss, den die Batterie nicht mehr aufnimmt;
+      # im Herbst kommt der kaum zustande. Hier entscheidet die Tagesbilanz: Nimmt man
+      # eine Ladung aus der Prognose heraus und greift die Eskalation immer noch nicht,
+      # ist sie uebrig - eine Ueberschneidung mit Fall B ist damit ausgeschlossen.
+      # Temperaturgrenze enger als beim Einspeise-Tor: abgeregelte Energie ist
+      # geschenkt, ein noch warmer Speicher verliert mehr, als die Verschiebung bringt.
+      # potential_export (PV minus Hausverbrauch) haelt den Boost aus dem Morgenschatten.
+      ww_tag_frei: >
+        {{ var_wp_boost_aktiv and ww_energie_kwh > 0 and is_day
+           and ww_temp_gueltig
+           and ww_temp < var_wp_ziel_temp_normal
+           and not fall_b_aktiv
+           and (brutto_ueberschuss_rest - puffer_fall_b)
+               - benoetigt_kwh * faktor_fallback >= ww_energie_kwh
+           and potential_export > (amp_basis_13 * nominale_spannung + ww_energie_kwh * 1000)
+           and verf_stunden >= (wp_laufzeit_h | float(2)) + (var_ladevorlauf | float(1.0)) }}
+
       wp_boost_startet_gleich: >
         {{ var_wp_boost_aktiv
-           and real_export > schwelle_wp_boost
+           and (real_export > schwelle_wp_boost or ww_tag_frei)
            and ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv)
            and states(var_timer_wp_anlauf) != 'active'
            and states(var_timer_wp_boost) != 'active'
@@ -2866,6 +2899,23 @@ action:
       # geladen und diese Einspeisung aufgenommen.
       halten_verlust_kwh: "{{ [halten_kwh, export_heute_kwh] | min }}"
 
+  # Der zweite Teil des Tag-Tors. Er steht hier, weil er die Entlade-Untergrenze
+  # und die Morgen-Blockade braucht, und beide entstehen erst oberhalb.
+  # blockade_aktiv liest seinerseits wp_boost_startet_gleich - deshalb traegt nur
+  # der vordere Teil (ww_tag_frei) dort hinein, dieser nicht.
+  - variables:
+      # Reicht die PV im Moment doch nicht, puffert die Batterie die Waermepumpe -
+      # aber nur bis zur Entlade-Untergrenze, darunter entlaedt der Wechselrichter
+      # nicht und es entstuende Netzbezug. Nach einem schwachen Vortag sitzt der
+      # Ladestand nahe am Register, der Puffer fehlt, und der Boost wartet.
+      ww_puffer_kwh: "{{ [(aktueller_soc - tou_ist) / 100 * batterie_kapazitaet, 0] | max }}"
+      # Waehrend der Morgen-Blockade nicht: Ihr Ladebeginn ist mit eigenem Puffer
+      # gerechnet, der von einer Warmwasser-Entnahme nichts weiss. Ueber die
+      # Einspeisung startet der Boost auch dort weiter, das ist dann Peak-Shaving.
+      ww_tag_start: >
+        {{ ww_tag_frei and not blockade_aktiv
+           and ww_puffer_kwh >= ww_energie_kwh + (puffer_kwh | float(1.0)) }}
+
   # DIAGNOSE-AUFZEICHNUNG (optional): existiert notify.pv_optimizer_aufzeichnung
   # (File-Integration, Einrichtung im Package-Kopf), bekommt sie je Halbstunde
   # eine Zeile (art: lauf) und am Ende jedes Laufs, der ein Register geaendert
@@ -2987,6 +3037,7 @@ action:
               'wp_hysterese_pv': var_wp_hysterese_pv,
               'wp_ziel_temp_normal': var_wp_ziel_temp_normal,
               'wp_hysterese_normal': var_wp_hysterese_normal,
+              'ww_energie_kwh': var_ww_energie,
               'duration_wp_anlauf': var_dauer_wp_anlauf,
               'duration_wp_laufzeit': aufz_duration_wp_laufzeit,
               'top_balancing_voltage': top_balancing_voltage,
@@ -3034,6 +3085,8 @@ action:
               'freie_kwh': freie_kwh | round(2), 'defizit_kwh': defizit_kwh | round(2), 'benoetigt_kwh': benoetigt_kwh | round(2),
               'verf_stunden': verf_stunden, 'brutto_ueberschuss_rest': brutto_ueberschuss_rest | round(2),
               'fall_b_aktiv': fall_b_aktiv, 'sim_ampere_min': sim_ampere_min, 'amp_basis_13': amp_basis_13 | round(1), 'target_p5': target_p5,
+              'ww_tag_frei': ww_tag_frei, 'ww_tag_start': ww_tag_start, 'ww_puffer_kwh': ww_puffer_kwh | round(2),
+              'ww_tag_rest_kwh': ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(2),
               'plan_voll_um': plan_voll_um, 'fallb_voll_um': fallb_voll_um, 'untergrenze_um': untergrenze_um, 'untergrenze_wirksam': untergrenze_wirksam,
               'voll_real_um': ((states[var_batterie_heute_voll].last_changed | as_local).strftime('%H:%M')
                                if (is_state(var_batterie_heute_voll, 'on') and states[var_batterie_heute_voll] is not none and states[var_batterie_heute_voll].last_changed is not none) else ''),
@@ -3732,8 +3785,10 @@ action:
           # 5-Minuten-Takt bedient beide.
           - condition: template
             value_template: "{{ trigger.id != 'export_peak_schwelle' }}"
+          # Zwei Tore, eines reicht: die Einspeisespitze wie bisher, oder die
+          # Tagesbilanz. Letzteres nur mit gesetztem ww_energie_kwh, siehe ww_tag_frei.
           - condition: template
-            value_template: "{{ real_export > schwelle_wp_boost }}"
+            value_template: "{{ real_export > schwelle_wp_boost or ww_tag_start }}"
           - condition: template
             value_template: "{{ ww_temp < (var_wp_ziel_temp_pv - var_wp_hysterese_pv) }}"
           - condition: template
@@ -3782,7 +3837,10 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ log_kopf }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Warmwasser-Ziel von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben (Hysterese {{ var_wp_hysterese_pv }} °C). Anlauf- und Laufzeit-Timer gestartet (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C, Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W).{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
+                {{ log_kopf }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Warmwasser-Ziel von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben (Hysterese {{ var_wp_hysterese_pv }} °C). Anlauf- und Laufzeit-Timer gestartet,
+                {%- if real_export > schwelle_wp_boost %} da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C).
+                {%- else %} da Tagesüberschuss {{ ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(1) }} kWh > Strom je Ladung {{ ww_energie_kwh | round(1) }} kWh, also auch ohne Einspeisespitze genug übrig (Tagesüberschuss = Restüberschuss {{ brutto_ueberschuss_rest | round(1) }} kWh − Puffer {{ puffer_fall_b | round(1) }} kWh − Bedarf der Batterie {{ benoetigt_kwh | round(1) }} kWh × Faktor {{ faktor_fallback }}; Warmwasser {{ ww_temp | round(1) }} °C < Zieltemperatur normal {{ var_wp_ziel_temp_normal | round(0) }} °C; Batteriepuffer über der Entlade-Untergrenze {{ ww_puffer_kwh | round(1) }} kWh).
+                {%- endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
               entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: ENDE (Reset auf Normalwerte)"

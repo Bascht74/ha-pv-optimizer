@@ -389,3 +389,92 @@ def test_wp_boost_start_hebt_das_ziel_und_startet_beide_timer(blueprint, tag):
     assert schreibt(aktionen, "number.set_value", ctx["var_wp_ziel_number"]) == [ctx["var_wp_ziel_temp_pv"]]
     assert schreibt(aktionen, "number.set_value", ctx["var_wp_hysterese_number"]) == [ctx["var_wp_hysterese_pv"]]
     assert [e for s, e, _ in aktionen if s == "timer.start"] == [ctx["var_timer_wp_anlauf"], ctx["var_timer_wp_boost"]]
+
+
+# --------------------------------------------------------------------------
+# Das Tag-Tor: Warmwasser ohne Einspeisespitze
+# --------------------------------------------------------------------------
+def _tag_tor_szenario(blueprint, tag, **kw):
+    """
+    Die Batterie laedt mit 8 kW, ins Netz gehen 200 W: Das Einspeise-Tor bleibt
+    damit zu, der Ueberschuss ist trotzdem da. Warmwasser unter der normalen
+    Zieltemperatur, Ladestand hoch genug, dass die Prognose den Rest hergibt.
+    """
+    ov = {**_z(blueprint, "grid_export_sensor", "-200"),
+          **_z(blueprint, "battery_power_sensor", "-8000"),
+          **_z(blueprint, "wp_temp_sensor", "45.0")}
+    ov.update(kw.pop("zustands_overrides", {}))
+    inputs = {"ww_energie_kwh": 2.0}
+    inputs.update(kw.pop("input_overrides", {}))
+    return szenario(blueprint, zeit(tag, 12, 0), soc=88.0,
+                    input_overrides=inputs, zustands_overrides=ov, **kw)
+
+
+def _boost_startet(h, blueprint) -> bool:
+    z = gewinner(h, gruppe(blueprint, "WP-BOOST: START"))
+    return z is not None and z["alias"].startswith("WP-BOOST: START")
+
+
+def test_tag_tor_startet_den_boost_ohne_einspeisespitze(blueprint, tag):
+    """
+    Der Kern der Sache: Ohne Einspeisung ueber der Schwelle loeste frueher nichts
+    aus, obwohl der Tag den Ueberschuss hergibt. Das Tag-Tor entscheidet
+    stattdessen an der Tagesbilanz.
+    """
+    h = _tag_tor_szenario(blueprint, tag)
+    ctx = h.auswerten()
+    assert ctx["real_export"] < ctx["schwelle_wp_boost"], "Szenario prueft sonst das alte Tor"
+    assert ctx["ww_tag_frei"] and ctx["ww_tag_start"]
+    assert _boost_startet(h, blueprint)
+
+
+def test_tag_tor_hebt_ziel_und_startet_beide_timer(blueprint, tag):
+    """Der Tag-Pfad schreibt dasselbe wie der Einspeise-Pfad - nur das Tor ist anders."""
+    h = _tag_tor_szenario(blueprint, tag)
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "WP-BOOST: START"))
+    assert schreibt(aktionen, "water_heater.set_temperature") == [ctx["var_wp_ziel_temp_pv"]]
+    assert schreibt(aktionen, "number.set_value", ctx["var_wp_hysterese_number"]) == [ctx["var_wp_hysterese_pv"]]
+    assert [e for s, e, _ in aktionen if s == "timer.start"] == [ctx["var_timer_wp_anlauf"], ctx["var_timer_wp_boost"]]
+
+
+def test_ohne_energiefeld_bleibt_das_tag_tor_zu(blueprint, tag):
+    """
+    ww_energie_kwh ist der Schalter. Auf 0 - dem Standard - verhaelt sich der
+    Blueprint wie vorher, bestehende Instanzen aendern ihr Verhalten also nicht.
+    """
+    h = _tag_tor_szenario(blueprint, tag, input_overrides={"ww_energie_kwh": 0})
+    assert not h.auswerten()["ww_tag_frei"]
+    assert not _boost_startet(h, blueprint)
+
+
+def test_tag_tor_wartet_ohne_batteriepuffer(blueprint, tag):
+    """
+    Reicht die PV im Moment nicht, muss die Batterie einspringen koennen - und
+    das kann sie nur oberhalb der Entlade-Untergrenze. Register dicht unter dem
+    Ladestand: der Puffer fehlt, der Boost wartet.
+    """
+    eng = {}
+    for i in range(1, 7):
+        eng.update(_z(blueprint, f"wr_tou_{i}", "86"))
+    h = _tag_tor_szenario(blueprint, tag, zustands_overrides=eng)
+    ctx = h.auswerten()
+    assert ctx["ww_tag_frei"], "nur der Puffer soll fehlen, nicht die Tagesbilanz"
+    assert ctx["ww_puffer_kwh"] < ctx["ww_energie_kwh"] + ctx["puffer_kwh"]
+    assert not ctx["ww_tag_start"]
+    assert not _boost_startet(h, blueprint)
+
+
+def test_tag_tor_schweigt_waehrend_der_morgen_blockade(blueprint, tag):
+    """
+    Die Blockade haelt Platz fuer die erwartete Spitze frei und rechnet ihren
+    Ladebeginn mit eigenem Puffer. Ueber die Einspeisung startet der Boost dort
+    weiter, ueber die Tagesbilanz nicht.
+    """
+    h = szenario(blueprint, zeit(tag, 7, 0), soc=84.0,
+                 input_overrides={"schwelle_peak_shaving": 3500, "ww_energie_kwh": 2.0},
+                 zustands_overrides=_z(blueprint, "wp_temp_sensor", "45.0"))
+    ctx = h.auswerten()
+    assert ctx["blockade_aktiv"]
+    assert not ctx["ww_tag_start"]
+    assert not _boost_startet(h, blueprint)
