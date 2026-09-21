@@ -18,10 +18,10 @@ Logbuch-Meldung trägt ihn.
   reported an action the blueprint has not taken since and contradicted the charge level it
   printed in the same breath.
 - Every message that prints the state of charge now says which one it is. Where a shadow BMS is
-  assigned, the blueprint plans on its reading while the inverter shows its own, and two messages
-  already named the source; the three that did not left the reader to guess which scale a number
-  belonged to. They now name the shadow BMS and give the inverter's value beside it, and stay as
-  they were where no shadow BMS is assigned.
+  assigned, the blueprint plans on its reading while the inverter shows its own, so a bare
+  percentage left the reader to guess which of the two scales a number belonged to. Those messages
+  now name the shadow BMS and give the inverter's value beside it, and stay as they were where no
+  shadow BMS is assigned.
 
 ## [V6.15.0] - 2026-09-21
 

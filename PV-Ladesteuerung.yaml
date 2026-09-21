@@ -3604,7 +3604,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ log_kopf }} Speicherverlust realisiert: {{ kandidat_kwh | round(2) }} kWh gestern verschenkte Ladekapazität auf den Verlust-Zähler addiert (Erhöhung von {{ current_tracker_val | round(2) }} kWh auf {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh), da die Batterie über Nacht bis auf {{ aktueller_soc | round(0) }} % gefallen ist. Der Verlust hätte womöglich nachts ans Haus gehen können und musste stattdessen ggf. aus dem Netz bezogen werden.
+                {{ log_kopf }} Speicherverlust realisiert: {{ kandidat_kwh | round(2) }} kWh gestern verschenkte Ladekapazität auf den Verlust-Zähler addiert (Erhöhung von {{ current_tracker_val | round(2) }} kWh auf {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh), da die Batterie über Nacht bis auf {{ aktueller_soc | round(0) }} % gefallen ist{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}. Der Verlust hätte womöglich nachts ans Haus gehen können und musste stattdessen ggf. aus dem Netz bezogen werden.
               entity_id: !input helper_logbook_dummy
           - action: input_number.set_value
             target:
@@ -4006,7 +4006,7 @@ action:
             {{ log_kopf }} Abregelung: Wechselrichter regelt ab, Überschuss über der Schwelle geht verloren,
             da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W
             und die Batterie voll ist. (Über der Schwelle {{ (real_export - schwelle_peak_shaving) | round(0) }} W;
-            Ladestand (SOC) {{ aktueller_soc | round(0) }} %, freie Ladekapazität {{ freie_kwh | round(1) }} kWh
+            Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}, freie Ladekapazität {{ freie_kwh | round(1) }} kWh
             von {{ batterie_kapazitaet | round(1) }} kWh)
           entity_id: !input helper_logbook_dummy
 
