@@ -448,6 +448,24 @@ def test_ohne_energiefeld_bleibt_das_tag_tor_zu(blueprint, tag):
     assert not _boost_startet(h, blueprint)
 
 
+def test_tag_tor_laesst_die_batterie_puffern(blueprint, tag):
+    """
+    Die Leistungsseite verlangt nur, dass die PV den Ladeplan der Batterie deckt -
+    die Aufnahme der Waermepumpe nicht. Faellt die PV kurz ab, puffert die Batterie
+    sie; begrenzt wird das vom Abstand zur Entlade-Untergrenze, nicht hier.
+    Eine gemessene Ladung zieht mehr, als an einem Herbsttag je momentan uebrig ist.
+    """
+    knapp = {**_z(blueprint, "grid_export_sensor", "0"),
+             **_z(blueprint, "battery_power_sensor", "-2000")}
+    h = _tag_tor_szenario(blueprint, tag, zustands_overrides=knapp)
+    ctx = h.auswerten()
+    basis = ctx["amp_basis_13"] * ctx["nominale_spannung"]
+    assert basis < ctx["potential_export"] < basis + ctx["ww_energie_kwh"] * 1000, \
+        "Szenario liegt sonst nicht in dem Band, das die beiden Lesarten trennt"
+    assert ctx["ww_tag_frei"] and ctx["ww_tag_start"]
+    assert _boost_startet(h, blueprint)
+
+
 def test_tag_tor_wartet_ohne_batteriepuffer(blueprint, tag):
     """
     Reicht die PV im Moment nicht, muss die Batterie einspringen koennen - und

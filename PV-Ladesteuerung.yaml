@@ -1654,9 +1654,8 @@ action:
       is_day: "{{ is_state('sun.sun', 'above_horizon') }}"
       schwelle_peak_shaving: "{{ var_schwelle_peak_shaving | float(6500) }}"
       schwelle_wp_boost: "{{ var_schwelle_wp_boost | float(6400) }}"
-      # 0 = Tag-Boost aus. Die Zahl traegt zwei Rollen: Energie einer Ladung und -
-      # weil eine Ladung rund eine Stunde dauert - zugleich die Leistung, die der
-      # Verdichter dabei zieht.
+      # 0 = Tag-Boost aus. Elektrische Energie einer Ladung; sie geht nur als Energie
+      # in die Rechnung ein, nie als Leistung.
       ww_energie_kwh: "{{ var_ww_energie | float(0) }}"
       wp_laufzeit_h: >
         {% set p = (var_dauer_wp_laufzeit | string).split(':') %}
@@ -2433,14 +2432,14 @@ action:
           true
         {% endif %}
 
-      # TAG-TOR (ww_energie_kwh > 0): Warmwasser auch ohne Einspeisespitze.
-      # Das Einspeise-Tor verlangt Ueberschuss, den die Batterie nicht mehr aufnimmt;
-      # im Herbst kommt der kaum zustande. Hier entscheidet die Tagesbilanz: Nimmt man
-      # eine Ladung aus der Prognose heraus und greift die Eskalation immer noch nicht,
-      # ist sie uebrig - eine Ueberschneidung mit Fall B ist damit ausgeschlossen.
-      # Temperaturgrenze enger als beim Einspeise-Tor: abgeregelte Energie ist
-      # geschenkt, ein noch warmer Speicher verliert mehr, als die Verschiebung bringt.
-      # potential_export (PV minus Hausverbrauch) haelt den Boost aus dem Morgenschatten.
+      # TAG-TOR (ww_energie_kwh > 0): Warmwasser auch ohne Einspeisespitze. Statt der
+      # Momentaneinspeisung entscheidet die Tagesbilanz: Nimmt man eine Ladung aus der
+      # Prognose heraus und greift die Eskalation immer noch nicht, ist sie uebrig.
+      # Das schliesst die beiden Energie-Arme von Fall B aus, nicht den Zeit-Arm -
+      # not fall_b_aktiv steht deshalb hier und ist nicht redundant.
+      # Temperaturgrenze enger als beim Einspeise-Tor: abgeregelte Energie ist geschenkt.
+      # potential_export haelt den Boost aus dem Schatten; die Aufnahme der Waermepumpe
+      # steht bewusst nicht darin, die puffert die Batterie (gedeckelt in ww_tag_start).
       ww_tag_frei: >
         {{ var_wp_boost_aktiv and ww_energie_kwh > 0 and is_day
            and ww_temp_gueltig
@@ -2448,7 +2447,7 @@ action:
            and not fall_b_aktiv
            and (brutto_ueberschuss_rest - puffer_fall_b)
                - benoetigt_kwh * faktor_fallback >= ww_energie_kwh
-           and potential_export > (amp_basis_13 * nominale_spannung + ww_energie_kwh * 1000)
+           and potential_export > amp_basis_13 * nominale_spannung
            and verf_stunden >= (wp_laufzeit_h | float(2)) + (var_ladevorlauf | float(1.0)) }}
 
       wp_boost_startet_gleich: >
