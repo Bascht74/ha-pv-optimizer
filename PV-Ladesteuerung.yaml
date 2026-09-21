@@ -3100,13 +3100,18 @@ action:
                 {% endfor %}
                 {% set kap = batterie_kapazitaet * 1000 %}
                 {% set pmax = (max_ampere | float(140)) * (nominale_spannung | float(51.2)) %}
+                {# Untergrenze: das wirksame Register, nicht der generelle Mindestwert -
+                   sonst plant der Optimizer ueber einem Arbeitsbereich, den der
+                   Wechselrichter nicht freigibt. Auf den Ladestand geklemmt, weil eine
+                   Grenze oberhalb des Startwerts kein loesbares Problem mehr ergibt. #}
+                {% set s_min_pct = [[tou_ist, default_tou_soc | float(20)] | max, aktueller_soc] | min %}
                 {{ {'strategy': {'charging_strategy': opt_strategie},
-                    'batteries': [{'s_capacity': kap, 's_min': (default_tou_soc | float(20)) / 100 * kap, 's_max': kap,
+                    'batteries': [{'s_capacity': kap, 's_min': s_min_pct / 100 * kap, 's_max': kap,
                                    's_initial': aktueller_soc / 100 * kap, 'c_min': 0, 'c_max': pmax, 'd_max': pmax,
                                    'p_a': opt_preis_bezug / 1000, 'charge_from_grid': false, 'discharge_to_grid': false}],
                     'time_series': {'dt': [1800] * 48, 'gt': ns.gt, 'ft': ns.ft,
                                     'p_N': [opt_preis_bezug / 1000] * 48, 'p_E': [opt_preis_einspeisung / 1000] * 48},
-                    'eta_c': 0.95, 'eta_d': 0.95} | to_json }}
+                    'eta_c': lade_wirkungsgrad, 'eta_d': entlade_wirkungsgrad} | to_json }}
           - action: rest_command.pv_optimizer_zweitmeinung
             continue_on_error: true
             data:
@@ -3166,7 +3171,8 @@ action:
                                   'untergrenze_um': untergrenze_um, 'ev_bedarf_kwh': ev_bedarf_kwh},
                     'anfrage': {'start': opt_start, 'strategie': opt_strategie, 'preis_bezug': opt_preis_bezug,
                                 'preis_einspeisung': opt_preis_einspeisung, 'pv_kwh': ((a.time_series.ft | sum) / 1000) | round(2),
-                                'verbrauch_kwh': ((a.time_series.gt | sum) / 1000) | round(2), 's_min_pct': default_tou_soc,
+                                'verbrauch_kwh': ((a.time_series.gt | sum) / 1000) | round(2),
+                                's_min_pct': (a.batteries[0].s_min * 100 / a.batteries[0].s_capacity) | round(1),
                                 'p50_anteil_heute': blend_p50_anteil | float(0.5), 'pv_abschlag': pv_abschlag | round(3)} } | to_json }}
       - stop: "Zweitmeinung des Optimizers aufgezeichnet; dieser Lauf steuert nichts."
 
