@@ -259,6 +259,18 @@ def test_kompressor_sperre_stoppt_das_laden(blueprint, tag):
     assert schreibt(aktionen) == [0]
 
 
+def test_ohne_kompressorsensor_sperrt_prio_4_nicht(blueprint, tag):
+    """
+    Unbelegtes Feld: wp_kompressor_aktiv traegt sein 'false' als Text, nicht als
+    Boolean. Home Assistant vergleicht den gerenderten Text mit 'true' und geht
+    weiter; wer die Bedingung mit Python-Wahrheit misst, laesst Prio 4 jeden Lauf
+    gewinnen und sieht keinen Zweig darunter mehr.
+    """
+    h = szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_kompressor_sensor": ""})
+    assert h.auswerten()["wp_kompressor_aktiv"] == "false"
+    assert zweig(h, blueprint) == "PRIO 7"
+
+
 def test_blockade_stoppt_das_laden(blueprint, tag):
     _, aktionen = zweig_und_aktionen(p6_morgen_blockade(blueprint, tag), blueprint)
     assert schreibt(aktionen) == [0]
