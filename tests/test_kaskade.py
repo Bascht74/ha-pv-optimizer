@@ -20,7 +20,8 @@ import pytest
 
 from conftest import fake_entity, standard_inputs, szenario, zeit
 from ha_jinja import Zustand
-from kaskade import gewinner, gruppe, gruppen, schreibt, zweig, zweig_und_aktionen
+from kaskade import (gewinner, gruppe, gruppen, schreibt, template_wahr, zweig,
+                     zweig_und_aktionen)
 
 
 def _z(blueprint: dict, name: str, wert: str, **kw) -> dict:
@@ -181,6 +182,21 @@ WEITERE_ZWEIGE = [
 ALLE_ZWEIGE = ZWEIGE + WEITERE_ZWEIGE
 
 
+@pytest.mark.parametrize("quelle, erwartet", [
+    ("{{ true }}", True), ("{{ false }}", False),
+    ("{{ 'true' }}", True), ("{{ 'True' }}", True),
+    ("{{ 'false' }}", False), ("{{ 'an' }}", False), ("{{ 1 }}", False), ("{{ '' }}", False),
+])
+def test_template_bedingung_wie_home_assistant(blueprint, tag, quelle, erwartet):
+    """
+    Home Assistant haelt eine Template-Bedingung nur fuer erfuellt, wenn ihr
+    gerenderter TEXT 'true' ist. Python-Wahrheit ist der falsche Massstab: Jeder
+    nicht leere Text waere damit ein Ja - auch das Wort 'false'.
+    """
+    h = szenario(blueprint, zeit(tag, 12, 0))
+    assert template_wahr(h, quelle, h.auswerten()) is erwartet
+
+
 @pytest.mark.parametrize("prio, bauen", ZWEIGE, ids=[p for p, _ in ZWEIGE])
 def test_zweig_gewinnt_in_seinem_szenario(blueprint, tag, prio, bauen):
     assert zweig(bauen(blueprint, tag), blueprint) == prio
@@ -261,13 +277,12 @@ def test_kompressor_sperre_stoppt_das_laden(blueprint, tag):
 
 def test_ohne_kompressorsensor_sperrt_prio_4_nicht(blueprint, tag):
     """
-    Unbelegtes Feld: wp_kompressor_aktiv traegt sein 'false' als Text, nicht als
-    Boolean. Home Assistant vergleicht den gerenderten Text mit 'true' und geht
-    weiter; wer die Bedingung mit Python-Wahrheit misst, laesst Prio 4 jeden Lauf
-    gewinnen und sieht keinen Zweig darunter mehr.
+    Unbelegtes Feld - der Regelfall an beiden Standorten. Traegt die Groesse ihr
+    Nein als Text statt als Boolean, gewinnt Prio 4 jeden Lauf und kein Zweig
+    darunter ist mehr zu sehen.
     """
     h = szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_kompressor_sensor": ""})
-    assert h.auswerten()["wp_kompressor_aktiv"] == "false"
+    assert h.auswerten()["wp_kompressor_aktiv"] is False
     assert zweig(h, blueprint) == "PRIO 7"
 
 

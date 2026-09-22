@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.15.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.15.2]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -870,7 +870,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.15.1]"
+      bp_version: "[V6.15.2]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -2488,14 +2488,18 @@ action:
         {{ wp_laufzeit_aktiv and
            (verf_stunden - (var_ladevorlauf | float(1.0))) > (wp_restlaufzeit_h | float(0)) }}
 
+      # Die Ja/Nein-Zweige liefern {{ true }}/{{ false }}, nicht das blosse Wort:
+      # Home Assistant macht aus 'True' einen Wahrheitswert, aus 'true' bleibt
+      # Text. Als ganze Bedingung geht beides gut, in einem zusammengesetzten
+      # Ausdruck waere das Wort 'false' still ein Ja.
       wp_kompressor_aktiv: >
         {% if var_wp_kompressor != '' and states[var_wp_kompressor] is defined and states[var_wp_kompressor] is not none %}
           {% set state = states[var_wp_kompressor].state %}
           {% set last_changed = states[var_wp_kompressor].last_changed %}
-          {% if state == 'on' %}true
+          {% if state == 'on' %}{{ true }}
           {% elif state == 'off' and last_changed is not none %}{{ (now() - last_changed).total_seconds() < (11 * 60) }}
-          {% else %}false{% endif %}
-        {% else %}false{% endif %}
+          {% else %}{{ false }}{% endif %}
+        {% else %}{{ false }}{% endif %}
 
       # ================================================================
       # DYNAMISCHES BLOCKADE-ENDE T (Brutto-Rechnung, konsistent mit Prio 7)

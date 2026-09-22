@@ -10,6 +10,16 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.15.2] - 2026-09-22
+
+### Fixed
+- The heat-pump compressor lock now carries its yes and no as a real boolean instead of the
+  bare words `true` and `false`. Home Assistant turns `True` into a boolean but leaves `true`
+  as text, and a non-empty text counts as yes in any expression that combines it with
+  something else. Read as a whole condition — the only place it is read today — both forms
+  decide the same way, so nothing behaves differently; the trap is gone for whoever reads the
+  value next.
+
 ## [V6.15.1] - 2026-09-21
 
 ### Fixed
@@ -924,7 +934,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.2...HEAD
+[V6.15.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...V6.15.2
 [V6.15.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...V6.15.1
 [V6.15.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...V6.15.0
 [V6.14.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.14.0
