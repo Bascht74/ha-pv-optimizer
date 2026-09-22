@@ -55,13 +55,29 @@ def kaskade(blueprint: dict) -> list[dict]:
     return gruppe(blueprint, "PRIO 0")
 
 
+def template_wahr(h: Harness, quelle: str, ctx: dict) -> bool:
+    """
+    Eine Template-Bedingung wie Home Assistant auswerten.
+
+    HA vergleicht den gerenderten TEXT mit 'true' - alles andere ist falsch, auch
+    ein nicht leerer String. Python-Wahrheit ist hier der falsche Massstab: Eine
+    Variable, die ihren Wert als Text traegt ('false' aus einem {% else %}-Zweig),
+    ist fuer bool() wahr und fuer HA falsch. Booleans kommen aus der Kette schon
+    als bool und bleiben, wie sie sind.
+    """
+    wert = h.render(quelle, ctx)
+    if isinstance(wert, bool):
+        return wert
+    return str(wert).strip().lower() == "true"
+
+
 def bedingung(h: Harness, c: Any, ctx: dict) -> bool:
     """Eine einzelne Bedingung auswerten."""
     if isinstance(c, str):  # Kurzform: nacktes Template
-        return bool(h.render(c, ctx))
+        return template_wahr(h, c, ctx)
     art = c.get("condition")
     if art == "template":
-        return bool(h.render(c["value_template"], ctx))
+        return template_wahr(h, c["value_template"], ctx)
     if art == "trigger":
         ids = c["id"] if isinstance(c["id"], list) else [c["id"]]
         return h.trigger_id in [str(i) for i in ids]
