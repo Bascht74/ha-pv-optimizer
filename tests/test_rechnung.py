@@ -161,6 +161,76 @@ def test_fall_b_bei_grossem_ueberschuss_inaktiv(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
+# Ladestrom in Zahlen, von Hand gerechnet: Kapazitaet 2 x 314 Ah x 51,2 V =
+# 32,1536 kWh, P10 = P50, Haus 0,2 kWh je Halbstunde. 1 A laedt in einer
+# Halbstunde 51,2 V x 0,5 h = 0,0256 kWh.
+# --------------------------------------------------------------------------
+def _pv_wie_prognose():
+    """Nachmittags kuerzte der Realitaets-Check sonst auf die Haelfte, weil der Tageszaehler 0 meldet."""
+    from conftest import fake_entity
+    e = fake_entity("pv_erzeugung_heute_sensor", "sensor")
+    return {e: Zustand(e, "999")}
+
+
+@pytest.mark.parametrize("soc, offset, erwartet, grund", [
+    (80.0, 2.0, 20, "6,43 kWh / (14 x 0,0256) = 17,9 -> 18 A bis 1 h vor Fensterende, + 2 A"),
+    (80.0, 2.3, 21, "18 A + 2,3 A = 20,3 A, aufgerundet"),
+    (96.0, 2.0, 7, "1,29 kWh / 0,3584 = 3,6 -> 4 A, + 2 A = 6 A, angehoben auf min_ampere 7 A"),
+])
+def test_zielstrom_fertigladen_mit_regelabweichung(blueprint, tag, soc, offset, erwartet, grund):
+    """
+    10:00, 4 kW von 08:00 bis 18:00: 16 Halbstunden mit je 1,8 kWh Ueberschuss, die PV
+    limitiert nirgends. Gesucht ist der kleinste Strom, der den Bedarf bis 1 h vor
+    Fensterende deckt; das volle Fenster ergaebe bei 80 % nur 15,7 -> 16 A, es gilt
+    der groessere. Die Regelabweichung kommt obendrauf, weil der Wechselrichter unter
+    dem Sollwert einregelt; aufgerundet aus demselben Grund.
+    """
+    from conftest import prognose
+    fc = prognose(tag, [4.0] * 20, dt.time(8, 0), p10_anteil=1.0)
+    ctx = szenario(blueprint, zeit(tag, 10, 0), soc=soc, forecast=fc, profil_kwh=0.2,
+                   input_overrides={"regler_offset_a": offset}).auswerten(bis="target_p5")
+    assert ctx["target_p5"] == erwartet, grund
+
+
+def test_zielstrom_wo_die_pv_limitiert(blueprint, tag):
+    """
+    Ab 10:00 acht schwache Halbstunden (1,2 kW: 0,4 kWh Ueberschuss) vor acht starken
+    (4 kW: 1,8 kWh). In den schwachen kommt nur der Ueberschuss an, wie hoch der Sollwert
+    auch steht; den Rest tragen die sechs starken bis 1 h vor Fensterende:
+    (12,86 - 8 x 0,4) / (6 x 0,0256) = 62,9 -> 63 A, + 2 A = 65 A.
+    """
+    from conftest import prognose
+    fc = prognose(tag, [1.2] * 8 + [4.0] * 8, dt.time(10, 0), p10_anteil=1.0)
+    ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, forecast=fc, profil_kwh=0.2).auswerten(bis="target_p5")
+    assert ctx["benoetigt_kwh"] == pytest.approx(12.861, abs=0.001)
+    assert ctx["sim_a_vorlauf"] == 63 and ctx["target_p5"] == 65
+
+
+@pytest.mark.parametrize("kw, soc, erwartet, grund", [
+    (2.0, 88.7, True, "Bedarf 3,633 x 1,2 = 4,36 kWh > Verfuegbar 4,8 - 0,48 = 4,32 kWh"),
+    (2.0, 88.9, False, "Bedarf 3,569 x 1,2 = 4,28 kWh < 4,32 kWh"),
+    (0.6, 96.8, True, "Bedarf 1,03 kWh ueber der Bagatellgrenze 1,0 kWh"),
+    (0.6, 96.9, False, "Bedarf 0,997 kWh unter der Bagatellgrenze, trotz nur 0,6 kWh Rest-Ueberschuss"),
+])
+def test_kippstelle_von_fall_b(blueprint, tag, kw, soc, erwartet, grund):
+    """
+    15:00, Prognose ab 08:00 bis 18:00: sechs Halbstunden Rest mit je (kw x 0,5 - 0,2) kWh
+    Ueberschuss, Puffer 10 % davon, hoechstens 1 kWh. Bei 2 kW kippt Fall B bei einer freien
+    Kapazitaet von 4,32 / 1,2 = 3,6 kWh, also bei 88,8 %; die beiden anderen Gruende
+    (Prognose, Ladefenster) greifen dort noch nicht.
+    """
+    from conftest import prognose
+    fc = prognose(tag, [kw] * 20, dt.time(8, 0), p10_anteil=1.0)
+    ctx = szenario(blueprint, zeit(tag, 15, 0), soc=soc, forecast=fc, profil_kwh=0.2,
+                   zustands_overrides=_pv_wie_prognose()).auswerten(bis="fall_b_aktiv")
+    assert ctx["fall_b_aktiv"] is erwartet, grund
+    if kw == 2.0:
+        assert ctx["puffer_fall_b"] == pytest.approx(0.48)
+        assert not ctx["prognose_deckt_bedarf_nicht"] and not ctx["ladefenster_reicht_nicht"], \
+            "sonst prueft das Szenario einen anderen Grund"
+
+
+# --------------------------------------------------------------------------
 # Kapazitaet haengt an den konfigurierten Packs, nicht an den meldenden
 # --------------------------------------------------------------------------
 def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
@@ -590,6 +660,80 @@ def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
+# Abend-Diagnose: was die Prognose fuer heute allein versprach
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("kw_je_slot, p10_anteil, p50_gewicht, erwartet, grund", [
+    ([2.0] * 16, 1.0, 0.5, 11.52, "16 x (1,0 kWh x 0,92 - 0,2) = 11,52 kWh; Nacht-Defizite davor zaehlen nicht"),
+    ([2.0] * 8 + [0.0] * 4 + [2.0] * 8, 1.0, 0.5, 10.72, "8 x 0,72 - 4 x 0,2 + 8 x 0,72 = 10,72 kWh; die Luecke dazwischen zaehlt"),
+    ([2.0] * 16, 0.5, 0.5, 7.84, "Blend 0,5 x 1,0 + 0,5 x 0,5 = 0,75 kWh: 16 x (0,75 x 0,92 - 0,2) = 7,84 kWh"),
+    ([2.0] * 16, 0.5, 0.7, 9.312, "Blend 0,7 x 1,0 + 0,3 x 0,5 = 0,85 kWh: 16 x (0,85 x 0,92 - 0,2) = 9,312 kWh"),
+])
+def test_auffuellung_heute_aus_der_prognose_des_kalendertags(blueprint, tag, kw_je_slot, p10_anteil, p50_gewicht, erwartet, grund):
+    """
+    Slots ab 09:00, P50 2,0 kW x 0,5 h = 1,0 kWh, gemischt mit P10 wie in der Planung (Gewicht der
+    mittleren Prognose), Hausverbrauch 0,2 kWh je Halbstunde, Kapazitaet 32,15 kWh. Gerechnet wird
+    der ganze Kalendertag; bei gleicher Prognose nachts wie am Abend dasselbe.
+    """
+    from conftest import prognose
+    fc = prognose(tag, kw_je_slot, dt.time(9, 0), p10_anteil=p10_anteil)
+    for stunde in (3, 18):
+        ctx = szenario(blueprint, zeit(tag, stunde, 30), forecast=fc, profil_kwh=0.2,
+                       input_overrides={"nacht_p50_anteil": p50_gewicht}).auswerten(bis="auffuellung_heute_pct")
+        assert ctx["auffuellung_heute_pct"] == pytest.approx(erwartet / ctx["batterie_kapazitaet"] * 100, abs=0.05), grund
+
+
+# --------------------------------------------------------------------------
+# Winzige Zahlen: HA rendert Werte unter 0,0001 als Exponent-Text ('3e-05'),
+# die naechste Rechnung damit bricht den ganzen Lauf ab.
+# --------------------------------------------------------------------------
+def _exponent_texte(ctx):
+    import re
+    return sorted(k for k, v in ctx.items() if isinstance(v, str) and re.fullmatch(r"-?\d+(\.\d+)?e[-+]\d+", v.strip()))
+
+
+def test_winziger_rest_ueberschuss_bricht_fall_b_nicht_ab(blueprint, tag):
+    """
+    Letzter Ueberschuss-Slot 17:30: Blend 0,3806 kW x 0,5 h = 0,1903 kWh gegen Hausverbrauch 0,19 kWh ->
+    Rest-Ueberschuss 0,0003 kWh, Puffer 10 % davon = 0,00003 kWh. Ungerundet kam der Puffer als Text
+    '2.9999999999999997e-05' an, und fall_b_aktiv brach mit float - str ab.
+    """
+    from conftest import fake_entity, prognose
+    fc = prognose(tag, [0.3806], dt.time(17, 30), p10_anteil=1.0)
+    e = fake_entity("pv_erzeugung_heute_sensor", "sensor")  # Realitaets-Check kuerzt nicht
+    ctx = szenario(blueprint, zeit(tag, 17, 30), soc=60.0, forecast=fc, zustands_overrides={e: Zustand(e, "999")}).auswerten()
+    assert ctx["brutto_ueberschuss_rest"] == pytest.approx(0.0003)
+    assert ctx["puffer_fall_b"] == 0.0
+    assert isinstance(ctx["fall_b_aktiv"], bool)
+    assert _exponent_texte(ctx) == []
+
+
+def test_winziger_versatz_und_fast_volle_batterie_brechen_die_kette_nicht_ab(blueprint, tag):
+    """
+    Wechselrichter 52 %, Schatten-BMS 51,99995 %: Versatz 0,00005 -> zaehlt als 0 (bisher '5e-05', Abbruch
+    bei f_soc + soc_versatz). Schatten-BMS 99,99999237 % (float32 knapp unter 100): freie Kapazitaet
+    32,15 kWh x 7,6e-8 = 2,5e-6 kWh -> 0 (bisher Abbruch bei benoetigt_kwh).
+    """
+    nah = szenario(blueprint, zeit(tag, 21, 0), soc=52.0, schatten_soc="51.99995").auswerten()
+    assert nah["schatten_gueltig"] is True and nah["aktueller_soc"] == 51.99995 and nah["soc_versatz"] == 0
+    assert _exponent_texte(nah) == []
+    voll = szenario(blueprint, zeit(tag, 12, 0), soc=97.0, schatten_soc="99.99999237060547").auswerten()
+    assert voll["freie_kwh"] == 0.0 and voll["benoetigt_kwh"] == voll["defizit_kwh"]
+    assert _exponent_texte(voll) == []
+
+
+@pytest.mark.parametrize("schatten", [60.123456789, 58.987654321, 41.5550001, 20.0000003, 51.995])
+def test_zurueckgerechnetes_register_trifft_den_ladestand_genau(blueprint, tag, schatten):
+    """
+    Deshalb wird der Versatz nicht gerundet: Sitzt der Wechselrichter auf seinem Register (52 = 52), ist der
+    Schatten-Ladestand genau die Untergrenze. Ein auf 4 Stellen gerundeter Versatz verschoebe sie um bis zu
+    0,00005 - ww_puffer_kwh kaeme als Exponent-Text, und 'aktueller_soc <= tou_ist' (Verlust verbuchen) kippte.
+    Ein Versatz von 0,005 liegt ueber der Nullschwelle 0,0001 und zaehlt voll.
+    """
+    ctx = szenario(blueprint, zeit(tag, 3, 0), soc=52.0, schatten_soc=schatten, zustands_overrides=_tou(52)).auswerten(bis="ww_puffer_kwh")
+    assert ctx["aktueller_soc"] == ctx["tou_ist"] and ctx["ww_puffer_kwh"] == 0
+
+
+# --------------------------------------------------------------------------
 # Abregelung: erst bei voller Batterie geht Ertrag verloren
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("export_w, soc, heute_voll, erwartet", [
@@ -786,7 +930,9 @@ def test_halten_verlust_ohne_helfer_null(blueprint, tag):
 
 def _update_json_zweig(blueprint, h, trigger_zeit):
     """Loest die Variablen des update_json-Zweigs auf, wie der Lauf es taete (verschachtelte if-Zweige eingeschlossen)."""
-    ctx = h.auswerten(bis="log_kopf")   # globale Variablen vor dem Zweig, wie im Lauf
+    # Der ganze globale Block vor dem Zweig, wie im Lauf: Die Konstanten (versatz_max)
+    # stehen hinter log_kopf, und mit belegtem Schatten-Feld liest der Zweig sie.
+    ctx = h.auswerten(bis="var_max_soc_heute")
     ctx["trigger"] = {"id": "update_json", "now": trigger_zeit}
     block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
     def wahr(bedingungen):
@@ -832,25 +978,75 @@ def test_halten_aktiv_nur_wenn_die_grenze_schlagend_ist(blueprint, tag, stunde, 
     assert ctx["halten_aktiv"] is erwartet
 
 
+# Standort mit Schatten-BMS: 2 x 200 Ah x 51,2 V = 20,48 kWh. Das Minimum 20 %
+# steht im Register als ceil(20 + Versatz); eine Planungsgrenze liegt mindestens
+# eine 5-%-Stufe darueber. Bisher 1,0 kWh im Helfer, Slot 0,3 kWh.
+@pytest.mark.parametrize("deye, schatten, tou, zurueck, neu, grund", [
+    (12.0, 20.36, 12, None, None, "Minimum-Register ceil(20 - 8,36) = 12: kein Halten (bisher 0,36 % x 20,48 = 0,074 kWh Scheinbuchung)"),
+    (12.0, 22.26, 12, None, None, "Versatz seit dem Schreiben auf -10,26 gewandert: 12 gegen ceil(9,74) = 10, 2 < 5 Punkte"),
+    (16.0, 24.36, 16, None, None, "16 gegen 12: 4 Punkte, keine volle 5-%-Stufe"),
+    (17.0, 25.36, 17, 1.024, 1.024, "17 gegen 12: 5 Punkte haelt, Deckel 5 % x 20,48 = 1,024 kWh unter 1,0 + 0,3"),
+    (42.0, 50.36, 42, 6.144, 1.3, "Planungsgrenze 50 %: ceil(50 - 8,36) = 42, 30 Punkte ueber 12 -> Deckel 6,144 kWh, 1,0 + 0,3"),
+])
+def test_halten_mit_schatten_bms_in_der_skala_des_registers(blueprint, tag, deye, schatten, tou, zurueck, neu, grund):
+    from conftest import fake_entity
+    e = fake_entity("helper_halten_bezug", "input_number")
+    zs = {**_tou(tou), e: Zustand(e, "1.0")}
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=deye, schatten_soc=schatten, hausverbrauch_slot_kwh=0.3,
+                 zustands_overrides=zs, input_overrides={"pack_capacity_ah": 200}, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    assert ctx["hb_lage"] is (zurueck is not None), grund
+    kette = szenario(blueprint, zeit(tag, 3, 0), soc=deye, schatten_soc=schatten, zustands_overrides=zs,
+                     input_overrides={"pack_capacity_ah": 200}).auswerten(bis="halten_aktiv")
+    assert kette["halten_aktiv"] is ctx["hb_lage"], "Kette und Halbstundenlauf pruefen dasselbe"
+    if zurueck is not None:
+        assert ctx["hb_min_register"] == 12 and ctx["hb_zurueck_kwh"] == pytest.approx(zurueck, abs=0.001), grund
+        assert ctx["hb_neu"] == pytest.approx(neu, abs=0.001), grund
+
+
+def _slot_zeile(blueprint, h, ctx) -> dict:
+    """Die Slot-Zeile, die der update_json-Lauf an die Aufzeichnung schickt."""
+    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"])
+                   and "'slot'" in str(st["then"]))
+    nachricht = h._aufloesen(next(a for a in schritt["then"] if a.get("action") == "notify.send_message")["data"]["message"], ctx)
+    return nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
+
+
 def test_slot_zeile_der_aufzeichnung(blueprint, tag):
     """Der Profil-Lauf schreibt Slot-Verbrauch und Halte-Lage, auch ohne zugewiesenen Helfer."""
-    import json
     from conftest import fake_entity
     tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "65") for i in range(1, 7)}
     h = szenario(blueprint, zeit(tag, 3, 0), soc=65.0, hausverbrauch_slot_kwh=0.6, zustands_overrides=tous,
                  input_overrides={"helper_halten_bezug": ""}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
-    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
-    schritt = next(st for st in block["then"] if "if" in st and "pv_optimizer_aufzeichnung" in str(st["if"])
-                   and "'slot'" in str(st["then"]))
-    nachricht = h._aufloesen(next(a for a in schritt["then"] if a.get("action") == "notify.send_message")["data"]["message"], ctx)
-    zeile = nachricht if isinstance(nachricht, dict) else json.loads(nachricht)
+    zeile = _slot_zeile(blueprint, h, ctx)
     assert zeile["art"] == "slot" and zeile["halten"] is True and zeile["slot_kwh"] == pytest.approx(0.6)
     assert "notstrom_kwh" in zeile
     assert zeile["tou_ist"] == 65 and zeile["zurueckgehalten_kwh"] == pytest.approx(14.469, abs=0.001)
     assert zeile["halten_bezug_kwh"] is None and "entitaeten" not in zeile
     assert zeile["kennung"] == ctx["lauf_kennung"]
     assert ctx["hb_lage"] is True and ctx["hb_haelt"] is False
+
+
+def test_slot_zeile_mit_schatten_bms_in_der_skala_der_kette(blueprint, tag):
+    """
+    Die Kette laeuft im Halbstundenlauf nicht, er rechnet den Versatz selbst nach. Wechselrichter
+    42 %, Schatten-BMS 50,36 %: Versatz 42 - 50,36 = -8,36, das Register 42 % meint eine
+    Untergrenze von 50,36 %. Zurueckgehalten ist, was ueber dem Minimum-Register ceil(20 - 8,36)
+    = 12 % liegt: 30 % von 2 x 200 Ah x 51,2 V = 20,48 kWh = 6,144 kWh. Kette und Zeile gleich.
+    """
+    zs = _tou(42)
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=42.0, schatten_soc=50.36, zustands_overrides=zs,
+                 input_overrides={"pack_capacity_ah": 200}, trigger_id="update_json")
+    zeile = _slot_zeile(blueprint, h, _update_json_zweig(blueprint, h, zeit(tag, 3, 0)))
+    assert zeile["soc_versatz"] == pytest.approx(-8.36) and zeile["tou_ist"] == pytest.approx(50.36)
+    assert zeile["zurueckgehalten_kwh"] == pytest.approx(6.144, abs=0.001) and zeile["halten"] is True
+    kette = szenario(blueprint, zeit(tag, 3, 0), soc=42.0, schatten_soc=50.36, zustands_overrides=zs,
+                     input_overrides={"pack_capacity_ah": 200}).auswerten(bis="zurueckgehalten_kwh")
+    assert kette["soc_versatz"] == pytest.approx(zeile["soc_versatz"])
+    assert kette["tou_ist"] == pytest.approx(zeile["tou_ist"])
+    assert kette["zurueckgehalten_kwh"] == pytest.approx(zeile["zurueckgehalten_kwh"], abs=0.001)
 
 
 # --------------------------------------------------------------------------

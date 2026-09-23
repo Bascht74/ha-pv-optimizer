@@ -323,7 +323,7 @@ def test_aufzeichnung_traegt_die_rechenwerte(blueprint, tag):
     r = aufz["rechnung"]
     for k in ("f_soc", "tou_ist", "tou_schreiben", "halten_aktiv", "halten_verlust_kwh", "prognose_tage",
               "target_p5", "fall_b_aktiv", "blockade_aktiv", "spitze_erwartet", "trend_faktor", "benoetigt_kwh",
-              "plan_voll_um", "fallb_voll_um", "untergrenze_um", "haus_live_kwh"):
+              "plan_voll_um", "fallb_voll_um", "untergrenze_um", "haus_live_kwh", "auffuellung_heute_pct"):
         assert k in r, k
     assert r["f_soc"] == ctx["f_soc"] and r["target_p5"] == ctx["target_p5"]
 

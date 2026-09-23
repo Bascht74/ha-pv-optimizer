@@ -100,7 +100,7 @@ blueprint:
         wr_tou_1:
           name: "ToU-Programm 1: Min-SOC (%)"
           description: >-
-            Die number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use). Der Blueprint schreibt hier die geplante Entlade-Untergrenze, damit die Batterie nachts nur so weit entlädt, wie der nächste Tag es zulässt. Der Wechselrichter muss dafür in der Betriebsart „Capacity" laufen.
+            Number-Entität für den Mindest-Ladezustand von Zeitprogramm 1 (Time of Use), in die der Blueprint die Entlade-Untergrenze schreibt. Am Wechselrichter Betriebsart „Capacity“ wählen und „Charging“ aller sechs Programme auf „Disabled“ stellen, sonst lädt er bis zu diesem Wert aus dem Netz.
           default: ""
           selector: {"entity": {"domain": "number"}}
         wr_tou_2:
@@ -199,7 +199,7 @@ blueprint:
         notstrom_utility_sensor:
           name: "Notstromlast halbstündlich (kWh, optional)"
           description: >-
-            Utility-Meter über die Energie am Notstromausgang des Wechselrichters (Load UPS) je Halbstunde, im Package aus dessen Leistung gebildet. Daraus lernt der Blueprint das Profil der Last, die bei Netzausfall weiterläuft. Steuert noch nichts.
+            Utility-Meter über die Energie am Notstromausgang des Wechselrichters (Load UPS) je Halbstunde, im Package aus dessen Leistung gebildet. Daraus lernt der Blueprint die Last, die bei Netzausfall weiterläuft, und hält mit dem Helfer Notstromprofil eine Reserve in der Entlade-Untergrenze frei.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
         aussentemperatur_sensor:
@@ -304,7 +304,7 @@ blueprint:
         helper_max_soc_heute:
           name: "Helfer: höchster SOC heute (%)"
           description: >-
-            input_number, in dem der Tages-Höchststand des Ladezustands festgehalten wird. Grundlage für die Diagnose, ob die Batterie ihr Ziel erreicht hat.
+            input_number mit dem höchsten Ladestand des Tages. Die Entlade-Planung hält die Batterie erst, wenn der Ladestand darunter gefallen ist, und die Abend-Diagnose prüft daran, ob die Batterie ihr Ziel erreicht hat.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
         speicherverlust_gesamt:
@@ -506,8 +506,8 @@ blueprint:
         top_balancing_voltage:
           name: "Start: Zellspannung (V)"
           description: >-
-            Zellspannung, ab der das Top-Balancing startet. Bei LiFePO4 sind 3,45–3,50 V sinnvoll — dort wird die Kennlinie steil und Zellunterschiede
-            werden sichtbar.
+            Zellspannung, ab der das Top-Balancing startet. Die Vorgabe 3,40 V wird früh und sicher erreicht. Aussagekräftiger sind bei LiFePO4 3,45–3,50 V,
+            wo die Kennlinie steil wird und Zellunterschiede sichtbar werden; dafür muss die Ladespannung des Wechselrichters je Zelle darüber liegen.
           default: 3.4
           selector: {"number": {"min": 3.3, "max": 3.6, "step": 0.01, "unit_of_measurement": "V"}}
         duration_top_balancing:
@@ -635,8 +635,8 @@ blueprint:
         ladevorlauf_stunden:
           name: "Ladevorlauf"
           description: >-
-            Wie lange vor dem letzten PV-Überschuss die Batterie voll sein soll. Der Ladestrom wird so gewählt, dass dieser Vorlauf bleibt — als Reserve
-            für Gewitter oder ungeplante Verbraucher und als Zeitfenster für den Zellausgleich. Höher = zügiger voll, aber weniger Überschuss für Peak-Shaving.
+            Wie lange vor Ende des Ladefensters die Batterie voll sein soll. Das Fenster endet, sobald der erwartete Überschuss unter 15 % seines Tageshöchstwerts
+            fällt, also vor dem letzten Überschuss. Reserve für Gewitter und Zellausgleich; höher = zügiger voll, weniger Überschuss für Peak-Shaving.
           default: "01:00:00"
           selector: {"time": {}}
         faktor_fallback:
@@ -674,7 +674,7 @@ blueprint:
         ziel_soc:
           name: "Entlade-Planung: Ziel-Ladestand bei Sonnenuntergang (%)"
           description: >-
-            Ladestand in Prozent, den die Prognose der nächsten Tage am Ende des besten Sonnentags wieder erreichen soll. Bewusst unter 100 %, damit ein besserer Tag als vorhergesagt noch Platz in der Batterie findet.
+            Ladestand in Prozent, den die Batterie laut Prognose am Ende des besten Sonnentags erreichen soll; die Untergrenze ist dieses Ziel minus die erwartete Auffüllung bis dahin. Ein höherer Mindest-Ladestand geht vor, höchstens bis die Auffüllung die Batterie ganz füllt.
           default: 90
           selector: {"number": {"min": 50, "max": 100, "step": 1, "unit_of_measurement": "%"}}
         vertrauen_tag3:
@@ -849,7 +849,7 @@ trigger:
 mode: queued
 max: 20
 trace:
-  stored_traces: 800
+  stored_traces: 600
 
 action:
   # NEUSTART-EINLESEPAUSE
@@ -1255,7 +1255,7 @@ action:
               value: "{{ tp_neu }}"
       # NOTSTROMPROFIL: Energie am Notstromausgang je Halbstunde, gleitender Mittelwert
       # in ganzen Wattstunden (48 Werte passen so in die 255 Zeichen). Der Zaehler wird
-      # wie der Hausverbrauch je Halbstunde genullt. Grundlage einer spaeteren Reserve.
+      # wie der Hausverbrauch je Halbstunde genullt. Grundlage der Notstromreserve.
       - variables:
           np_sensor: !input notstrom_utility_sensor
           np_helfer: !input notstrom_json_text
@@ -1360,27 +1360,30 @@ action:
             {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
           # soc_versatz wie in der Hauptkette nachgebildet, weil die hier nicht
-          # laeuft: Das Register steht in der Skala des Wechselrichters, der
-          # eingestellte Mindestwert in der des Schatten-BMS. Ohne die
-          # Umrechnung gilt eine Untergrenze eine 5-%-Stufe ueber dem Minimum
-          # als "haelt nicht", und die zurueckgehaltene Energie faellt um den
-          # Versatz zu klein aus.
+          # laeuft (samt Nullschwelle gegen den Exponent-Text).
           hb_versatz: >
             {% set r = (states(hb_schatten) | float(-1)) if hb_schatten != '' else -1 %}
             {% set dey = states(hb_soc) | float(0) %}
-            {{ (dey - r) if (r > 0 and r <= 100 and ((dey - r) | abs) <= versatz_max) else 0 }}
+            {% set v = dey - r %}
+            {{ v if (r > 0 and r <= 100 and (v | abs) <= versatz_max and (v | abs) >= 0.0001) else 0 }}
           hb_tou_soll: "{{ hb_tou_ist - hb_versatz }}"
+          # Das Minimum so, wie die Kette es ins Register schreibt; verglichen wird in
+          # der Skala des Registers. Zurueckgerechnet traegt ein Minimum-Register den
+          # aufgerundeten Versatz und dessen Wanderung seit dem Schreiben, bis zu 5
+          # Punkte, bevor die Kette es nachzieht. Halten heisst deshalb eine volle
+          # 5-%-Stufe darueber. Preis: Steigt der Versatz nach dem Schreiben, zaehlt
+          # eine Grenze genau eine Stufe ueber dem Minimum nicht mehr als Halten.
+          hb_min_register: "{{ [[((hb_tou_min | float(20)) + hb_versatz) | round(0, 'ceil'), 0] | max, 100] | min }}"
           # Halte-Lage unabhaengig vom Helfer, damit die Aufzeichnung sie auch
           # ohne zugewiesenen Helfer festhaelt. Der Ladestand wird gegen das rohe
-          # Register geprueft - beide in der Skala des Wechselrichters, der die
-          # Grenze durchsetzt.
+          # Register geprueft - beide in der Skala des Wechselrichters.
           hb_lage: >
             {{ hb_planung != '' and not is_state('sun.sun', 'above_horizon')
-               and hb_tou_soll > (hb_tou_min | float(20))
+               and hb_tou_ist - hb_min_register >= 5
                and (states(hb_soc) | float(100)) <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
           hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
-          hb_zurueck_kwh: "{{ [(hb_tou_soll - (hb_tou_min | float(20))) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
+          hb_zurueck_kwh: "{{ [(hb_tou_ist - hb_min_register) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
       # AUFZEICHNUNG DES SLOTS: Der Halbstunden-Verbrauch ist nur hier lesbar,
       # der Halbstundenlauf sieht den Zaehler schon genullt. Mit dieser Zeile
       # laesst sich die Bezugssumme im Halten ohne den Helfer nachrechnen.
@@ -1638,7 +1641,11 @@ action:
       # Wechselrichter ohnehin durchsetzt.
       schatten_gueltig: "{{ schatten_roh > 0 and schatten_roh <= 100 and ((soc_deye - schatten_roh) | abs) <= versatz_max }}"
       aktueller_soc: "{{ schatten_roh if schatten_gueltig else soc_deye }}"
-      soc_versatz: "{{ (soc_deye - schatten_roh) if schatten_gueltig else 0 }}"
+      # Unter 0,0001 Punkten zaehlt der Versatz als 0: so kleine Zahlen rendert HA
+      # als Exponent-Text, und die naechste Rechnung bricht den Lauf ab. Runden
+      # hiesse, dass der zurueckgerechnete Ladestand das Register nicht mehr genau
+      # trifft, wenn der Wechselrichter darauf sitzt.
+      soc_versatz: "{{ (soc_deye - schatten_roh) if (schatten_gueltig and ((soc_deye - schatten_roh) | abs) >= 0.0001) else 0 }}"
       ww_temp: "{{ states(var_wp_temp) | float(50) }}"
       # Ein nicht verfuegbarer Warmwasser-Sensor laese sich ueber den Fallback als
       # 50 Grad, also "kalt" - das gaebe den Boost frei, statt ihn zu sperren.
@@ -1697,7 +1704,7 @@ action:
         {%- set st = h | int -%}
         {%- set mi = ((h - st) * 60) | round(0) | int -%}
         {%- if h < 0.01 -%}im Ladefenster
-        {%- else -%}bis {{ (st ~ ' h') if mi == 0 else ((st ~ ' h ' ~ mi ~ ' min') if st > 0 else (mi ~ ' min')) }} vor dem letzten PV-Überschuss{%- endif -%}
+        {%- else -%}bis {{ (st ~ ' h') if mi == 0 else ((st ~ ' h ' ~ mi ~ ' min') if st > 0 else (mi ~ ' min')) }} vor Ende des Ladefensters{%- endif -%}
       fallb_vorlauf_grund: >-
         {%- if ([ (var_ladevorlauf | float(1.0)) - (fallb_vorlauf_abzug | float(0.5)), 0 ] | max) < 0.01 -%}
         die späten Zeitfenster liefern zu wenig für den Ladestrom
@@ -1763,11 +1770,6 @@ action:
       batterie_kapazitaet: >
         {% set p_count = packs_konfiguriert if packs_konfiguriert > 0 else 1 %}
         {{ (pack_capacity_ah * nominale_spannung * p_count) / 1000 }}
-
-      next_hour_50: "{{ states(var_solcast_next_hour) | float(0) }}"
-      next_hour_10: "{{ state_attr(var_solcast_next_hour, 'estimate10') | float(0) }}"
-      next_hour_anomalie: "{{ next_hour_50 > 0 and ((next_hour_50 - next_hour_10) / next_hour_50) > 0.20 }}"
-      solcast_log_addon: "{{ 'Prognose unsicher: P10 und P50 der nächsten Stunde liegen über 20 % auseinander.' if next_hour_anomalie else '' }}"
 
       # Haus-Profil ist in kWh/Halbstunde. Fallback (nur bis der erste update_json-Lauf
       # den Helfer gefüllt hat): neutrale 0.2 kWh/Halbstunde (~400 W).
@@ -1908,7 +1910,13 @@ action:
         {% endif %}
 
       temperatur_limit_ampere: "{{ [temp_limit_ampere_raw, max_ampere] | min }}"
-      freie_kwh: "{{ batterie_kapazitaet * (1 - (aktueller_soc / 100)) }}"
+      # Unter 0,0001 kWh zaehlt 0: Ein Schatten-Ladestand knapp unter 100 % ergaebe
+      # sonst einen Exponent-Text, an dem benoetigt_kwh abbricht. Nicht gerundet,
+      # weil die Ampere-Rechnung aufrundet und schon die letzte Stelle den Sollwert
+      # um 1 A verschoebe.
+      freie_kwh: >
+        {% set f = batterie_kapazitaet * (1 - (aktueller_soc / 100)) %}
+        {{ f if (f | abs) >= 0.0001 else 0 }}
       # potential_export bleibt als Diagnosegröße (PV - Load, da sich die
       # Batterie herauskürzt) für Logs erhalten. Für die Schwellen-Entscheidungen
       # (WP-Boost, Peak-Shaving) ist aber der REALE Netz-Export maßgeblich:
@@ -2272,7 +2280,9 @@ action:
       # Wirksamer Puffer fuer Fall B: puffer_anteil des Rest-Ueberschusses,
       # gedeckelt durch puffer_kwh. Die Blockade rechnet ihren eigenen Puffer,
       # weil sie sich auf den Ueberschuss AB dem Kandidaten-Zeitpunkt bezieht.
-      puffer_fall_b: "{{ [ brutto_ueberschuss_rest * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min }}"
+      # Gerundet, damit ein Rest-Ueberschuss unter 0,001 kWh nicht als Exponent-Text
+      # rendert und fall_b_aktiv abbricht.
+      puffer_fall_b: "{{ ([ brutto_ueberschuss_rest * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(4) }}"
       # Fall (b) / "Schleuse auf": Der erwartete Brutto-PV-Ueberschuss reicht mit
       # dem Eskalations-Puffer nicht mehr, um den GESAMTEN Bedarf (freier Platz +
       # Nachladebedarf) zu decken -> Feinregelung aufgeben, voll laden solange
@@ -2324,12 +2334,12 @@ action:
       # sonst eine. Auf eine Stelle gerundet stuenden sich sonst zwei gleiche
       # Zahlen mit '>' dazwischen gegenueber (real 5.22 gegen 5.18). Auf- und
       # Abrunden je Seite waere die Alternative, liesse die Entscheidung aber
-      # eindeutiger aussehen, als sie war.
+      # eindeutiger aussehen, als sie war. Gruende in der Reihenfolge der Meldung.
       fallb_nk: >
-        {% if ladefenster_reicht_nicht %}
-          {% set d = benoetigt_kwh - (energie_bis_vorlauf | float(0)) %}
-        {% elif prognose_deckt_bedarf_nicht %}
+        {% if prognose_deckt_bedarf_nicht %}
           {% set d = benoetigt_kwh - brutto_ueberschuss_rest %}
+        {% elif ladefenster_reicht_nicht %}
+          {% set d = benoetigt_kwh - (energie_bis_vorlauf | float(0)) %}
         {% else %}
           {% set d = (benoetigt_kwh * (faktor_fallback | float(1.2))) - (brutto_ueberschuss_rest - puffer_fall_b) %}
         {% endif %}
@@ -2597,7 +2607,7 @@ action:
           {% set ns2.pu = ns2.pu + nutzbar[i][2] %}
           {% set ns2.pd = ns2.pd + (nutzbar[i][3] if i < nsl.last_pos else 0) %}
         {% endfor %}
-        {{ {'t': ns2.best, 'ueber_ges': nsl.u_ges | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
+        {{ {'t': ns2.best, 'ueber_ges': nsl.u_ges | round(2), 'd_ges': nsl.d_aufholbar | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
       # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
       blockade_dyn: "{{ blockade_dyn_json if blockade_dyn_json is mapping else (blockade_dyn_json | from_json) }}"
       blockade_dyn_t: "{{ blockade_dyn.t | default('') }}"
@@ -2610,6 +2620,7 @@ action:
       blockade_dyn_bedarf: "{{ blockade_dyn.bedarf | default(0) | float(0) }}"
       blockade_dyn_u_ab_t: "{{ blockade_dyn.u_ab_t | default(0) | float(0) }}"
       blockade_dyn_d_ab_t: "{{ blockade_dyn.d_ab_t | default(0) | float(0) }}"
+      blockade_dyn_d_ges: "{{ blockade_dyn.d_ges | default(0) | float(0) }}"
       # BLOCKADE-LOGIK (dynamisches Ende):
       # Existiert ein T (spaetester Ladebeginn, ab dem noch genug Netto-Energie
       # kommt): blockieren. Das Ziel ist bewusst streng gerechnet, damit die
@@ -2890,16 +2901,31 @@ action:
            if (untergrenze_um not in ['', 'jetzt']) else '' }}
       # NETZBEZUG IM HALTEN (Helfer, laeuft im update_json-Zweig auf, bereits auf
       # die zurueckgehaltene Energie gedeckelt). Schlagend heisst: Ladestand an
-      # der Untergrenze, Untergrenze ueber dem Minimum.
+      # der Untergrenze, Register eine volle 5-%-Stufe ueber dem Minimum-Register
+      # (Begruendung beim Halbstundenlauf, hb_min_register).
       halten_kwh: "{{ states(var_halten_bezug) | float(0) if var_halten_bezug != '' else 0 }}"
-      halten_aktiv: "{{ entlade_aktiv and not is_day and tou_ist > (default_tou_soc | float(20)) and aktueller_soc <= tou_ist + 1 }}"
-      zurueckgehalten_kwh: "{{ [(tou_ist - (default_tou_soc | float(20))) / 100 * batterie_kapazitaet, 0] | max }}"
+      halten_aktiv: "{{ entlade_aktiv and not is_day and tou_ist_register - tou_minimum_wert >= 5 and aktueller_soc <= tou_ist + 1 }}"
+      zurueckgehalten_kwh: "{{ [(tou_ist_register - tou_minimum_wert) / 100 * batterie_kapazitaet, 0] | max }}"
       export_heute_kwh: "{{ states(var_grid_export_kwh) | float(0) if var_grid_export_kwh != '' else 0 }}"
       # Unnoetig gehalten wurde nur, was nachts bezogen UND tags eingespeist wurde.
       # Deckel ist die ganze Tageseinspeisung, nicht erst die nach dem Vollwerden:
       # mit tieferem Morgen-Ladestand haette die gedrosselte Ladung staerker
       # geladen und diese Einspeisung aufgenommen.
       halten_verlust_kwh: "{{ [halten_kwh, export_heute_kwh] | min }}"
+      # Auffuellung, die die Prognose fuer heute allein verspricht, gerechnet wie
+      # slot_plan ueber die 48 Halbstunden des Kalendertags. Nur fuer die
+      # Aufzeichnung: Solcast fuehrt vergangene Halbstunden im Tagesverlauf nach,
+      # die Sicht, mit der die Planung gerechnet hat, tragen nur die Nachtlaeufe.
+      auffuellung_heute_pct: >
+        {% set tag = solcast_slot_tage | selectattr('datum', 'eq', now().date().isoformat()) | list %}
+        {% set ns = namespace(kum=0.0, best=0.0) %}
+        {% if tag | length > 0 %}
+          {% for idx in range(48) %}
+            {% set ns.kum = [ns.kum + (tag[0].k[idx] | float(0)) * lade_wirkungsgrad - (json_profil[idx] | float(0.2)), 0.0] | max %}
+            {% if ns.kum > ns.best %}{% set ns.best = ns.kum %}{% endif %}
+          {% endfor %}
+        {% endif %}
+        {{ ((ns.best / batterie_kapazitaet * 100) | round(1)) if batterie_kapazitaet > 0 else 0 }}
 
   # Der zweite Teil des Tag-Tors. Er steht hier, weil er die Entlade-Untergrenze
   # und die Morgen-Blockade braucht, und beide entstehen erst oberhalb.
@@ -3080,6 +3106,7 @@ action:
               'tou_schreiben': tou_schreiben,
               'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
               'export_heute_kwh': export_heute_kwh, 'halten_verlust_kwh': halten_verlust_kwh | round(2),
+              'auffuellung_heute_pct': auffuellung_heute_pct,
               'spitze_erwartet_w': spitze_erwartet_w | round(0), 'spitze_erwartet': spitze_erwartet,
               'abregelung_aktiv': abregelung_aktiv,
               'blockade_aktiv': blockade_aktiv, 'blockade_dyn_t': blockade_dyn_t, 'blockade_heute_beendet': blockade_heute_beendet,
@@ -3288,13 +3315,13 @@ action:
         data:
           name: "PV Optimizer"
           message: >-
-            {{ log_kopf }} Entlade-Untergrenze: Netz-Ladeziele (ToU 1–6) von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
+            {{ log_kopf }} Entlade-Untergrenze: ToU-Programme 1–6 von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
             {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0) }} % und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if soc_versatz %} Am Wechselrichter steht dafür {{ tou_schreibwert }} %, da sein eigener Ladestand (SOC) {{ soc_deye | round(0) }} % beträgt, {{ '%+.1f' | format(soc_versatz) }} % gegenüber dem Schatten-BMS.{% endif %}
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
-            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
+            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {% if soc_versatz %}{{ (shutdown_soc - soc_versatz) | round(1) }} % (am Wechselrichter {{ shutdown_soc | round(0) }} %){% else %}{{ shutdown_soc | round(0) }} %{% endif %} + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
             {% if plan_start and prognose_tage %}Auffüllung ab {{ (plan_start | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %}{% else %}Kein Überschuss in den nächsten 72 Stunden{% endif %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
             {%- if zellausgleich_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
           entity_id: !input helper_logbook_dummy
@@ -3319,10 +3346,23 @@ action:
       - action: input_boolean.turn_on
         target:
           entity_id: "{{ var_helper_blockade_beendet }}"
+      # Nennt die gefallene Teilbedingung von blockade_aktiv. Mindestdauer und
+      # Tagesmarker erfuellen hier Modus und Guard, als letzte bleibt das leere T:
+      # Dann deckt schon der fruehste Kandidat, die naechste Halbstunde, den
+      # Bedarf nicht, und die Meldung rechnet genau dessen Vergleich nach.
       - action: logbook.log
         data:
           name: "PV Optimizer"
-          message: "{{ log_kopf }} Morgen-Blockade beendet: Für heute freigegeben (Informativ: Blockade greift heute nicht erneut)."
+          message: >-
+            {{ log_kopf }} Morgen-Blockade beendet: Laden für heute freigegeben, da
+            {%- if packs_offline_bestaetigt %} alle BMS-Packs offline sind.
+            {%- elif states(var_timer_peak) == 'active' %} die Lastspitzen-Kappung läuft.
+            {%- elif trigger.id == 'export_peak_schwelle' and not (wp_sperre_aktiv or wp_boost_startet_gleich) %} die Netzeinspeisung seit 2 Minuten über der Peak-Shaving-Schwelle {{ schwelle_peak_shaving | round(0) }} W liegt (jetzt {{ real_export | round(0) }} W).
+            {%- elif aktueller_soc >= 99 %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≥ 99 %{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}.
+            {%- elif not is_day %} die Sonne untergegangen ist.
+            {%- elif not vor_blockade_ende %} die eingestellte Obergrenze {{ today_at(var_zeit_blockade | string).strftime('%H:%M') }} Uhr erreicht ist.
+            {%- elif not spitze_erwartet %} die Prognose keine Einspeisespitze mehr erwarten lässt: höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle.
+            {%- else %}{% set puffer = [ blockade_dyn_ueber_ges * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}{% set verf = blockade_dyn_ueber_ges - puffer %}{% set bedarf = (faktor_fallback | float(1.2)) * (freie_kwh + blockade_dyn_d_ges) %}{% set nk = 2 if (verf - bedarf) | abs < 0.1 else 1 %} der späteste Ladebeginn erreicht ist: Bedarf {{ bedarf | round(nk) }} kWh > Verfügbar {{ verf | round(nk) }} kWh ab der nächsten Halbstunde (Bedarf = freie Ladekapazität {{ freie_kwh | round(nk) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ges > 0.05 %} + Nachladebedarf {{ blockade_dyn_d_ges | round(nk) }} kWh für Stunden mit Hausverbrauch über PV{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss {{ blockade_dyn_ueber_ges | round(nk) }} kWh − Puffer {{ puffer | round(nk) }} kWh).{% endif %}
           entity_id: !input helper_logbook_dummy
 
   - if:
@@ -3429,7 +3469,10 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Mitternachts-Check: Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A (Maximum) geöffnet, da er nachts nicht auf Maximum stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  message: >-
+                    {{ log_kopf }} Mitternachts-Check: Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {{ '(Sicherheits-Obergrenze)' if temperatur_limit_ampere < max_ampere else '(Maximum)' }}
+                    {%- if (target_p0 | round(0)) < (aktueller_ladestrom | round(0)) %} gesenkt, da er darüber lag.
+                    {%- else %} geöffnet, da er nachts nicht auf {{ 'dieser Grenze' if temperatur_limit_ampere < max_ampere else 'Maximum' }} stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{% endif %}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3479,7 +3522,10 @@ action:
 
           # NETZBEZUG IM HALTEN ABRECHNEN: Hielt die Untergrenze nachts und wurde
           # die Batterie tags voll, war das Halten unnoetig. Nicht voll: kein
-          # Verlust, nur Diagnose. Danach ist der Helfer frei fuer die Nacht.
+          # Verlust und kein Urteil ueber die Planung. Ob sie auf heute zaehlte,
+          # zeigen nur die Nachtlaeufe der Aufzeichnung: Am Abend kann ein Halten
+          # das Register schon angehoben haben, und Solcast hat die heutige
+          # Prognose nachgefuehrt. Danach ist der Helfer frei fuer die Nacht.
           - if:
               - condition: template
                 value_template: "{{ var_halten_bezug != '' }}"
@@ -3514,7 +3560,9 @@ action:
                         data:
                           name: "PV Optimizer"
                           message: >-
-                            {{ log_kopf }} Diagnose: Entlade-Planung zu mutig, die Entlade-Untergrenze (zuletzt {{ tou_ist | round(0) }} %) war nachts schlagend und die Batterie wurde heute nicht voll, höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0) }} % < Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %. (Informativ: Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh.)
+                            {{ log_kopf }} Diagnose: Entlade-Untergrenze hielt nachts bei Netzbezug {{ halten_kwh | round(2) }} kWh, Batterie heute nicht voll,
+                            {%- if hoechster_soc_heute >= ziel_soc_eff %} Ziel-Ladestand aber erreicht: höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0, 'floor') }} % ≥ Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %.
+                            {%- else %} höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0, 'floor') }} % < Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %.{% endif %}
                           entity_id: !input helper_logbook_dummy
               - action: input_number.set_value
                 target:
@@ -3532,14 +3580,29 @@ action:
               - condition: template
                 value_template: "{{ not (entlade_aktiv and ziel_soc_eff < 100) }}"
             then:
+              # Mit Entlade-Planung zielt sie hier auf 100 %, meist weil der Zellausgleich
+              # ueberfaellig ist; dann fehlt Sonne, nicht die Auslegung. Feste Kennung:
+              # ein neuer Tag ersetzt die Meldung, der naechste Zellausgleich entfernt sie.
+              - variables:
+                  nicht_voll_text: >-
+                    {%- set max_heute = (states(var_max_soc_heute) | float(0)) | round(0) -%}
+                    {%- set ueber = tage_seit_voll - zellausgleich_nach_tagen -%}
+                    {%- if entlade_aktiv and zellausgleich_faellig -%}
+                    Zellausgleich seit {{ ueber }} Tag{{ 'en' if ueber != 1 else '' }} überfällig und auch heute nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. (Höchster Tages-Ladestand (SOC) {{ max_heute }} %, Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %; Batterie seit {{ tage_seit_voll }} Tagen nicht voll, Zellausgleich fällig nach {{ zellausgleich_nach_tagen }} Tagen; Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
+                    {%- elif entlade_aktiv -%}
+                    Batterie wurde heute nicht voll, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. (Höchster Tages-Ladestand (SOC) {{ max_heute }} %, Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %; Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
+                    {%- else -%}
+                    Batterie wurde heute nicht voll — der Zellausgleich hat nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ max_heute }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h).
+                    {%- endif -%}
               - action: persistent_notification.create
                 data:
+                  notification_id: "batterie_nicht_voll"
                   title: "⚠️ PV Optimizer Warnung"
-                  message: "{{ log_kopf }} Hinweis: Batterie wurde heute nicht voll — der Zellausgleich hat nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
+                  message: "{{ log_kopf }} Hinweis: {{ nicht_voll_text }}"
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Diagnose: Batterie wurde heute nicht voll — der Zellausgleich hat nicht ausgelöst, da keine Zellspannung die Schwelle {{ top_balancing_voltage | round(2) }} V erreicht hat. Bitte die Auslegung/Logik prüfen (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) }} %, Eingriffsdauer {{ eingriff_dauer | round(1) }} h)."
+                  message: "{{ log_kopf }} Diagnose: {{ nicht_voll_text }}"
                   entity_id: !input helper_logbook_dummy
 
           # Fehleinschaetzung in der anderen Richtung: Die Blockade hielt Platz
@@ -3564,7 +3627,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A (Maximum) geöffnet.{{ (' ' ~ untergrenze_text) if untergrenze_text else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  message: "{{ log_kopf }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {{ '(Sicherheits-Obergrenze)' if temperatur_limit_ampere < max_ampere else '(Maximum)' }} {{ 'gesenkt' if (target_p0 | round(0)) < (aktueller_ladestrom | round(0)) else 'geöffnet' }}.{{ (' ' ~ untergrenze_text) if untergrenze_text else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3641,7 +3704,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ log_kopf }} Netz-Ladeziele (ToU 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist.{% if soc_versatz %} Am Wechselrichter steht dafür {{ tou_minimum_wert }} %.{% endif %}"
+              message: "{{ log_kopf }} Entlade-Untergrenzen (ToU-Programme 1–6) auf {{ default_tou_soc }} % zurückgesetzt ({% if (tou_ist | round(0)) == (tou_max_ist | round(0)) %}vorher {{ tou_ist | round(0) }} %{% else %}vorher uneinheitlich{% endif %}), da keine Entlade-Planung zugewiesen ist.{% if soc_versatz %} Am Wechselrichter steht dafür {{ tou_minimum_wert }} %.{% endif %}"
               entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -3672,7 +3735,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}){% else %}die Netzeinspeisung nicht mehr über {{ schwelle_peak_shaving | round(0) }} W liegt{% endif %}."
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}){% else %}PV-Leistung minus Hausverbrauch während der Nachlaufzeit nicht mehr über der Schwelle {{ schwelle_peak_shaving | round(0) }} W lag (jetzt {{ potential_export | round(0) }} W = Netzeinspeisung {{ real_export | round(0) }} W + Batterieladung {{ (0 - batterie_leistung) | round(0) }} W){% endif %}."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -3842,7 +3905,7 @@ action:
                 {{ log_kopf }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Warmwasser-Ziel von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben (Hysterese {{ var_wp_hysterese_pv }} °C). Anlauf- und Laufzeit-Timer gestartet,
                 {%- if real_export > schwelle_wp_boost %} da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C).
                 {%- else %} da Tagesüberschuss {{ ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(1) }} kWh ≥ Strom je Ladung {{ ww_energie_kwh | round(1) }} kWh, also auch ohne Einspeisespitze genug übrig (Tagesüberschuss = Restüberschuss {{ brutto_ueberschuss_rest | round(1) }} kWh − Puffer {{ puffer_fall_b | round(1) }} kWh − Bedarf der Batterie {{ benoetigt_kwh | round(1) }} kWh × Faktor {{ faktor_fallback }}; Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ [(var_wp_ziel_temp_pv - var_wp_hysterese_pv), var_wp_ziel_temp_normal] | min | round(1) }} °C; Batteriepuffer über der Entlade-Untergrenze {{ ww_puffer_kwh | round(1) }} kWh).
-                {%- endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
+                {%- endif %}
               entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: ENDE (Reset auf Normalwerte)"
@@ -4078,6 +4141,9 @@ action:
               - action: input_boolean.turn_on
                 target:
                   entity_id: !input helper_batterie_heute_voll
+              - action: persistent_notification.dismiss
+                data:
+                  notification_id: "batterie_nicht_voll"
               # 3. Ladestrom direkt setzen + EIN kombinierter Logbuch-Eintrag
               - action: number.set_value
                 target:
@@ -4133,12 +4199,14 @@ action:
               - condition: template
                 value_template: "{{ aktueller_modus != 'fall_b_max' }}"
             then:
+              # Der Prognosegrund steht vor dem Ladefenstergrund: Reicht schon der
+              # ganze Resttag nicht, widerspraeche dessen "bis Tagesende waeren es" den Zahlen.
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ log_kopf }} Prio 2 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% elif prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
-                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.) Voraussichtlich voll {{ fallb_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}
+                    {{ log_kopf }} Prio 2 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% elif ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.) Voraussichtlich voll {{ fallb_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}
                   entity_id: !input helper_logbook_dummy
               # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
               # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
@@ -4273,7 +4341,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}{{ (' ' ~ solcast_log_addon) if solcast_log_addon else '' }}"
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -4387,12 +4455,21 @@ action:
                       {{ update_freigegeben
                          and (target_p5 | round(0)) != (aktueller_ladestrom | round(0)) }}
                 then:
+                  # Das um den Vorlauf gekuerzte Fenster dauert mindestens eine halbe Stunde,
+                  # und plan_voll_um ist sein Ende: Traegt erst das volle Fenster, waere die
+                  # Uhrzeit zu frueh, und der Vorlauf-Satz gilt nur, wo er gerechnet wurde.
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
                       message: >
-                        {{ log_kopf }} Prio 7 (Dynamische Ladung): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt ({{ '%+.0f' | format(diff | float(0)) }} A), da Bedarf {{ benoetigt_kwh | round(1) }} kWh bis zum Ladefensterende mit {{ amp_basis_13 | round(0) }} A + {{ regler_offset_a }} A Regelabweichung gedeckt wird
-                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}, Ladevorlauf {{ ladevorlauf_text }}). Voraussichtlich voll {{ plan_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
+                        {{ log_kopf }} Prio 7 (Dynamische Ladung): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt ({{ '%+.0f' | format(diff | float(0)) }} A), da Bedarf {{ benoetigt_kwh | round(1) }} kWh mit {{ amp_basis_13 | round(0) }} A + {{ regler_offset_a }} A Regelabweichung
+                        {%- set nsf = namespace(h=0.0) %}{% for s in sim_slots_fenster %}{% set nsf.h = nsf.h + (s[1] | float(0)) %}{% endfor %}
+                        {%- set vorlauf_passt = nsf.h - (var_ladevorlauf | float(1.0)) >= 0.5 %}
+                        {%- set fenster_gewinnt = (sim_a_vorlauf | int(0)) == 0 and (sim_a_fenster | int(0)) > 0 %}
+                        {%- if (sim_a_vorlauf | int(0)) > 0 %}{% if vorlauf_passt %} bis {{ ladevorlauf_text }} vor Ende des Ladefensters gedeckt wird{% else %} in der nächsten halben Stunde gedeckt wird, da das restliche Ladefenster von {{ nsf.h | round(1) }} h für den Ladevorlauf {{ ladevorlauf_text }} zu kurz ist{% endif %}
+                        {%- elif fenster_gewinnt %} bis Ende des Ladefensters gedeckt wird{% if vorlauf_passt %}; bis {{ ladevorlauf_text }} davor reicht der Überschuss nicht mehr{% endif %}
+                        {%- else %} gleichmäßig verteilt über {{ verf_stunden | round(1) }} h mit PV-Überschuss gedeckt wird{% endif %}
+                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if not fenster_gewinnt %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

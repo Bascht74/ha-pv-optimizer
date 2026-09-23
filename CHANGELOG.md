@@ -10,7 +10,17 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
-## [V6.15.2] - 2026-09-22
+## [V6.15.2] - 2026-09-24
+
+### Changed
+- The automation keeps 600 run traces instead of 800. Home Assistant holds every stored trace in
+  memory and rewrites all of them at each shutdown, while the diagnostic recording now carries
+  what the deeper trace history was kept for; 600 still reach back more than a day.
+
+### Removed
+- The remark "Prognose unsicher" is gone from the log messages. It appeared whenever P10 and P50 of
+  the next hour lay more than a fifth apart, the normal state of a daytime forecast, so it marked
+  nearly every message and said nothing; the P10/P50 blend already carries that uncertainty.
 
 ### Fixed
 - The heat-pump compressor lock now carries its yes and no as a real boolean instead of the
@@ -19,6 +29,47 @@ Logbuch-Meldung trägt ihn.
   something else. Read as a whole condition — the only place it is read today — both forms
   decide the same way, so nothing behaves differently; the trap is gone for whoever reads the
   value next.
+- The evening diagnosis after a holding night states grid import and the day's highest SOC against
+  the target and no longer calls the planning too bold: by sunset an afternoon hold can have raised
+  the floor register and Solcast has revised today's forecast. Every run line records the refill
+  today's forecast promises (`auffuellung_heute_pct`); the night runs carry the planning's view.
+- The "battery did not reach full" notification replaces the previous one instead of stacking up,
+  and the next top-balancing start removes it. With the discharge planning assigned it names the
+  overdue cell balancing instead of advising to check the design, because what is missing is sun.
+- Hold detection compares the discharge-floor registers in the inverter's own scale and counts a
+  floor as holding only a full 5 % step above the minimum register. The minimum is written with
+  the rounded-up offset between the two SoC scales, which drifts until the next write, so a
+  register at the minimum could count as holding and book a phantom night import.
+- A number below 0.0001 no longer aborts the run: Home Assistant renders it as exponent text, and
+  the next calculation stops before the recording line. The Fall B buffer is rounded to four places;
+  a shadow-BMS offset or free capacity that small counts as zero, since rounding either would move
+  the floor or the charge current.
+- The discharge-floor message quotes the backup reserve's shutdown SOC in the shadow BMS's scale,
+  with the inverter's value beside it, so the reserve arithmetic adds up where a shadow BMS is
+  assigned. The six registers are called discharge floors of the ToU programs, not grid-charging
+  targets, since the blueprint never charges from the grid.
+- The charging lead time counts back from the end of the charging window, where the expected
+  surplus falls below 15 % of the day's peak, not from the last surplus. Its field description and
+  the Fall B and top-up messages now say so, and the top-up message names what the current was
+  sized for: the lead time, the next half hour when the window is too short for it, the window end
+  when the lead time is out of reach (then without an expected full time), or an even spread.
+- When several reasons for Fall B hold at once, its message names the forecast shortfall before
+  the charging-window one. The window reason quotes what the whole remaining day would deliver,
+  which contradicted the numbers whenever the day itself fell short.
+- The end-of-blockade message names the condition that ended it, with the values compared; at the
+  latest start that is the next half hour's need, recoverable charge deficit included, against its
+  surplus minus buffer. The end-of-peak-shaving message names the quantity the timer watches, PV
+  minus house consumption, split into grid export and battery charge; the export alone stays low
+  while the battery absorbs.
+- The sunset and midnight messages say "Sicherheits-Obergrenze" and "gesenkt" when the battery
+  temperature limit sets the night current below the maximum or below the previous setpoint,
+  instead of always claiming to open it to the maximum.
+- The description of "ToU-Programm 1" asks for "Charging" disabled on all six programs, because
+  otherwise the inverter charges from the grid up to the floor the blueprint writes.
+- Field descriptions state what the values do: the helper for today's highest SOC also decides
+  when the discharge planning holds, the target SOC sets the floor as target minus the expected
+  refill, the backup-circuit meter feeds the reserve, and the balancing start voltage explains its
+  default next to the steeper range.
 
 ## [V6.15.1] - 2026-09-21
 
