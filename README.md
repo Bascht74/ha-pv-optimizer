@@ -45,11 +45,11 @@ keine Zusatz-Software.
 selbst aus. In „Ladezustand SOC (%)" gehört der Wert, den der Wechselrichter selbst sieht — er prüft
 seine ToU-Register gegen sein eigenes BMS. Wer dem nicht traut, kann ein „Schatten-BMS" daneben
 stellen, das den Ladestand aus den Lade- und Entladezählern bildet und seinen Nullpunkt setzt,
-sobald die Zellspannung die Batterie als voll ausweist. Das ist eine eigene Automation mit eigenen
-Helfern und nicht Teil dieses Repositories; ihr Sensor kommt in das optionale Feld darunter. Ist es
-gesetzt, rechnet der Blueprint durchgehend in dessen Skala und rechnet die Untergrenze erst beim
-Schreiben in die Skala des Wechselrichters um — der kennt nur sein eigenes BMS. Den Wechselrichter
-stellt in jedem Fall nur dieser Blueprint.
+sobald die Zellspannung die Batterie als voll ausweist. Es läuft außerhalb dieses Repositories,
+etwa auf dem Batteriemonitor selbst (ESPHome); Home Assistant braucht davon nur den Ladestand-Sensor,
+und der kommt in das optionale Feld darunter. Ist es gesetzt, rechnet der Blueprint durchgehend in
+dessen Skala und rechnet die Untergrenze erst beim Schreiben in die Skala des Wechselrichters um — der
+kennt nur sein eigenes BMS. Den Wechselrichter stellt in jedem Fall nur dieser Blueprint.
 
 **Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
 Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
@@ -100,10 +100,10 @@ und `reserve_bis`.
 Jede Entscheidung schreibt eine Logbuch-Meldung nach dem Muster
 
 ```
-[V6.6.0 · 08:30:02] Prio 7 (Dynamische Ladung): Ladestrom von 200 A auf 36 A gesetzt (−164 A),
-da Bedarf 12.6 kWh bis zum Ladefensterende mit 33 A + 3 A Regelabweichung gedeckt wird
-(freie Ladekapazität 12.1 kWh von 20.5 kWh, Nachladebedarf 0.5 kWh für Stunden mit
-Hausverbrauch über PV, Ladevorlauf 1 h).
+[V6.15.2 · 08:30:02] Prio 7 (Dynamische Ladung): Ladestrom von 200 A auf 36 A gesetzt (−164 A),
+da Bedarf 12.6 kWh mit 33 A + 3 A Regelabweichung bis 1 h vor Ende des Ladefensters gedeckt
+wird (freie Ladekapazität 12.1 kWh von 20.5 kWh, Nachladebedarf 0.5 kWh für Stunden mit
+Hausverbrauch über PV).
 ```
 
 Vorn stehen Version und **Lauf-Kennung** (Startzeit des Laufs auf die Sekunde), dann Handlung,
