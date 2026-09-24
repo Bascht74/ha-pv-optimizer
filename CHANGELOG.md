@@ -16,6 +16,12 @@ Logbuch-Meldung trägt ihn.
 - "Entlade-Planung: Zeitraum der Notstromreserve (h)" sets how far the backup reserve looks ahead,
   12 to 72 hours, 48 by default as before. The reserve still ends by itself where the cautious
   forecast covers the backup load again; the horizon only bounds it through long grey stretches.
+- Emergency mode when the inverter reports no state of charge (no number, 0 or above 100). Read
+  as an empty battery, the missing value latched Fall B until sunset and could raise the discharge
+  floor. Now Fall B, the morning blockade, the throttled top-up and every floor write pause; after
+  five minutes without a value "Prio 8 (Notbetrieb ohne Ladestand)" charges by day at full current
+  within the temperature limit, a notification and a log entry every 30 minutes name the outage,
+  and normal regulation resumes as soon as the value returns.
 
 ### Changed
 - The battery temperature limit is computed from the cell temperatures rounded to half a degree

@@ -520,7 +520,8 @@ def test_trigger_untergrenze_verletzt(blueprint, tag):
     assert trig["for"] == "00:10:00"
     soc, tou, p = fake_entity("battery_soc_sensor", "sensor"), fake_entity("wr_tou_1", "number"), fake_entity("battery_power_sensor", "sensor")
     tv = {"tv_battery_soc": soc, "tv_wr_tou_1": tou, "tv_battery_power": p}
-    for soc_w, p_w, erwartet in ((66, 300, True), (66, -500, False), (68, 300, False), (66, 50, False)):
+    # Eine gemeldete 0 ist ein fehlender Ladestand, kein Verstoss (dafuer gibt es den Notbetrieb).
+    for soc_w, p_w, erwartet in ((66, 300, True), (66, -500, False), (68, 300, False), (66, 50, False), (0, 300, False)):
         h = szenario(blueprint, zeit(tag, 2, 0), soc=soc_w, zustands_overrides={**_tou(70), **_leistung(p_w)})
         assert h._aufloesen(trig["value_template"], dict(tv)) is erwartet, (soc_w, p_w)
 
@@ -1502,3 +1503,53 @@ def test_wetter_zeile_haelt_24_stunden_je_quelle_fest(blueprint, tag):
     assert zeile["quellen"]["open_meteo"]["von"].startswith(f"{tag.isoformat()}T14:00") and len(zeile["quellen"]["open_meteo"]["temp"]) == 24
     assert zeile["quellen"]["open_meteo"]["temp"][0] == 11.0 and zeile["quellen"]["open_meteo"]["temp"][-1] == pytest.approx(22.5)
     assert zeile["quellen"]["quelle_2"] == {"von": None, "temp": []}
+
+
+# --------------------------------------------------------------------------
+# Fehlender Ladestand: Die Entlade-Planung rechnete mit 0 % und hoebe die Grenze
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("soc", ["unavailable", "unknown", "0", "101"])
+def test_ohne_ladestand_bleibt_die_untergrenze_stehen(blueprint, tag, soc):
+    """
+    Register 12 (unter dem Minimum), Entladung, Tageshoechststand 95 %: mit 0 % gerechnet
+    klemmte der Plan auf das Minimum 20 und schriebe es (8 Punkte Aenderung, Entladung
+    unter den Tageshoechststand). Ohne Ladestand bleibt das Register stehen.
+    """
+    from conftest import standard_inputs
+    tages_max = standard_inputs(blueprint)["helper_max_soc_heute"]
+    ov = {**_tou(12), **_leistung(800), tages_max: Zustand(tages_max, "95")}
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(14, 5, 5),
+                   zustands_overrides=ov).auswerten(bis="tou_schreiben")
+    assert ctx["soc_fehlt"] is True and ctx["aktueller_soc"] == 0
+    # Jede andere Bedingung des Schreibens ist erfuellt; es sperrt allein der fehlende Wert.
+    assert ctx["entlade_aktiv"] is True and ctx["f_soc"] == 20 and ctx["f_soc"] - ctx["tou_ist"] >= 5
+    assert ctx["halten_fall"] is True and ctx["entlaedt_nachhaltig"] is True
+    assert ctx["tou_schreiben"] is False
+
+
+def test_ohne_ladestand_gilt_auch_das_schatten_bms_nicht(blueprint, tag):
+    """
+    Schatten-BMS 35 %, Wechselrichter ohne Wert: als 0 gerechnet laege der Abstand mit 35
+    Punkten innerhalb der erlaubten 40, und der Versatz -35 verschoebe jedes Register.
+    """
+    ctx = _plan60(blueprint, tag, soc="unavailable", schatten_soc=35.0)
+    assert ctx["schatten_gueltig"] is False and ctx["soc_versatz"] == 0 and ctx["aktueller_soc"] == 0
+    assert ctx["tou_schreiben"] is False
+
+
+def test_meldung_ohne_ladestand_nennt_dauer_und_sensorwert(blueprint, tag):
+    from conftest import fake_entity
+    eid = fake_entity("battery_soc_sensor", "sensor")
+    h = szenario(blueprint, zeit(tag, 12, 0), zustands_overrides={eid: Zustand(eid, "unavailable", {}, zeit(tag, 11, 25))})
+    ctx = h.auswerten(bis="soc_fehlt_text")
+    assert ctx["soc_fehlt_bestaetigt"] is True
+    assert ctx["soc_fehlt_text"] == "der Ladestand (SOC) des Wechselrichters seit 35 Minuten fehlt (Sensor meldet unavailable)"
+
+
+def test_slot_zeile_ohne_ladestand(blueprint, tag):
+    """Der Halbstundenlauf zaehlt ohne Ladestand kein Halten und schreibt keinen Ladestand auf."""
+    h = szenario(blueprint, zeit(tag, 3, 0), soc="unavailable", schatten_soc=35.0,
+                 zustands_overrides=_tou(65), trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    zeile = _slot_zeile(blueprint, h, ctx)
+    assert zeile["soc"] is None and zeile["soc_versatz"] == 0 and zeile["halten"] is False
