@@ -2585,9 +2585,10 @@ action:
            Ladestrom in Prio 7; sonst wuerde ein groesserer Vorlauf zugleich das
            Peak-Shaving-Fenster verkuerzen. #}
         {% set ziel_faktor = faktor_fallback | float(1.2) %}
-        {% set ns2 = namespace(best='', pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
+        {% set ns2 = namespace(best='', kand=0, pu=0.0, pd=0.0, verf=0.0, bedarf=0.0, u_ab_t=0.0, d_ab_t=0.0) %}
         {% for i in range(nutzbar | length) %}
           {% if nutzbar[i][1] %}
+            {% set ns2.kand = ns2.kand + 1 %}
             {# u_ab / d_ab = Brutto-Ueberschuss bzw. aufholbarer Nachladebedarf ab
                diesem Kandidaten T bis Tagesende (Gesamt minus Summe der Slots davor). #}
             {% set u_ab = nsl.u_ges - ns2.pu %}
@@ -2607,7 +2608,7 @@ action:
           {% set ns2.pu = ns2.pu + nutzbar[i][2] %}
           {% set ns2.pd = ns2.pd + (nutzbar[i][3] if i < nsl.last_pos else 0) %}
         {% endfor %}
-        {{ {'t': ns2.best, 'ueber_ges': nsl.u_ges | round(2), 'd_ges': nsl.d_aufholbar | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
+        {{ {'t': ns2.best, 'kand': ns2.kand, 'ueber_ges': nsl.u_ges | round(2), 'd_ges': nsl.d_aufholbar | round(2), 'verf': ns2.verf | round(2), 'bedarf': ns2.bedarf | round(2), 'u_ab_t': ns2.u_ab_t | round(2), 'd_ab_t': ns2.d_ab_t | round(2)} | to_json }}
       # Auswertung (HA kann das to_json-Ergebnis bereits als Dict liefern -> mapping-Check)
       blockade_dyn: "{{ blockade_dyn_json if blockade_dyn_json is mapping else (blockade_dyn_json | from_json) }}"
       blockade_dyn_t: "{{ blockade_dyn.t | default('') }}"
@@ -2621,6 +2622,7 @@ action:
       blockade_dyn_u_ab_t: "{{ blockade_dyn.u_ab_t | default(0) | float(0) }}"
       blockade_dyn_d_ab_t: "{{ blockade_dyn.d_ab_t | default(0) | float(0) }}"
       blockade_dyn_d_ges: "{{ blockade_dyn.d_ges | default(0) | float(0) }}"
+      blockade_dyn_kand: "{{ blockade_dyn.kand | default(0) | int(0) }}"
       # BLOCKADE-LOGIK (dynamisches Ende):
       # Existiert ein T (spaetester Ladebeginn, ab dem noch genug Netto-Energie
       # kommt): blockieren. Das Ziel ist bewusst streng gerechnet, damit die
@@ -2936,7 +2938,9 @@ action:
       # aber nur bis zur Entlade-Untergrenze, darunter entlaedt der Wechselrichter
       # nicht und es entstuende Netzbezug. Nach einem schwachen Vortag sitzt der
       # Ladestand nahe am Register, der Puffer fehlt, und der Boost wartet.
-      ww_puffer_kwh: "{{ [(aktueller_soc - tou_ist) / 100 * batterie_kapazitaet, 0] | max }}"
+      # Rundungsrest der Skalenumrechnung zaehlt als 0, sonst Exponent-Text.
+      ww_puffer_kwh: >-
+        {% set p = (aktueller_soc - tou_ist) / 100 * batterie_kapazitaet %}{{ p if p >= 0.0001 else 0 }}
       # Waehrend der Morgen-Blockade nicht: Ihr Ladebeginn ist mit eigenem Puffer
       # gerechnet, der von einer Warmwasser-Entnahme nichts weiss. Ueber die
       # Einspeisung startet der Boost auch dort weiter, das ist dann Peak-Shaving.
@@ -3348,8 +3352,9 @@ action:
           entity_id: "{{ var_helper_blockade_beendet }}"
       # Nennt die gefallene Teilbedingung von blockade_aktiv. Mindestdauer und
       # Tagesmarker erfuellen hier Modus und Guard, als letzte bleibt das leere T:
-      # Dann deckt schon der fruehste Kandidat, die naechste Halbstunde, den
-      # Bedarf nicht, und die Meldung rechnet genau dessen Vergleich nach.
+      # Entweder beginnt vor der Obergrenze keine Kandidat-Halbstunde mehr, oder
+      # schon die naechste deckt den Bedarf nicht; dann rechnet die Meldung
+      # genau deren Vergleich nach.
       - action: logbook.log
         data:
           name: "PV Optimizer"
@@ -3362,7 +3367,8 @@ action:
             {%- elif not is_day %} die Sonne untergegangen ist.
             {%- elif not vor_blockade_ende %} die eingestellte Obergrenze {{ today_at(var_zeit_blockade | string).strftime('%H:%M') }} Uhr erreicht ist.
             {%- elif not spitze_erwartet %} die Prognose keine Einspeisespitze mehr erwarten lässt: höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle.
-            {%- else %}{% set puffer = [ blockade_dyn_ueber_ges * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}{% set verf = blockade_dyn_ueber_ges - puffer %}{% set bedarf = (faktor_fallback | float(1.2)) * (freie_kwh + blockade_dyn_d_ges) %}{% set nk = 2 if (verf - bedarf) | abs < 0.1 else 1 %} der späteste Ladebeginn erreicht ist: Bedarf {{ bedarf | round(nk) }} kWh > Verfügbar {{ verf | round(nk) }} kWh ab der nächsten Halbstunde (Bedarf = freie Ladekapazität {{ freie_kwh | round(nk) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ges > 0.05 %} + Nachladebedarf {{ blockade_dyn_d_ges | round(nk) }} kWh für Stunden mit Hausverbrauch über PV{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss {{ blockade_dyn_ueber_ges | round(nk) }} kWh − Puffer {{ puffer | round(nk) }} kWh).{% endif %}
+            {%- elif blockade_dyn_kand == 0 %} vor der eingestellten Obergrenze {{ today_at(var_zeit_blockade | string).strftime('%H:%M') }} Uhr keine Halbstunde mehr als Ladebeginn in Frage kommt.
+            {%- else %}{% set puffer = [ blockade_dyn_ueber_ges * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}{% set verf = blockade_dyn_ueber_ges - puffer %}{% set bedarf = (faktor_fallback | float(1.2)) * (freie_kwh + blockade_dyn_d_ges) %}{% set nk = 2 if (verf - bedarf) | abs < 0.1 else 1 %} der späteste Ladebeginn erreicht ist: Bedarf {{ bedarf | round(nk) }} kWh > Verfügbar {{ verf | round(nk) }} kWh ab der nächsten Halbstunde (Bedarf = freie Ladekapazität {{ freie_kwh | round(nk) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ges > 0 %} + Nachladebedarf {{ blockade_dyn_d_ges | round(nk) }} kWh für Stunden mit Hausverbrauch über PV{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss {{ blockade_dyn_ueber_ges | round(nk) }} kWh − Puffer {{ puffer | round(nk) }} kWh).{% endif %}
           entity_id: !input helper_logbook_dummy
 
   - if:
@@ -4456,20 +4462,21 @@ action:
                          and (target_p5 | round(0)) != (aktueller_ladestrom | round(0)) }}
                 then:
                   # Das um den Vorlauf gekuerzte Fenster dauert mindestens eine halbe Stunde,
-                  # und plan_voll_um ist sein Ende: Traegt erst das volle Fenster, waere die
-                  # Uhrzeit zu frueh, und der Vorlauf-Satz gilt nur, wo er gerechnet wurde.
+                  # und plan_voll_um ist sein Ende: Nur wenn es den Bedarf traegt, stimmt die
+                  # Uhrzeit, und der Vorlauf-Satz gilt nur, wo er gerechnet wurde.
                   - action: logbook.log
                     data:
                       name: "PV Optimizer"
                       message: >
-                        {{ log_kopf }} Prio 7 (Dynamische Ladung): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt ({{ '%+.0f' | format(diff | float(0)) }} A), da Bedarf {{ benoetigt_kwh | round(1) }} kWh mit {{ amp_basis_13 | round(0) }} A + {{ regler_offset_a }} A Regelabweichung
+                        {{ log_kopf }} Prio 7 (Dynamische Ladung): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p5 }} A gesetzt ({{ '%+.0f' | format(diff | float(0)) }} A), da Bedarf {{ benoetigt_kwh | round(1) }} kWh mit {{ (sim_ampere_min | int(0)) if (sim_ampere_min | int(0)) > 0 else (amp_basis_13 | float(0) | round(1)) }} A + {{ regler_offset_a }} A Regelabweichung
                         {%- set nsf = namespace(h=0.0) %}{% for s in sim_slots_fenster %}{% set nsf.h = nsf.h + (s[1] | float(0)) %}{% endfor %}
                         {%- set vorlauf_passt = nsf.h - (var_ladevorlauf | float(1.0)) >= 0.5 %}
                         {%- set fenster_gewinnt = (sim_a_vorlauf | int(0)) == 0 and (sim_a_fenster | int(0)) > 0 %}
-                        {%- if (sim_a_vorlauf | int(0)) > 0 %}{% if vorlauf_passt %} bis {{ ladevorlauf_text }} vor Ende des Ladefensters gedeckt wird{% else %} in der nächsten halben Stunde gedeckt wird, da das restliche Ladefenster von {{ nsf.h | round(1) }} h für den Ladevorlauf {{ ladevorlauf_text }} zu kurz ist{% endif %}
+                        {%- set ohne_vorlauf = (var_ladevorlauf | float(1.0)) < 0.01 %}
+                        {%- if (sim_a_vorlauf | int(0)) > 0 %}{% if ohne_vorlauf %} bis Ende des Ladefensters gedeckt wird{% elif vorlauf_passt %} bis {{ ladevorlauf_text }} vor Ende des Ladefensters gedeckt wird{% else %} in der nächsten halben Stunde gedeckt wird, da vom restlichen Ladefenster {{ nsf.h | round(2) }} h nach Abzug des Ladevorlaufs {{ ladevorlauf_text }} keine halbe Stunde bleibt{% endif %}
                         {%- elif fenster_gewinnt %} bis Ende des Ladefensters gedeckt wird{% if vorlauf_passt %}; bis {{ ladevorlauf_text }} davor reicht der Überschuss nicht mehr{% endif %}
-                        {%- else %} gleichmäßig verteilt über {{ verf_stunden | round(1) }} h mit PV-Überschuss gedeckt wird{% endif %}
-                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if not fenster_gewinnt %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
+                        {%- else %} gleichmäßig über {{ verf_stunden | round(1) }} h mit PV-Überschuss verteilt wird{% if sim_slots_fenster | length > 0 and benoetigt_kwh > 0 %}; der Überschuss im Ladefenster deckt ihn auch mit {{ max_ampere | int(140) }} A nicht{% endif %}{% endif %}
+                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if (sim_a_vorlauf | int(0)) > 0 %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

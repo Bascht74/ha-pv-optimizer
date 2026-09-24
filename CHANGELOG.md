@@ -42,25 +42,26 @@ Logbuch-Meldung trägt ihn.
   register at the minimum could count as holding and book a phantom night import.
 - A number below 0.0001 no longer aborts the run: Home Assistant renders it as exponent text, and
   the next calculation stops before the recording line. The Fall B buffer is rounded to four places;
-  a shadow-BMS offset or free capacity that small counts as zero, since rounding either would move
-  the floor or the charge current.
+  a shadow-BMS offset, free capacity or battery buffer above the floor that small counts as zero,
+  since rounding them would move the floor or the charge current.
 - The discharge-floor message quotes the backup reserve's shutdown SOC in the shadow BMS's scale,
   with the inverter's value beside it, so the reserve arithmetic adds up where a shadow BMS is
   assigned. The six registers are called discharge floors of the ToU programs, not grid-charging
   targets, since the blueprint never charges from the grid.
 - The charging lead time counts back from the end of the charging window, where the expected
   surplus falls below 15 % of the day's peak, not from the last surplus. Its field description and
-  the Fall B and top-up messages now say so, and the top-up message names what the current was
-  sized for: the lead time, the next half hour when the window is too short for it, the window end
-  when the lead time is out of reach (then without an expected full time), or an even spread.
+  the Fall B and top-up messages now say so. The top-up message names what the current was sized
+  for (lead time, next half hour, window end, or an even spread when not even the maximum current
+  covers the need) and gives an expected full time only where the lead-time calculation carries it.
 - When several reasons for Fall B hold at once, its message names the forecast shortfall before
   the charging-window one. The window reason quotes what the whole remaining day would deliver,
   which contradicted the numbers whenever the day itself fell short.
 - The end-of-blockade message names the condition that ended it, with the values compared; at the
   latest start that is the next half hour's need, recoverable charge deficit included, against its
-  surplus minus buffer. The end-of-peak-shaving message names the quantity the timer watches, PV
-  minus house consumption, split into grid export and battery charge; the export alone stays low
-  while the battery absorbs.
+  surplus minus buffer, or that no half hour starts before the configured upper limit any more.
+  The end-of-peak-shaving message names the quantity the timer watches, PV minus house
+  consumption, split into grid export and battery charge; the export alone stays low while the
+  battery absorbs.
 - The sunset and midnight messages say "Sicherheits-Obergrenze" and "gesenkt" when the battery
   temperature limit sets the night current below the maximum or below the previous setpoint,
   instead of always claiming to open it to the maximum.

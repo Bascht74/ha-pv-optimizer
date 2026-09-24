@@ -733,6 +733,25 @@ def test_zurueckgerechnetes_register_trifft_den_ladestand_genau(blueprint, tag, 
     assert ctx["aktueller_soc"] == ctx["tou_ist"] and ctx["ww_puffer_kwh"] == 0
 
 
+def test_schatten_unter_halbem_wechselrichterwert_bricht_warmwasser_nicht_ab(blueprint, tag):
+    """
+    Wechselrichter 20 % auf seinem Register 20, Schatten-BMS 5,88 %: Zurueckgerechnet liegt die Untergrenze
+    nur bis auf einen Rundungsrest beim Ladestand (Versatz groesser als der Schattenwert). Der Puffer
+    ueber der Untergrenze ist 0; als Exponent-Text brach ww_tag_start an einem Warmwasser-Tag ab.
+    """
+    from conftest import prognose, standard_inputs
+    zs = dict(_tou(20))
+    # Realitaets-Check kuerzt nicht; Batterie laedt, Einspeisung unter der Boost-Schwelle.
+    for name, wert in (("pv_erzeugung_heute_sensor", "999"), ("battery_power_sensor", "-6000"), ("grid_export_sensor", "-500")):
+        eid = standard_inputs(blueprint)[name]
+        zs[eid] = Zustand(eid, wert)
+    ctx = szenario(blueprint, zeit(tag, 11, 0), soc=20.0, schatten_soc="5.88", forecast=prognose(tag, [8.0] * 20, dt.time(8, 0), p10_anteil=1.0),
+                   profil_kwh=0.2, zustands_overrides=zs,
+                   input_overrides={"schwelle_peak_shaving": 20000, "ww_energie_kwh": 3.0}).auswerten()
+    assert ctx["ww_tag_frei"] is True and ctx["ww_puffer_kwh"] == 0 and ctx["ww_tag_start"] is False
+    assert _exponent_texte(ctx) == []
+
+
 # --------------------------------------------------------------------------
 # Abregelung: erst bei voller Batterie geht Ertrag verloren
 # --------------------------------------------------------------------------

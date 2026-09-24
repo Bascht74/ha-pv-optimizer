@@ -461,8 +461,8 @@ def test_kippstelle_von_fall_b_in_der_kaskade(blueprint, tag, soc, prio, strom, 
 
 @pytest.mark.parametrize("soc, ist, strom, text, voll_um", [
     (94.0, 20, 33, "mit 31 A + 2.0 A Regelabweichung bis Ende des Ladefensters gedeckt wird (freie", False),
-    (96.0, 40, 53, "mit 51 A + 2.0 A Regelabweichung in der nächsten halben Stunde gedeckt wird, da das restliche "
-                   "Ladefenster von 1.2 h für den Ladevorlauf 1 h zu kurz ist (freie", True),
+    (96.0, 40, 53, "mit 51 A + 2.0 A Regelabweichung in der nächsten halben Stunde gedeckt wird, da vom restlichen "
+                   "Ladefenster 1.25 h nach Abzug des Ladevorlaufs 1 h keine halbe Stunde bleibt (freie", True),
 ])
 def test_prio7_meldung_bei_kurzem_ladefenster(blueprint, tag, soc, ist, strom, text, voll_um):
     """
@@ -481,6 +481,42 @@ def test_prio7_meldung_bei_kurzem_ladefenster(blueprint, tag, soc, ist, strom, t
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert text in meldung and "davor reicht" not in meldung, meldung
     assert ("Voraussichtlich voll um 17:15 Uhr." in meldung) is voll_um, meldung
+
+
+def test_prio7_meldung_ohne_ladevorlauf(blueprint, tag):
+    """
+    10:00, 3 kW bis 18:00, Ladevorlauf 0: Das gekuerzte Fenster ist das volle, 16 Halbstunden mit je
+    1,5 - 0,2 = 1,3 kWh. 85 %: 4,82 kWh / (8 h x 0,0512 kWh je A und Stunde) = 11,8 -> 12 A + 2 A.
+    Ohne Vorlauf heisst die Grenze Ende des Ladefensters, nicht "0 h davor".
+    """
+    from conftest import prognose
+    e = fake_entity("pv_erzeugung_heute_sensor", "sensor")  # Realitaets-Check kuerzt nicht
+    h = szenario(blueprint, zeit(tag, 10, 0), soc=85.0, ladestrom=200, forecast=prognose(tag, [3.0] * 20, dt.time(8, 0), p10_anteil=1.0),
+                 profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999")}, input_overrides={"ladevorlauf_stunden": "00:00:00"})
+    alias, aktionen = zweig_und_aktionen(h, blueprint)
+    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [14]
+    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
+    assert "mit 12 A + 2.0 A Regelabweichung bis Ende des Ladefensters gedeckt wird (freie" in meldung, meldung
+    assert "Voraussichtlich voll um 18:00 Uhr." in meldung, meldung
+
+
+def test_prio7_meldung_bei_linearer_verteilung(blueprint, tag):
+    """
+    15:00, 0,6 kW bis 18:00: je Halbstunde 0,3 - 0,2 = 0,1 kWh, sechs Halbstunden 0,6 kWh gegen 1,0 kWh
+    Bedarf (unter der Bagatellgrenze, also kein Fall B). Auch der Hoechststrom deckt ihn nicht, die
+    Simulation findet keinen Strom: 1,0 kWh / 3 h / 51,2 V = 6,5 A + 2 A = 8,5 -> 9 A. Eine Uhrzeit
+    gibt es dann nicht.
+    """
+    from conftest import prognose
+    e = fake_entity("pv_erzeugung_heute_sensor", "sensor")  # Realitaets-Check kuerzt nicht
+    h = szenario(blueprint, zeit(tag, 15, 0), soc=96.9, ladestrom=0, forecast=prognose(tag, [0.6] * 20, dt.time(8, 0), p10_anteil=1.0),
+                 profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999"), **_z(blueprint, "helper_lade_modus", "peak_shaving")})
+    alias, aktionen = zweig_und_aktionen(h, blueprint)
+    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [9]
+    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
+    assert ("mit 6.5 A + 2.0 A Regelabweichung gleichmäßig über 3.0 h mit PV-Überschuss verteilt wird; der Überschuss "
+            "im Ladefenster deckt ihn auch mit 350 A nicht (freie") in meldung, meldung
+    assert "Voraussichtlich voll" not in meldung and "gedeckt wird" not in meldung, meldung
 
 
 # --------------------------------------------------------------------------
@@ -575,6 +611,28 @@ def test_blockade_ende_nennt_beide_vergleichswerte(blueprint, tag):
     assert ("da der späteste Ladebeginn erreicht ist: Bedarf 13.9 kWh > Verfügbar 13.3 kWh ab der nächsten Halbstunde "
             "(Bedarf = freie Ladekapazität 10.3 kWh von 32.2 kWh + Nachladebedarf 1.3 kWh für Stunden mit Hausverbrauch "
             "über PV × Faktor 1.2; Verfügbar = Überschuss 14.3 kWh − Puffer 1.0 kWh).") in meldung, meldung
+
+
+def test_blockade_ende_ohne_halbstunde_vor_der_obergrenze(blueprint, tag):
+    """
+    Obergrenze 13:15, reichlich Sonne: Um 12:50 ist 13:00 der letzte moegliche Ladebeginn und traegt, die
+    Blockade haelt. Um 13:05 beginnt vor 13:15 keine Halbstunde mehr, T ist leer, obwohl der Bedarf
+    gedeckt waere; die Meldung nennt deshalb die fehlende Halbstunde, keinen Vergleich Bedarf > Verfuegbar.
+    """
+    from conftest import prognose
+    fc = prognose(tag, [6.0] * 20, dt.time(8, 0), p10_anteil=1.0)
+    zs = {**_z(blueprint, "helper_lade_modus", "blockade"), **_z(blueprint, "helper_blockade_beendet", "off")}
+    ergebnis = {}
+    for minute in ((12, 50), (13, 5)):
+        h = szenario(blueprint, zeit(tag, *minute), soc=85.0, forecast=fc, profil_kwh=0.2, zustands_overrides=zs,
+                     input_overrides={"schwelle_peak_shaving": 2500, "zeit_blockade_ende": "13:15:00"})
+        ctx = h.auswerten()
+        ergebnis[minute] = (ctx["blockade_dyn_kand"], _blockade_austritt(blueprint, h, ctx))
+    assert ergebnis[(12, 50)][0] == 1 and ergebnis[(12, 50)][1][0] is False
+    kand, (feuert, meldung) = ergebnis[(13, 5)]
+    assert kand == 0 and feuert is True
+    assert "da vor der eingestellten Obergrenze 13:15 Uhr keine Halbstunde mehr als Ladebeginn in Frage kommt." in meldung, meldung
+    assert "Bedarf" not in meldung, meldung
 
 
 def _benachrichtigungs_ids(knoten, dienst):
