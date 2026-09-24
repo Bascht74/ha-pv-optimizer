@@ -238,9 +238,9 @@ def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kw
 
 def reserve_referenz(jetzt: dt.datetime, tage10: dict, profil_wh: list[float], *, kap_kwh: float,
                      shutdown: float = 10.0, eigen_kwh: float = 0.045, eta_pv: float = 0.92,
-                     eta_ac: float = 0.95) -> dict:
+                     eta_ac: float = 0.95, horizont_h: float = 48) -> dict:
     """
-    tage10: Kalenderdatum -> 48 P10-Halbstundenwerte kWh. Ab dem laufenden Slot 96 Halbstunden:
+    tage10: Kalenderdatum -> 48 P10-Halbstundenwerte kWh. Ab dem laufenden Slot horizont_h x 2 Halbstunden:
     Last (Profil in Wh plus Eigenverbrauch, durch den Entlade-Wirkungsgrad) minus P10-PV mal
     Ladewirkungsgrad, kumuliert ohne Klemmung; Reserve = Abschalt-Ladestand plus groesstes
     Zwischenmaximum, bis = Ende des Slots, in dem es erreicht wird.
@@ -248,7 +248,7 @@ def reserve_referenz(jetzt: dt.datetime, tage10: dict, profil_wh: list[float], *
     start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0)
     kum = best = 0.0
     bis = None
-    for k in range(96):
+    for k in range(round(horizont_h * 2)):
         g = start_idx + k
         d, idx = divmod(g, 48)
         pv = tage10.get(jetzt.date() + dt.timedelta(days=d), [0.0] * 48)[idx]

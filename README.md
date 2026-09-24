@@ -91,7 +91,8 @@ ein Teil des Hauses am Notstromausgang, zählt nur dieser Teil. Mit zugewiesenem
 Entlade-Planung eine **Notstromreserve**: Ohne Netz gelten die ToU-Programme nicht, der Deye entlädt im
 Inselbetrieb bis zu seinem „Battery Shutdown SOC“ (Sektion 2, optional; leer: 10 %). Die Untergrenze
 liegt deshalb nie unter diesem Ladestand plus dem größten Defizit der Notstromlast (samt Eigenverbrauch
-des Wechselrichters) gegen die P10-Prognose der nächsten 48 Stunden, auf volle 5 % aufgerundet. Die
+des Wechselrichters) gegen die P10-Prognose über den eingestellten Zeitraum (Sektion 10, Vorgabe 48 Stunden),
+auf volle 5 % aufgerundet. Die
 Meldung der Untergrenze nennt Reserve und Defizit, die Aufzeichnung trägt `reserve_kwh`, `reserve_pct`
 und `reserve_bis`.
 
@@ -100,7 +101,7 @@ und `reserve_bis`.
 Jede Entscheidung schreibt eine Logbuch-Meldung nach dem Muster
 
 ```
-[V6.15.2 · 08:30:02] Prio 7 (Dynamische Ladung): Ladestrom von 200 A auf 36 A gesetzt (−164 A),
+[V6.16.0 · 08:30:02] Prio 7 (Dynamische Ladung): Ladestrom von 200 A auf 36 A gesetzt (−164 A),
 da Bedarf 12.6 kWh mit 33 A + 3 A Regelabweichung bis 1 h vor Ende des Ladefensters gedeckt
 wird (freie Ladekapazität 12.1 kWh von 20.5 kWh, Nachladebedarf 0.5 kWh für Stunden mit
 Hausverbrauch über PV).

@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.15.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.16.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -695,6 +695,12 @@ blueprint:
             Gewicht 0–1 der mittleren Solcast-Prognose (P50) gegenüber der vorsichtigen (P10) in der Entlade-Planung. 0,5 = Mittelwert. Kleiner = vorsichtiger, größer = mutiger; zu hoch gehaltene Batterie speist ein, zu tiefe kauft nachts nach.
           default: 0.5
           selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
+        notstrom_zeitraum_h:
+          name: "Entlade-Planung: Zeitraum der Notstromreserve (h)"
+          description: >-
+            Wie weit die Notstromreserve einen Netzausfall vorausrechnet. Sie endet von selbst, sobald die vorsichtige Prognose die Notstromlast wieder deckt; der Zeitraum begrenzt sie nur in langen grauen Phasen. Größer = mehr Reserve im Winter.
+          default: 48
+          selector: {"number": {"min": 12, "max": 72, "step": 1, "unit_of_measurement": "h"}}
     sec_wallbox:
       name: "11 – Wallbox / evcc (Optional)"
       description: >-
@@ -870,7 +876,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.15.2]"
+      bp_version: "[V6.16.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1514,6 +1520,7 @@ action:
       vertrauen_tag3: !input vertrauen_tag3
       vertrauen_tag4: !input vertrauen_tag4
       nacht_p50_anteil: !input nacht_p50_anteil
+      notstrom_zeitraum_h: !input notstrom_zeitraum_h
       top_balancing_voltage: !input top_balancing_voltage
       var_float_balancing: !input float_voltage_balancing
       var_wp_ziel_temp_pv: !input wp_ziel_temp_pv
@@ -1874,8 +1881,12 @@ action:
         {{ vals | max if vals | length > 0 else 99 }}
 
   - variables:
+      # Auf halbe Grad zur sicheren Seite gerundet: Sonst folgt der Deckel jedem
+      # Messsprung des Fuehlers und schreibt das Register viele Male am Tag.
+      temp_min_stufe: "{{ ((temp_min_live | float(-99)) * 2) | round(0, 'floor') / 2 }}"
+      temp_max_stufe: "{{ ((temp_max_live | float(99)) * 2) | round(0, 'ceil') / 2 }}"
       limit_cold: >
-        {% set t = temp_min_live %}
+        {% set t = temp_min_stufe %}
         {% if t <= 2 %} {{ crate_2_deg }}
         {% elif t < 5 %} {{ crate_2_deg + ((t - 2) * (crate_5_deg - crate_2_deg) / (5 - 2)) }}
         {% elif t < 10 %} {{ crate_5_deg + ((t - 5) * (crate_10_deg - crate_5_deg) / (10 - 5)) }}
@@ -1886,7 +1897,7 @@ action:
         {% endif %}
 
       limit_hot: >
-        {% set t = temp_max_live %}
+        {% set t = temp_max_stufe %}
         {% if t >= 45 %} {{ crate_45_deg }}
         {% elif t > 40 %} {{ crate_40_deg + ((t - 40) * (crate_45_deg - crate_40_deg) / (45 - 40)) }}
         {% else %} {{ crate_40_deg }}
@@ -2354,7 +2365,7 @@ action:
         {{ ('Realitäts-Check kürzt die Prognose auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' % (bis jetzt '
             ~ trend_real_bisher | round(1) ~ ' kWh erzeugt gegenüber ' ~ trend_blend_bisher | round(1) ~ ' kWh erwartet).')
            if (trend_aktiv and (pv_abschlag | float(1.0)) < 1.0) else '' }}
-      temp_log_addon: "{{ ('(Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else '(Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if temperatur_limit_ampere < max_ampere else '' }}"
+      temp_log_addon: "{{ ('(Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else '(Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C' ~ ((', gerechnet mit ' ~ (temp_min_stufe if (limit_cold | float) <= (limit_hot | float) else temp_max_stufe) ~ ' °C') if (temp_min_stufe if (limit_cold | float) <= (limit_hot | float) else temp_max_stufe) != ((temp_min_live if (limit_cold | float) <= (limit_hot | float) else temp_max_live) | float) else '') ~ ', zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if temperatur_limit_ampere < max_ampere else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
       # deshalb hier die Regelabweichung aufschlagen.
@@ -2804,8 +2815,9 @@ action:
       # NOTSTROMRESERVE: Ohne Netz gelten die ToU-Programme nicht, der Wechselrichter
       # entlaedt im Inselbetrieb bis zum Abschalt-Ladestand. Die Reserve ist dieser
       # Ladestand plus das groesste kumulierte Defizit der Notstromlast (mit Eigen-
-      # verbrauch, durch den Entlade-Wirkungsgrad) gegen die P10-Prognose ueber 48 h;
-      # PV-Ueberschuss dazwischen laedt die Batterie und mindert das spaetere Defizit.
+      # verbrauch, durch den Entlade-Wirkungsgrad) gegen die P10-Prognose ueber den
+      # eingestellten Zeitraum; PV-Ueberschuss dazwischen laedt die Batterie und mindert
+      # das spaetere Defizit. Mehr als 72 h reichen die vier Prognosetage nicht.
       notstrom_profil: >
         {% set j = states(var_notstrom_json) if var_notstrom_json != '' else '' %}
         {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
@@ -2817,7 +2829,8 @@ action:
           {% set jetzt = now() %}
           {% set start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0) %}
           {% set mitternacht = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) %}
-          {% for k in range(96) %}
+          {% set n = ([(notstrom_zeitraum_h | float(48)) * 2, 144] | min) | round(0) | int %}
+          {% for k in range(n) %}
             {% set g = start_idx + k %}{% set d = g // 48 %}{% set idx = g % 48 %}
             {% set datum = (jetzt.date() + timedelta(days=d)).isoformat() %}
             {% set tag = solcast_slot_tage | selectattr('datum', 'eq', datum) | list %}
@@ -3081,6 +3094,7 @@ action:
               'vertrauen_tag3': vertrauen_tag3,
               'vertrauen_tag4': vertrauen_tag4,
               'nacht_p50_anteil': nacht_p50_anteil,
+              'notstrom_zeitraum_h': notstrom_zeitraum_h,
               'crate_2_deg': crate_2_deg,
               'crate_5_deg': crate_5_deg,
               'crate_10_deg': crate_10_deg,

@@ -275,6 +275,25 @@ def test_ein_pack_laeuft_ohne_zugewiesenes_bms_2(blueprint, tag):
     assert ctx["temperatur_limit_ampere"] == pytest.approx(220, abs=0.5)
 
 
+@pytest.mark.parametrize("gemessen, stufe, ampere", [(7.4, 7.0, 69), (7.0, 7.0, 69), (6.9, 6.5, 60)])
+def test_temperaturdeckel_rechnet_mit_halben_grad(blueprint, tag, gemessen, stufe, ampere):
+    """
+    Zwei Packs zu 314 Ah, kaelteste Zelle 7,4 Grad: gerechnet wird mit 7,0 Grad, C-Rate 0,05 + 2 x 0,03 = 0,11,
+    x 628 Ah = 69 A (ungerundet 0,122 x 628 = 76,6 -> 77 A). 6,9 -> 6,5 Grad: 0,095 x 628 = 59,7 -> 60 A.
+    Die Meldung nennt den Rechenwert nur, wenn er vom Messwert abweicht.
+    """
+    from conftest import standard_inputs
+    zs = {}
+    for name in ("bms1_temp_min_sensor", "bms2_temp_min_sensor"):
+        eid = standard_inputs(blueprint)[name]
+        zs[eid] = Zustand(eid, str(gemessen))
+    ctx = szenario(blueprint, zeit(tag, 10, 5), zustands_overrides=zs).auswerten(bis="temp_log_addon")
+    assert ctx["temp_min_live"] == pytest.approx(gemessen) and ctx["temp_min_stufe"] == stufe
+    assert ctx["temperatur_limit_ampere"] == ampere
+    assert f"Zelltemperatur min {gemessen} °C" in ctx["temp_log_addon"], ctx["temp_log_addon"]
+    assert ("gerechnet mit 7.0 °C" in ctx["temp_log_addon"]) is (gemessen == 7.4), ctx["temp_log_addon"]
+
+
 @pytest.mark.parametrize("leer, erwartet", [
     ("vmax2_sensor", "BMS 2: höchste Zellspannung (V)"),
     ("bms2_temp_min_sensor", "BMS 2: niedrigste Zelltemperatur"),
@@ -1378,6 +1397,30 @@ def test_notstromreserve_ueberschuss_dazwischen_mindert_das_spaetere_defizit(blu
         assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_plan"]["bis"] == ref["bis"].isoformat(), name
     # Reserve ueber dem Ladestand: halten am Ladestand, wie bei der Planung
     assert ctx["f_roh"] > 85 and ctx["halten_fall"] is True and ctx["f_soc"] == 85
+
+
+@pytest.mark.parametrize("stunden, tage, uhr", [(36, 1, "08:00"), (None, 2, "21:00"), (72, 3, "08:00")])
+def test_notstromreserve_zeitraum_ist_einstellbar(blueprint, tag, stunden, tage, uhr):
+    """
+    Die dunkle Lage von oben (morgen 14, Tag 3 2, Tag 4 40 kWh; Last 0,258 kWh je Slot). Ohne Einstellung
+    gelten 48 h: Maximum am Horizontende, Tag 3 21:00, 10,04 kWh. 36 h enden um 09:00 an Tag 3 bei 5,50 kWh,
+    das Maximum bleibt die erste Nacht, 5,674 kWh bis 08:00. 72 h laufen durch die dritte Nacht:
+    10,04 + 22 x 0,258 = 15,71 kWh bis 08:00 an Tag 4, danach ueberwiegt dessen Sonne.
+    """
+    last = 0.245 / 0.95
+    erste = 22 * last
+    d48 = erste - 20 * (0.7 * 0.92 - last) + 28 * last + 20 * (last - 0.1 * 0.92) + 6 * last
+    kwh = {36: erste, None: d48, 72: d48 + 22 * last}[stunden]
+    j = zeit(tag, 21, 0)
+    fc = prognose_gleichmaessig(tag, 2.0)
+    ctx = szenario(blueprint, j, forecast=fc, prognose_tage_kwh=(14, 2, 40), soc=85.0,
+                   zustands_overrides=_notstrom_zustaende([200] * 48),
+                   input_overrides={} if stunden is None else {"notstrom_zeitraum_h": stunden}).auswerten(bis="reserve_pct")
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(kwh, abs=0.01)
+    assert ctx["reserve_plan"]["bis"].endswith(f"{(tag + dt.timedelta(days=tage)).isoformat()}T{uhr}:00+02:00")
+    ref = reserve_referenz(j, tage_aus_szenario(j, (14, 2, 40), forecast=fc, a=0.0), [200] * 48,
+                           kap_kwh=ctx["batterie_kapazitaet"], horizont_h=stunden or 48)
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_plan"]["bis"] == ref["bis"].isoformat()
 
 
 def test_notstromreserve_am_tag_ohne_defizit(blueprint, tag):

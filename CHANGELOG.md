@@ -10,9 +10,18 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
-## [V6.15.2] - 2026-09-24
+## [V6.16.0] - 2026-09-25
+
+### Added
+- "Entlade-Planung: Zeitraum der Notstromreserve (h)" sets how far the backup reserve looks ahead,
+  12 to 72 hours, 48 by default as before. The reserve still ends by itself where the cautious
+  forecast covers the backup load again; the horizon only bounds it through long grey stretches.
 
 ### Changed
+- The battery temperature limit is computed from the cell temperatures rounded to half a degree
+  toward the safe side, the coldest cell down and the hottest up. Following every jump of the
+  sensor rewrote the charge-current register many times a day for a few amperes each; the message
+  names the rounded value when it differs from the measurement.
 - The automation keeps 600 run traces instead of 800. Home Assistant holds every stored trace in
   memory and rewrites all of them at each shutdown, while the diagnostic recording now carries
   what the deeper trace history was kept for; 600 still reach back more than a day.
@@ -986,8 +995,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.2...HEAD
-[V6.15.2]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...V6.15.2
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.0...HEAD
+[V6.16.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...V6.16.0
 [V6.15.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...V6.15.1
 [V6.15.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...V6.15.0
 [V6.14.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.13.0...V6.14.0
