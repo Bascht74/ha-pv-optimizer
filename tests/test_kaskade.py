@@ -900,3 +900,27 @@ def test_notbetrieb_endet_mit_voller_batterie(blueprint, tag):
           **_z(blueprint, "helper_batterie_heute_voll", "on")}
     h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=50.0, zustands_overrides=ov)
     assert zweig_und_aktionen(h, blueprint) == (None, [])
+
+
+def test_notbetrieb_uebernimmt_von_laufender_lastspitzen_kappung(blueprint, tag):
+    """
+    Faellt der Ladestand bei laufendem Kappungs-Timer aus, gewinnt nicht Prio 5, die ohne
+    Spitze nichts schreibt und den Strom bis zum Ablauf des Timers stehen liesse.
+    """
+    ov = _z(blueprint, "helper_timer_peak", "active")
+    assert zweig(szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=50.0, zustands_overrides=ov), blueprint) == "PRIO 5"
+    h = szenario(blueprint, zeit(tag, 12, 0), soc="unavailable", ladestrom=50.0, zustands_overrides=ov)
+    alias, aktionen = zweig_und_aktionen(h, blueprint)
+    assert alias.startswith("PRIO 8") and schreibt(aktionen) == [h.auswerten()["max_ampere"]]
+
+
+@pytest.mark.parametrize("alias_anfang, bauen", [
+    ("Speicherverlust verbuchen", verlust_verbuchen),
+    ("ToU auf Minimum", tou_minimum),
+    ("Zieht den Peak-Shaving Timer auf", peak_timer_aufziehen),
+])
+def test_ohne_ladestand_ruhen_verbuchung_register_und_timer(blueprint, tag, alias_anfang, bauen):
+    """Dieselben Laeufe wie oben, nur ohne Ladestand: kein Zweig dieser Gruppen greift."""
+    h = bauen(blueprint, tag)
+    h.states.tabelle.update(_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=h.jetzt - dt.timedelta(hours=1)))
+    assert gewinner(h, gruppe(blueprint, alias_anfang)) is None

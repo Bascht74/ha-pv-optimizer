@@ -1543,12 +1543,16 @@ def test_meldung_ohne_ladestand_nennt_dauer_und_sensorwert(blueprint, tag):
     h = szenario(blueprint, zeit(tag, 12, 0), zustands_overrides={eid: Zustand(eid, "unavailable", {}, zeit(tag, 11, 25))})
     ctx = h.auswerten(bis="soc_fehlt_text")
     assert ctx["soc_fehlt_bestaetigt"] is True
-    assert ctx["soc_fehlt_text"] == "der Ladestand (SOC) des Wechselrichters seit 35 Minuten fehlt (Sensor meldet unavailable)"
+    assert ctx["soc_fehlt_text"] == "der Ladestand (SOC) des Wechselrichters seit 35 Minuten fehlt (Wartezeit 5 Minuten, Sensor meldet unavailable)"
 
 
-def test_slot_zeile_ohne_ladestand(blueprint, tag):
-    """Der Halbstundenlauf zaehlt ohne Ladestand kein Halten und schreibt keinen Ladestand auf."""
-    h = szenario(blueprint, zeit(tag, 3, 0), soc="unavailable", schatten_soc=35.0,
+@pytest.mark.parametrize("soc", ["unavailable", "0"])
+def test_slot_zeile_ohne_ladestand(blueprint, tag, soc):
+    """
+    Der Halbstundenlauf zaehlt ohne Ladestand kein Halten und schreibt keinen Ladestand auf. Eine
+    gemeldete 0 laege sonst unter dem Register und zaehlte als Halten.
+    """
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=soc, schatten_soc=35.0,
                  zustands_overrides=_tou(65), trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
     zeile = _slot_zeile(blueprint, h, ctx)
