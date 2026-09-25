@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.15.2]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.16.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -695,6 +695,12 @@ blueprint:
             Gewicht 0–1 der mittleren Solcast-Prognose (P50) gegenüber der vorsichtigen (P10) in der Entlade-Planung. 0,5 = Mittelwert. Kleiner = vorsichtiger, größer = mutiger; zu hoch gehaltene Batterie speist ein, zu tiefe kauft nachts nach.
           default: 0.5
           selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.05}}
+        notstrom_zeitraum_h:
+          name: "Entlade-Planung: Zeitraum der Notstromreserve (h)"
+          description: >-
+            Wie weit die Notstromreserve einen Netzausfall vorausrechnet. Sie endet von selbst, sobald die vorsichtige Prognose die Notstromlast wieder deckt; der Zeitraum begrenzt sie nur in langen grauen Phasen. Größer = mehr Reserve im Winter.
+          default: 48
+          selector: {"number": {"min": 12, "max": 72, "step": 1, "unit_of_measurement": "h"}}
     sec_wallbox:
       name: "11 – Wallbox / evcc (Optional)"
       description: >-
@@ -755,7 +761,8 @@ trigger:
   - alias: "Trigger: Entlade-Untergrenze wird nicht gehalten (10 Min entprellt)"
     platform: template
     value_template: >
-      {{ (states(tv_battery_soc) | float(100)) < (states(tv_wr_tou_1) | float(0)) - 3
+      {% set soc = states(tv_battery_soc) | float(100) %}
+      {{ soc > 0 and soc < (states(tv_wr_tou_1) | float(0)) - 3
          and (states(tv_battery_power) | float(0)) > 100 }}
     for: "00:10:00"
     id: untergrenze_verletzt
@@ -870,7 +877,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.15.2]"
+      bp_version: "[V6.16.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1361,11 +1368,12 @@ action:
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
           # soc_versatz wie in der Hauptkette nachgebildet, weil die hier nicht
           # laeuft (samt Nullschwelle gegen den Exponent-Text).
+          hb_soc_roh: "{{ states(hb_soc) | float(-1) }}"
+          hb_soc_gueltig: "{{ hb_soc_roh > 0 and hb_soc_roh <= 100 }}"
           hb_versatz: >
             {% set r = (states(hb_schatten) | float(-1)) if hb_schatten != '' else -1 %}
-            {% set dey = states(hb_soc) | float(0) %}
-            {% set v = dey - r %}
-            {{ v if (r > 0 and r <= 100 and (v | abs) <= versatz_max and (v | abs) >= 0.0001) else 0 }}
+            {% set v = hb_soc_roh - r %}
+            {{ v if (hb_soc_gueltig and r > 0 and r <= 100 and (v | abs) <= versatz_max and (v | abs) >= 0.0001) else 0 }}
           hb_tou_soll: "{{ hb_tou_ist - hb_versatz }}"
           # Das Minimum so, wie die Kette es ins Register schreibt; verglichen wird in
           # der Skala des Registers. Zurueckgerechnet traegt ein Minimum-Register den
@@ -1378,9 +1386,9 @@ action:
           # ohne zugewiesenen Helfer festhaelt. Der Ladestand wird gegen das rohe
           # Register geprueft - beide in der Skala des Wechselrichters.
           hb_lage: >
-            {{ hb_planung != '' and not is_state('sun.sun', 'above_horizon')
+            {{ hb_planung != '' and not is_state('sun.sun', 'above_horizon') and hb_soc_gueltig
                and hb_tou_ist - hb_min_register >= 5
-               and (states(hb_soc) | float(100)) <= hb_tou_ist + 1 }}
+               and hb_soc_roh <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
           hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
           hb_zurueck_kwh: "{{ [(hb_tou_ist - hb_min_register) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
@@ -1398,7 +1406,7 @@ action:
               message: >-
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
                     'slot_kwh': last_half_hour_kwh | round(3), 'wallbox_kwh': wallbox_slot_kwh | round(3), 'notstrom_kwh': np_kwh, 'halten': hb_lage,
-                    'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': states(hb_soc) | float(0),
+                    'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': hb_soc_roh if hb_soc_gueltig else none,
                     'soc_versatz': hb_versatz | round(2),
                     'tou_ist': hb_tou_soll | round(2), 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
                     'halten_bezug_kwh': (states(hb_helfer) | float(0)) if hb_helfer != '' else none} | to_json }}
@@ -1514,6 +1522,7 @@ action:
       vertrauen_tag3: !input vertrauen_tag3
       vertrauen_tag4: !input vertrauen_tag4
       nacht_p50_anteil: !input nacht_p50_anteil
+      notstrom_zeitraum_h: !input notstrom_zeitraum_h
       top_balancing_voltage: !input top_balancing_voltage
       var_float_balancing: !input float_voltage_balancing
       var_wp_ziel_temp_pv: !input wp_ziel_temp_pv
@@ -1633,13 +1642,19 @@ action:
       # eigenes BMS, ein Schatten-BMS misst genauer. Gerechnet wird durchgehend
       # in der Schatten-Skala; nur beim Schreiben und Zuruecklesen der Register
       # kommt soc_versatz dazu. Ohne Schatten-Sensor ist er 0.
-      soc_deye: "{{ states(var_battery_soc) | float(0) }}"
+      # FEHLENDER LADESTAND: Eine 0 oder ein Wert ueber 100 ist kein Messwert.
+      # Als 0 gerechnet raste Fall B fuer den Tag ein und die Entlade-Planung
+      # hoebe die Untergrenze; deshalb sperrt soc_fehlt beides, und Prio 8 laedt
+      # bis zur Rueckkehr des Werts mit vollem Strom.
+      soc_roh: "{{ states(var_battery_soc) | float(-1) }}"
+      soc_fehlt: "{{ soc_roh <= 0 or soc_roh > 100 }}"
+      soc_deye: "{{ 0 if soc_fehlt else soc_roh }}"
       schatten_roh: "{{ (states(var_schatten_soc) | float(-1)) if var_schatten_soc != '' else -1 }}"
       # Ein ausgefallener Sensor ergaebe ueber float() eine 0 und zoege die
       # Untergrenze in den Keller; eine zu grosse Abweichung heisst, dass eines
       # der beiden BMS falsch misst. Beides faellt auf den Wert zurueck, den der
-      # Wechselrichter ohnehin durchsetzt.
-      schatten_gueltig: "{{ schatten_roh > 0 and schatten_roh <= 100 and ((soc_deye - schatten_roh) | abs) <= versatz_max }}"
+      # Wechselrichter ohnehin durchsetzt. Ohne dessen Wert fehlt der Versatz.
+      schatten_gueltig: "{{ not soc_fehlt and schatten_roh > 0 and schatten_roh <= 100 and ((soc_deye - schatten_roh) | abs) <= versatz_max }}"
       aktueller_soc: "{{ schatten_roh if schatten_gueltig else soc_deye }}"
       # Unter 0,0001 Punkten zaehlt der Versatz als 0: so kleine Zahlen rendert HA
       # als Exponent-Text, und die naechste Rechnung bricht den Lauf ab. Runden
@@ -1761,6 +1776,17 @@ action:
       # Packs die Zeitschwelle ueberschritten haben.
       packs_offline_bestaetigt: >
         {{ packs_online == 0 and pack1_lange_offline and pack2_lange_offline and pack3_lange_offline }}
+      # Gleiche Wartezeit fuer den Ladestand: Ein Aussetzer von Sekunden soll den
+      # Strom nicht fuer einen Lauf aufreissen. Die Sperren greifen sofort.
+      # Springt der Sensor schneller zwischen ungueltigen Werten, laeuft die
+      # Wartezeit jedes Mal neu, und der Strom bleibt so lange stehen.
+      soc_fehlt_bestaetigt: >
+        {{ soc_fehlt and (states[var_battery_soc] is none
+           or (as_timestamp(now()) - as_timestamp(states[var_battery_soc].last_changed)) > offline_debounce_s) }}
+      soc_fehlt_text: >-
+        {% set st = states[var_battery_soc] %}
+        {%- if st is none %}der Sensor für den Ladestand (SOC) nicht existiert
+        {%- else %}der Ladestand (SOC) des Wechselrichters seit {{ ((as_timestamp(now()) - as_timestamp(st.last_changed)) / 60) | round(0) | int }} Minuten fehlt (Wartezeit {{ (offline_debounce_s / 60) | round(0) | int }} Minuten, Sensor meldet {{ st.state }}){% endif %}
 
       # Kapazitaet ist eine physische Groesse: ein Pack, dessen BMS gerade nicht
       # meldet, ist nicht ausgebaut. packs_online ist ungefiltert - ein Aussetzer
@@ -1874,8 +1900,12 @@ action:
         {{ vals | max if vals | length > 0 else 99 }}
 
   - variables:
+      # Auf halbe Grad zur sicheren Seite gerundet: Sonst folgt der Deckel jedem
+      # Messsprung des Fuehlers und schreibt das Register viele Male am Tag.
+      temp_min_stufe: "{{ ((temp_min_live | float(-99)) * 2) | round(0, 'floor') / 2 }}"
+      temp_max_stufe: "{{ ((temp_max_live | float(99)) * 2) | round(0, 'ceil') / 2 }}"
       limit_cold: >
-        {% set t = temp_min_live %}
+        {% set t = temp_min_stufe %}
         {% if t <= 2 %} {{ crate_2_deg }}
         {% elif t < 5 %} {{ crate_2_deg + ((t - 2) * (crate_5_deg - crate_2_deg) / (5 - 2)) }}
         {% elif t < 10 %} {{ crate_5_deg + ((t - 5) * (crate_10_deg - crate_5_deg) / (10 - 5)) }}
@@ -1886,7 +1916,7 @@ action:
         {% endif %}
 
       limit_hot: >
-        {% set t = temp_max_live %}
+        {% set t = temp_max_stufe %}
         {% if t >= 45 %} {{ crate_45_deg }}
         {% elif t > 40 %} {{ crate_40_deg + ((t - 40) * (crate_45_deg - crate_40_deg) / (45 - 40)) }}
         {% else %} {{ crate_40_deg }}
@@ -2354,7 +2384,7 @@ action:
         {{ ('Realitäts-Check kürzt die Prognose auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' % (bis jetzt '
             ~ trend_real_bisher | round(1) ~ ' kWh erzeugt gegenüber ' ~ trend_blend_bisher | round(1) ~ ' kWh erwartet).')
            if (trend_aktiv and (pv_abschlag | float(1.0)) < 1.0) else '' }}
-      temp_log_addon: "{{ ('(Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else '(Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C, zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if temperatur_limit_ampere < max_ampere else '' }}"
+      temp_log_addon: "{{ ('(Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else '(Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C' ~ ((', gerechnet mit ' ~ (temp_min_stufe if (limit_cold | float) <= (limit_hot | float) else temp_max_stufe) ~ ' °C') if (temp_min_stufe if (limit_cold | float) <= (limit_hot | float) else temp_max_stufe) != ((temp_min_live if (limit_cold | float) <= (limit_hot | float) else temp_max_live) | float) else '') ~ ', zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if temperatur_limit_ampere < max_ampere else '' }}"
       target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # Der Zellausgleich braucht den kleinen Reststrom WIRKLICH an der Batterie,
       # deshalb hier die Regelabweichung aufschlagen.
@@ -2638,7 +2668,8 @@ action:
       peak_timer_heute: >
         {% set t = states[var_timer_peak] if var_timer_peak != '' else none %}
         {{ t is not none and t.last_changed is not none and (t.last_changed | as_local).date() == now().date() }}
-      blockade_ohne_spitze: "{{ (blockade_heute_beendet or aktueller_modus == 'blockade') and not peak_timer_heute }}"
+      # Ohne Ladestand startet der Timer nicht, sein Fehlen belegt dann nichts.
+      blockade_ohne_spitze: "{{ (blockade_heute_beendet or aktueller_modus == 'blockade') and not peak_timer_heute and not soc_fehlt }}"
       # ABREGELUNG: Oberhalb der Peak-Schwelle regelt der Wechselrichter ab,
       # sobald er den Strom nicht mehr in die Batterie leiten kann. Genau die
       # Gegenbedingung zum Peak-Shaving-Zweig, der bei voller Batterie nicht
@@ -2665,7 +2696,7 @@ action:
       # Check die tatsaechliche Erzeugung nach - bei verschneiten Modulen bleibt
       # es leer und die Blockade startet nicht.
       blockade_aktiv: >
-        {{ is_day and aktueller_soc < 99 and vor_blockade_ende
+        {{ is_day and not soc_fehlt and aktueller_soc < 99 and vor_blockade_ende
            and spitze_erwartet
            and not packs_offline_bestaetigt
            and states(var_timer_peak) != 'active'
@@ -2804,8 +2835,9 @@ action:
       # NOTSTROMRESERVE: Ohne Netz gelten die ToU-Programme nicht, der Wechselrichter
       # entlaedt im Inselbetrieb bis zum Abschalt-Ladestand. Die Reserve ist dieser
       # Ladestand plus das groesste kumulierte Defizit der Notstromlast (mit Eigen-
-      # verbrauch, durch den Entlade-Wirkungsgrad) gegen die P10-Prognose ueber 48 h;
-      # PV-Ueberschuss dazwischen laedt die Batterie und mindert das spaetere Defizit.
+      # verbrauch, durch den Entlade-Wirkungsgrad) gegen die P10-Prognose ueber den
+      # eingestellten Zeitraum; PV-Ueberschuss dazwischen laedt die Batterie und mindert
+      # das spaetere Defizit. Mehr als 72 h reichen die vier Prognosetage nicht.
       notstrom_profil: >
         {% set j = states(var_notstrom_json) if var_notstrom_json != '' else '' %}
         {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
@@ -2817,7 +2849,8 @@ action:
           {% set jetzt = now() %}
           {% set start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0) %}
           {% set mitternacht = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) %}
-          {% for k in range(96) %}
+          {% set n = ([(notstrom_zeitraum_h | float(48)) * 2, 144] | min) | round(0) | int %}
+          {% for k in range(n) %}
             {% set g = start_idx + k %}{% set d = g // 48 %}{% set idx = g % 48 %}
             {% set datum = (jetzt.date() + timedelta(days=d)).isoformat() %}
             {% set tag = solcast_slot_tage | selectattr('datum', 'eq', datum) | list %}
@@ -2871,7 +2904,7 @@ action:
       tages_max_soc: "{{ (states(var_max_soc_heute) | float(0)) if var_max_soc_heute != '' else aktueller_soc }}"
       entlaedt_nachhaltig: "{{ batterie_leistung > 100 and aktueller_soc < tages_max_soc - 0.5 }}"
       tou_schreiben: >
-        {{ entlade_aktiv
+        {{ entlade_aktiv and not soc_fehlt
            and ((f_soc - tou_ist) | abs) >= 5
            and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf
            and (not halten_fall or entlaedt_nachhaltig)
@@ -2906,7 +2939,7 @@ action:
       # der Untergrenze, Register eine volle 5-%-Stufe ueber dem Minimum-Register
       # (Begruendung beim Halbstundenlauf, hb_min_register).
       halten_kwh: "{{ states(var_halten_bezug) | float(0) if var_halten_bezug != '' else 0 }}"
-      halten_aktiv: "{{ entlade_aktiv and not is_day and tou_ist_register - tou_minimum_wert >= 5 and aktueller_soc <= tou_ist + 1 }}"
+      halten_aktiv: "{{ entlade_aktiv and not soc_fehlt and not is_day and tou_ist_register - tou_minimum_wert >= 5 and aktueller_soc <= tou_ist + 1 }}"
       zurueckgehalten_kwh: "{{ [(tou_ist_register - tou_minimum_wert) / 100 * batterie_kapazitaet, 0] | max }}"
       export_heute_kwh: "{{ states(var_grid_export_kwh) | float(0) if var_grid_export_kwh != '' else 0 }}"
       # Unnoetig gehalten wurde nur, was nachts bezogen UND tags eingespeist wurde.
@@ -3081,6 +3114,7 @@ action:
               'vertrauen_tag3': vertrauen_tag3,
               'vertrauen_tag4': vertrauen_tag4,
               'nacht_p50_anteil': nacht_p50_anteil,
+              'notstrom_zeitraum_h': notstrom_zeitraum_h,
               'crate_2_deg': crate_2_deg,
               'crate_5_deg': crate_5_deg,
               'crate_10_deg': crate_10_deg,
@@ -3105,7 +3139,7 @@ action:
               'ziel_soc_eff': ziel_soc_eff, 'zellausgleich_faellig': zellausgleich_faellig, 'tage_seit_voll': tage_seit_voll,
               'f_ziel': f_ziel | round(1), 'f_spill': f_spill | round(1), 'f_roh': f_roh | round(1), 'f_soc': f_soc,
               'shutdown_soc': shutdown_soc, 'reserve_kwh': reserve_plan.kwh, 'reserve_bis': reserve_plan.bis, 'reserve_pct': reserve_pct,
-              'soc_deye': soc_deye, 'schatten_gueltig': schatten_gueltig, 'soc_versatz': soc_versatz | round(2),
+              'soc_deye': soc_deye, 'soc_fehlt': soc_fehlt, 'schatten_gueltig': schatten_gueltig, 'soc_versatz': soc_versatz | round(2),
               'tou_ist': tou_ist, 'tou_ist_register': tou_ist_register, 'tou_schreibwert': tou_schreibwert,
               'tou_schreiben': tou_schreiben,
               'halten_aktiv': halten_aktiv, 'halten_kwh': halten_kwh, 'zurueckgehalten_kwh': zurueckgehalten_kwh | round(2),
@@ -3155,7 +3189,7 @@ action:
     then:
       - if:
           - condition: template
-            value_template: "{{ var_optimizer_url != '' and aufz_aktiv }}"
+            value_template: "{{ var_optimizer_url != '' and aufz_aktiv and not soc_fehlt }}"
         then:
           - variables:
               opt_strategie: attenuate_feedin_peaks
@@ -3274,7 +3308,7 @@ action:
   - if:
       - condition: template
         value_template: >
-          {{ var_schatten_soc != '' and not schatten_gueltig
+          {{ var_schatten_soc != '' and not schatten_gueltig and not soc_fehlt
              and trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}
     then:
       - action: logbook.log
@@ -3345,7 +3379,7 @@ action:
         value_template: >
           {{ var_helper_blockade_beendet != '' and
              aktueller_modus == 'blockade' and not blockade_aktiv
-             and not blockade_heute_beendet }}
+             and not blockade_heute_beendet and not soc_fehlt }}
     then:
       - action: input_boolean.turn_on
         target:
@@ -3407,6 +3441,30 @@ action:
       - action: persistent_notification.dismiss
         data:
           notification_id: "bms_offline_warning"
+
+  # LADESTAND FEHLT: gleiches Muster wie die BMS-Warnung.
+  - if:
+      - condition: template
+        value_template: "{{ soc_fehlt_bestaetigt }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: "soc_fehlt_warning"
+          title: "⚠️ PV Optimizer Warnung"
+          message: "{{ log_kopf }} WARNUNG: Notbetrieb, da {{ soc_fehlt_text }}. Tagsüber wird mit vollem Strom geladen, begrenzt nur durch die Sicherheits-Obergrenze der Batterietemperatur; Fall B und Morgen-Blockade ruhen, die Entlade-Untergrenze bleibt stehen, bis der Wert zurück ist."
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ log_kopf }} Notbetrieb: Entlade-Untergrenze bleibt auf {{ tou_ist_register | round(0) }} %{% if is_day and not heute_schon_voll %}, tagsüber Laden mit {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %}{% endif %}, da {{ soc_fehlt_text }}. (Informativ: Meldung erscheint höchstens alle 30 Minuten.)"
+              entity_id: !input helper_logbook_dummy
+    else:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: "soc_fehlt_warning"
 
   - choose:
       - alias: "Tägliches Aufräumen & Sanity Checks"
@@ -3507,7 +3565,8 @@ action:
                   max_soc_tag: "{{ states(var_max_soc_heute) | float(0) }}"
                   missing_capacity_at_max_kwh: "{{ batterie_kapazitaet * (1 - (max_soc_tag / 100)) }}"
                   exported_kwh: "{{ states(var_grid_export_kwh) | float(0) }}"
-                  kandidat_kwh: "{{ [missing_capacity_at_max_kwh, exported_kwh] | min }}"
+                  # Ohne Ladestand steht der Tageshoechststand still: kein Kandidat.
+                  kandidat_kwh: "{{ 0 if soc_fehlt else ([missing_capacity_at_max_kwh, exported_kwh] | min) }}"
               - action: input_number.set_value
                 target:
                   entity_id: "{{ var_offener_verlust }}"
@@ -3663,7 +3722,7 @@ action:
       - alias: "Speicherverlust verbuchen (wenn Batterie unter Reserve fiel)"
         conditions:
           - condition: template
-            value_template: "{{ var_offener_verlust is string and var_offener_verlust | length > 0 and (states(var_offener_verlust) | float(0)) > 0.1 and var_speicherverlust is string and var_speicherverlust | length > 0 and aktueller_soc <= tou_ist }}"
+            value_template: "{{ var_offener_verlust is string and var_offener_verlust | length > 0 and (states(var_offener_verlust) | float(0)) > 0.1 and var_speicherverlust is string and var_speicherverlust | length > 0 and not soc_fehlt and aktueller_soc <= tou_ist }}"
         sequence:
           - variables:
               kandidat_kwh: "{{ states(var_offener_verlust) | float(0) }}"
@@ -3694,7 +3753,7 @@ action:
           - condition: template
             # Ein ganzer Punkt Toleranz: Die Register sind ganzzahlig, aber
             # zurueckgerechnet traegt jedes den Versatz als Nachkommastelle.
-            value_template: "{{ not entlade_aktiv and (((tou_ist - (default_tou_soc | float(20))) | abs) >= 1 or ((tou_max_ist - (default_tou_soc | float(20))) | abs) >= 1) }}"
+            value_template: "{{ not entlade_aktiv and not soc_fehlt and (((tou_ist - (default_tou_soc | float(20))) | abs) >= 1 or ((tou_max_ist - (default_tou_soc | float(20))) | abs) >= 1) }}"
         sequence:
           - action: number.set_value
             target:
@@ -3741,7 +3800,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}){% else %}PV-Leistung minus Hausverbrauch während der Nachlaufzeit nicht mehr über der Schwelle {{ schwelle_peak_shaving | round(0) }} W lag (jetzt {{ potential_export | round(0) }} W = Netzeinspeisung {{ real_export | round(0) }} W + Batterieladung {{ (0 - batterie_leistung) | round(0) }} W){% endif %}."
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving) beendet: Nachlaufzeit abgelaufen, {% if soc_fehlt %}Notbetrieb übernimmt, da {{ soc_fehlt_text }}{% else %}zurück zum Normalbetrieb, da {% if aktueller_soc >= 99 or heute_schon_voll %}die Batterie voll ist und den Überschuss nicht mehr aufnehmen kann (Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}){% else %}PV-Leistung minus Hausverbrauch während der Nachlaufzeit nicht mehr über der Schwelle {{ schwelle_peak_shaving | round(0) }} W lag (jetzt {{ potential_export | round(0) }} W = Netzeinspeisung {{ real_export | round(0) }} W + Batterieladung {{ (0 - batterie_leistung) | round(0) }} W){% endif %}{% endif %}."
                   entity_id: !input helper_logbook_dummy
 
   - choose:
@@ -3763,7 +3822,7 @@ action:
               {{ (real_export > schwelle_peak_shaving
                   or (states(var_timer_peak) == 'active'
                       and potential_export > schwelle_peak_shaving))
-                 and aktueller_soc < 99 and not heute_schon_voll
+                 and not soc_fehlt and aktueller_soc < 99 and not heute_schon_voll
                  and not wp_sperre_aktiv
                  and not wp_boost_startet_gleich
                  and trigger.id != 'export_wp_boost_schwelle' }}
@@ -4078,9 +4137,9 @@ action:
           message: >-
             {{ log_kopf }} Abregelung: Wechselrichter regelt ab, Überschuss über der Schwelle geht verloren,
             da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W
-            und die Batterie voll ist. (Über der Schwelle {{ (real_export - schwelle_peak_shaving) | round(0) }} W;
-            Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}, freie Ladekapazität {{ freie_kwh | round(1) }} kWh
-            von {{ batterie_kapazitaet | round(1) }} kWh)
+            und die Batterie voll ist. (Über der Schwelle {{ (real_export - schwelle_peak_shaving) | round(0) }} W
+            {%- if not soc_fehlt %}; Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}, freie Ladekapazität {{ freie_kwh | round(1) }} kWh
+            von {{ batterie_kapazitaet | round(1) }} kWh{% endif %})
           entity_id: !input helper_logbook_dummy
 
 
@@ -4168,7 +4227,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 1 (Zellausgleich / Top-Balancing START): Batterie als voll markiert, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gedrosselt, Nachlauf-Timer gestartet, da {{ balancing_grund }} (Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %})."
+                  message: "{{ log_kopf }} Prio 1 (Zellausgleich / Top-Balancing START): Batterie als voll markiert, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gedrosselt, Nachlauf-Timer gestartet, da {{ balancing_grund }}{% if not soc_fehlt %} (Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}){% endif %}."
                   entity_id: !input helper_logbook_dummy
 
           # Spätere Register-Korrektur (nur wenn NICHT gerade gestartet, sonst doppelt)
@@ -4179,7 +4238,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 1 (Zellausgleich / Top-Balancing) Sicherheitskorrektur: Sollwert erneut von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gesetzt, da der Wechselrichter den Ladestrom nicht übernommen hat (ist {{ aktueller_ladestrom | round(0) }} A ≠ Soll {{ target_p1 | round(0) }} A, Zellausgleich läuft, da {{ balancing_grund }}. Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %})."
+                  message: "{{ log_kopf }} Prio 1 (Zellausgleich / Top-Balancing) Sicherheitskorrektur: Sollwert erneut von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p1 }} A gesetzt, da der Wechselrichter den Ladestrom nicht übernommen hat (ist {{ aktueller_ladestrom | round(0) }} A ≠ Soll {{ target_p1 | round(0) }} A, Zellausgleich läuft, da {{ balancing_grund }}{% if not soc_fehlt %}. Informativ: Ladestand (SOC) {{ aktueller_soc | round(0) }} %{% if soc_versatz %} laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %{% endif %}{% endif %})."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -4199,7 +4258,7 @@ action:
       - alias: "PRIO 2: FALL (B) - ZEIT REICHT NICHT (MAX)"
         conditions:
           - condition: template
-            value_template: "{{ is_day and aktueller_soc < 97 and fall_b_aktiv }}"
+            value_template: "{{ is_day and not soc_fehlt and aktueller_soc < 97 and fall_b_aktiv }}"
         sequence:
           - if:
               - condition: template
@@ -4325,7 +4384,7 @@ action:
           # Batterie (>= 99% oder heute-voll-Marker) ist Shaven physikalisch
           # wirkungslos und würde nur die Balancing-Bremse aushebeln.
           - condition: template
-            value_template: "{{ aktueller_soc < 99 and not heute_schon_voll }}"
+            value_template: "{{ not soc_fehlt and aktueller_soc < 99 and not heute_schon_voll }}"
         sequence:
           # Der WP-Laufzeit-Timer wird hier NICHT abgebrochen - das beendet der
           # Block "WP-LAUFZEIT BEENDEN" gezielt.
@@ -4403,7 +4462,7 @@ action:
       - alias: "PRIO 7: DYNAMISCHES FERTIGLADEN (ZEIT-BASIERT)"
         conditions:
           - condition: template
-            value_template: "{{ is_day and aktueller_soc < 97 }}"
+            value_template: "{{ is_day and not soc_fehlt and aktueller_soc < 97 }}"
           # Solange die Waermepumpen-Laufzeit laeuft, regelt Prio 7 NICHT: Der
           # Ueberschuss gehoert der Waermepumpe. Beendet wird die Laufzeit
           # gezielt (siehe Block "WP-LAUFZEIT BEENDEN"), nicht ueber diese
@@ -4495,6 +4554,29 @@ action:
                       entity_id: "{{ var_lade_modus }}"
                     data:
                       option: "normal"
+
+      # Ohne Ladestand rechnen Fall B, Morgen-Blockade und Prio 7 mit leerer
+      # Batterie und sind gesperrt; bis der Wert zurueck ist, laedt dieser Zweig
+      # mit vollem Strom. Den Modus fasst er nicht an, sonst raste Fall B ein.
+      - alias: "PRIO 8: NOTBETRIEB OHNE LADESTAND"
+        conditions:
+          - condition: template
+            value_template: "{{ is_day and soc_fehlt_bestaetigt and not heute_schon_voll }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) }}"
+            then:
+              - action: logbook.log
+                data:
+                  name: "PV Optimizer"
+                  message: "{{ log_kopf }} Prio 8 (Notbetrieb ohne Ladestand): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} {{ 'angehoben' if target_p0 > (aktueller_ladestrom | float(0)) else 'gesenkt' }}, da {{ soc_fehlt_text }}.{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  entity_id: !input helper_logbook_dummy
+              - action: number.set_value
+                target:
+                  entity_id: "{{ var_wr_max_charge }}"
+                data:
+                  value: "{{ target_p0 }}"
 
   # ENTSCHEIDUNGSZEILE: Hat dieser Lauf ein Register, einen Modus oder einen
   # Timer veraendert, bekommt die Aufzeichnung die Werte, mit denen entschieden

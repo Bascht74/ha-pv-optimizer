@@ -275,6 +275,25 @@ def test_ein_pack_laeuft_ohne_zugewiesenes_bms_2(blueprint, tag):
     assert ctx["temperatur_limit_ampere"] == pytest.approx(220, abs=0.5)
 
 
+@pytest.mark.parametrize("gemessen, stufe, ampere", [(7.4, 7.0, 69), (7.0, 7.0, 69), (6.9, 6.5, 60)])
+def test_temperaturdeckel_rechnet_mit_halben_grad(blueprint, tag, gemessen, stufe, ampere):
+    """
+    Zwei Packs zu 314 Ah, kaelteste Zelle 7,4 Grad: gerechnet wird mit 7,0 Grad, C-Rate 0,05 + 2 x 0,03 = 0,11,
+    x 628 Ah = 69 A (ungerundet 0,122 x 628 = 76,6 -> 77 A). 6,9 -> 6,5 Grad: 0,095 x 628 = 59,7 -> 60 A.
+    Die Meldung nennt den Rechenwert nur, wenn er vom Messwert abweicht.
+    """
+    from conftest import standard_inputs
+    zs = {}
+    for name in ("bms1_temp_min_sensor", "bms2_temp_min_sensor"):
+        eid = standard_inputs(blueprint)[name]
+        zs[eid] = Zustand(eid, str(gemessen))
+    ctx = szenario(blueprint, zeit(tag, 10, 5), zustands_overrides=zs).auswerten(bis="temp_log_addon")
+    assert ctx["temp_min_live"] == pytest.approx(gemessen) and ctx["temp_min_stufe"] == stufe
+    assert ctx["temperatur_limit_ampere"] == ampere
+    assert f"Zelltemperatur min {gemessen} °C" in ctx["temp_log_addon"], ctx["temp_log_addon"]
+    assert ("gerechnet mit 7.0 °C" in ctx["temp_log_addon"]) is (gemessen == 7.4), ctx["temp_log_addon"]
+
+
 @pytest.mark.parametrize("leer, erwartet", [
     ("vmax2_sensor", "BMS 2: höchste Zellspannung (V)"),
     ("bms2_temp_min_sensor", "BMS 2: niedrigste Zelltemperatur"),
@@ -501,7 +520,8 @@ def test_trigger_untergrenze_verletzt(blueprint, tag):
     assert trig["for"] == "00:10:00"
     soc, tou, p = fake_entity("battery_soc_sensor", "sensor"), fake_entity("wr_tou_1", "number"), fake_entity("battery_power_sensor", "sensor")
     tv = {"tv_battery_soc": soc, "tv_wr_tou_1": tou, "tv_battery_power": p}
-    for soc_w, p_w, erwartet in ((66, 300, True), (66, -500, False), (68, 300, False), (66, 50, False)):
+    # Eine gemeldete 0 ist ein fehlender Ladestand, kein Verstoss (dafuer gibt es den Notbetrieb).
+    for soc_w, p_w, erwartet in ((66, 300, True), (66, -500, False), (68, 300, False), (66, 50, False), (0, 300, False)):
         h = szenario(blueprint, zeit(tag, 2, 0), soc=soc_w, zustands_overrides={**_tou(70), **_leistung(p_w)})
         assert h._aufloesen(trig["value_template"], dict(tv)) is erwartet, (soc_w, p_w)
 
@@ -1380,6 +1400,30 @@ def test_notstromreserve_ueberschuss_dazwischen_mindert_das_spaetere_defizit(blu
     assert ctx["f_roh"] > 85 and ctx["halten_fall"] is True and ctx["f_soc"] == 85
 
 
+@pytest.mark.parametrize("stunden, tage, uhr", [(36, 1, "08:00"), (None, 2, "21:00"), (72, 3, "08:00")])
+def test_notstromreserve_zeitraum_ist_einstellbar(blueprint, tag, stunden, tage, uhr):
+    """
+    Die dunkle Lage von oben (morgen 14, Tag 3 2, Tag 4 40 kWh; Last 0,258 kWh je Slot). Ohne Einstellung
+    gelten 48 h: Maximum am Horizontende, Tag 3 21:00, 10,04 kWh. 36 h enden um 09:00 an Tag 3 bei 5,50 kWh,
+    das Maximum bleibt die erste Nacht, 5,674 kWh bis 08:00. 72 h laufen durch die dritte Nacht:
+    10,04 + 22 x 0,258 = 15,71 kWh bis 08:00 an Tag 4, danach ueberwiegt dessen Sonne.
+    """
+    last = 0.245 / 0.95
+    erste = 22 * last
+    d48 = erste - 20 * (0.7 * 0.92 - last) + 28 * last + 20 * (last - 0.1 * 0.92) + 6 * last
+    kwh = {36: erste, None: d48, 72: d48 + 22 * last}[stunden]
+    j = zeit(tag, 21, 0)
+    fc = prognose_gleichmaessig(tag, 2.0)
+    ctx = szenario(blueprint, j, forecast=fc, prognose_tage_kwh=(14, 2, 40), soc=85.0,
+                   zustands_overrides=_notstrom_zustaende([200] * 48),
+                   input_overrides={} if stunden is None else {"notstrom_zeitraum_h": stunden}).auswerten(bis="reserve_pct")
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(kwh, abs=0.01)
+    assert ctx["reserve_plan"]["bis"].endswith(f"{(tag + dt.timedelta(days=tage)).isoformat()}T{uhr}:00+02:00")
+    ref = reserve_referenz(j, tage_aus_szenario(j, (14, 2, 40), forecast=fc, a=0.0), [200] * 48,
+                           kap_kwh=ctx["batterie_kapazitaet"], horizont_h=stunden or 48)
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_plan"]["bis"] == ref["bis"].isoformat()
+
+
 def test_notstromreserve_am_tag_ohne_defizit(blueprint, tag):
     """12:00, heller Tag: PV10 0,7 kWh x 0,92 = 0,644 > 0,258 je Slot bis 18:00, Ueberschuss 12 x 0,386 = 4,63 kWh;
     die Nacht (28 Slots x 0,258 = 7,22 kWh) uebersteigt ihn: Reserve 2,59 kWh bis 08:00. Mit 40 kWh P10 heute
@@ -1459,3 +1503,57 @@ def test_wetter_zeile_haelt_24_stunden_je_quelle_fest(blueprint, tag):
     assert zeile["quellen"]["open_meteo"]["von"].startswith(f"{tag.isoformat()}T14:00") and len(zeile["quellen"]["open_meteo"]["temp"]) == 24
     assert zeile["quellen"]["open_meteo"]["temp"][0] == 11.0 and zeile["quellen"]["open_meteo"]["temp"][-1] == pytest.approx(22.5)
     assert zeile["quellen"]["quelle_2"] == {"von": None, "temp": []}
+
+
+# --------------------------------------------------------------------------
+# Fehlender Ladestand: Die Entlade-Planung rechnete mit 0 % und hoebe die Grenze
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("soc", ["unavailable", "unknown", "0", "101"])
+def test_ohne_ladestand_bleibt_die_untergrenze_stehen(blueprint, tag, soc):
+    """
+    Register 12 (unter dem Minimum), Entladung, Tageshoechststand 95 %: mit 0 % gerechnet
+    klemmte der Plan auf das Minimum 20 und schriebe es (8 Punkte Aenderung, Entladung
+    unter den Tageshoechststand). Ohne Ladestand bleibt das Register stehen.
+    """
+    from conftest import standard_inputs
+    tages_max = standard_inputs(blueprint)["helper_max_soc_heute"]
+    ov = {**_tou(12), **_leistung(800), tages_max: Zustand(tages_max, "95")}
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(14, 5, 5),
+                   zustands_overrides=ov).auswerten(bis="tou_schreiben")
+    assert ctx["soc_fehlt"] is True and ctx["aktueller_soc"] == 0
+    # Jede andere Bedingung des Schreibens ist erfuellt; es sperrt allein der fehlende Wert.
+    assert ctx["entlade_aktiv"] is True and ctx["f_soc"] == 20 and ctx["f_soc"] - ctx["tou_ist"] >= 5
+    assert ctx["halten_fall"] is True and ctx["entlaedt_nachhaltig"] is True
+    assert ctx["tou_schreiben"] is False
+
+
+def test_ohne_ladestand_gilt_auch_das_schatten_bms_nicht(blueprint, tag):
+    """
+    Schatten-BMS 35 %, Wechselrichter ohne Wert: als 0 gerechnet laege der Abstand mit 35
+    Punkten innerhalb der erlaubten 40, und der Versatz -35 verschoebe jedes Register.
+    """
+    ctx = _plan60(blueprint, tag, soc="unavailable", schatten_soc=35.0)
+    assert ctx["schatten_gueltig"] is False and ctx["soc_versatz"] == 0 and ctx["aktueller_soc"] == 0
+    assert ctx["tou_schreiben"] is False
+
+
+def test_meldung_ohne_ladestand_nennt_dauer_und_sensorwert(blueprint, tag):
+    from conftest import fake_entity
+    eid = fake_entity("battery_soc_sensor", "sensor")
+    h = szenario(blueprint, zeit(tag, 12, 0), zustands_overrides={eid: Zustand(eid, "unavailable", {}, zeit(tag, 11, 25))})
+    ctx = h.auswerten(bis="soc_fehlt_text")
+    assert ctx["soc_fehlt_bestaetigt"] is True
+    assert ctx["soc_fehlt_text"] == "der Ladestand (SOC) des Wechselrichters seit 35 Minuten fehlt (Wartezeit 5 Minuten, Sensor meldet unavailable)"
+
+
+@pytest.mark.parametrize("soc", ["unavailable", "0"])
+def test_slot_zeile_ohne_ladestand(blueprint, tag, soc):
+    """
+    Der Halbstundenlauf zaehlt ohne Ladestand kein Halten und schreibt keinen Ladestand auf. Eine
+    gemeldete 0 laege sonst unter dem Register und zaehlte als Halten.
+    """
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=soc, schatten_soc=35.0,
+                 zustands_overrides=_tou(65), trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
+    zeile = _slot_zeile(blueprint, h, ctx)
+    assert zeile["soc"] is None and zeile["soc_versatz"] == 0 and zeile["halten"] is False

@@ -85,6 +85,11 @@ def p7_dynamisch(blueprint, tag):
     return szenario(blueprint, zeit(tag, 12, 0))
 
 
+def p8_notbetrieb(blueprint, tag):
+    """Der Ladestand des Wechselrichters fehlt seit einer Stunde."""
+    return szenario(blueprint, zeit(tag, 12, 0), soc="unavailable", ladestrom=50.0)
+
+
 ZWEIGE = [
     ("PRIO 0", p0_temperaturdeckel),
     ("PRIO 1", p1_zellausgleich),
@@ -94,6 +99,7 @@ ZWEIGE = [
     ("PRIO 5", p5_peak_shaving),
     ("PRIO 6", p6_morgen_blockade),
     ("PRIO 7", p7_dynamisch),
+    ("PRIO 8", p8_notbetrieb),
 ]
 
 
@@ -665,7 +671,7 @@ def test_nicht_voll_hinweis_nennt_den_ueberfaelligen_zellausgleich(blueprint, ta
     ohne = szenario(blueprint, zeit(tag, 18, 30), soc=60.0, trigger_id="sunset_check", prognose_tage_kwh=None, zustands_overrides=zs)
     _, aktionen = zweig_und_aktionen(ohne, blueprint, zweige=zweige)
     assert "Bitte die Auslegung/Logik prüfen" in schreibt(aktionen, "persistent_notification.create")[0]
-    angelegt = [i for i in _benachrichtigungs_ids(blueprint["action"], "persistent_notification.create") if i != "bms_offline_warning"]
+    angelegt = [i for i in _benachrichtigungs_ids(blueprint["action"], "persistent_notification.create") if i not in ("bms_offline_warning", "soc_fehlt_warning")]
     assert angelegt == ["batterie_nicht_voll"]
     prio1 = next(z for z in gruppe(blueprint, "PRIO 0") if z["alias"].startswith("PRIO 1"))
     assert _benachrichtigungs_ids(prio1, "persistent_notification.dismiss") == ["batterie_nicht_voll"]
@@ -839,3 +845,82 @@ def test_tag_tor_schweigt_waehrend_der_morgen_blockade(blueprint, tag):
     assert ctx["blockade_aktiv"]
     assert not ctx["ww_tag_start"]
     assert not _boost_startet(h, blueprint)
+
+
+# --------------------------------------------------------------------------
+# Notbetrieb ohne Ladestand
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("soc, stunde, gegenprobe_soc, sonst", [
+    ("unavailable", 12, 40.0, "PRIO 2"),   # als 0 % gerechnet raste sonst Fall B ein
+    ("0", 12, 40.0, "PRIO 2"),             # eine gemeldete 0 ist kein Messwert
+    ("255", 12, 84.0, "PRIO 7"),           # ueber 100 ebenso wenig
+    ("unavailable", 7, 84.0, "PRIO 6"),    # morgens statt der Blockade
+])
+def test_notbetrieb_laedt_voll_ohne_einzurasten(blueprint, tag, soc, stunde, gegenprobe_soc, sonst):
+    """
+    Ohne Ladestand gewinnt Prio 8: voller Strom, und kein Modus, der den Tag ueber
+    einrastet. Die Gegenprobe mit gueltigem Ladestand zeigt den Zweig, den der
+    Notbetrieb verdraengt.
+    """
+    kw = {"input_overrides": {"schwelle_peak_shaving": 3500}, "ladestrom": 50.0}
+    assert zweig(szenario(blueprint, zeit(tag, stunde, 0), soc=gegenprobe_soc, **kw), blueprint) == sonst
+    h = szenario(blueprint, zeit(tag, stunde, 0), soc=soc, **kw)
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
+    assert alias.startswith("PRIO 8")
+    assert schreibt(aktionen) == [ctx["max_ampere"]]
+    assert schreibt(aktionen, "input_select.select_option") == []
+    assert ctx["blockade_aktiv"] is False and ctx["tou_schreiben"] is False
+
+
+def test_notbetrieb_wartet_einen_aussetzer_ab(blueprint, tag):
+    """Fehlt der Wert erst seit zwei Minuten, schreibt kein Zweig; Fall B rastet trotzdem nicht ein."""
+    ov = _z(blueprint, "battery_soc_sensor", "unavailable", last_changed=zeit(tag, 11, 58))
+    h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=50.0, zustands_overrides=ov)
+    ctx = h.auswerten()
+    assert ctx["soc_fehlt"] is True and ctx["soc_fehlt_bestaetigt"] is False
+    assert zweig_und_aktionen(h, blueprint, ctx) == (None, [])
+
+
+def test_notbetrieb_bleibt_unter_der_temperaturgrenze(blueprint, tag):
+    """Kalte Zellen: Prio 8 laedt nur bis zum Temperaturdeckel, nicht bis zum Maximum."""
+    ov = {**_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=zeit(tag, 11, 0)),
+          **_z(blueprint, "bms1_temp_min_sensor", "12.0"), **_z(blueprint, "bms2_temp_min_sensor", "12.0")}
+    h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=10.0, zustands_overrides=ov)
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
+    assert alias.startswith("PRIO 8")
+    assert schreibt(aktionen) == [ctx["temperatur_limit_ampere"]]
+    assert 10 < ctx["temperatur_limit_ampere"] < ctx["max_ampere"]
+
+
+def test_notbetrieb_endet_mit_voller_batterie(blueprint, tag):
+    """Hat der Zellausgleich die Batterie heute als voll markiert, laedt Prio 8 nicht erneut auf."""
+    ov = {**_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=zeit(tag, 11, 0)),
+          **_z(blueprint, "helper_batterie_heute_voll", "on")}
+    h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=50.0, zustands_overrides=ov)
+    assert zweig_und_aktionen(h, blueprint) == (None, [])
+
+
+def test_notbetrieb_uebernimmt_von_laufender_lastspitzen_kappung(blueprint, tag):
+    """
+    Faellt der Ladestand bei laufendem Kappungs-Timer aus, gewinnt nicht Prio 5, die ohne
+    Spitze nichts schreibt und den Strom bis zum Ablauf des Timers stehen liesse.
+    """
+    ov = _z(blueprint, "helper_timer_peak", "active")
+    assert zweig(szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=50.0, zustands_overrides=ov), blueprint) == "PRIO 5"
+    h = szenario(blueprint, zeit(tag, 12, 0), soc="unavailable", ladestrom=50.0, zustands_overrides=ov)
+    alias, aktionen = zweig_und_aktionen(h, blueprint)
+    assert alias.startswith("PRIO 8") and schreibt(aktionen) == [h.auswerten()["max_ampere"]]
+
+
+@pytest.mark.parametrize("alias_anfang, bauen", [
+    ("Speicherverlust verbuchen", verlust_verbuchen),
+    ("ToU auf Minimum", tou_minimum),
+    ("Zieht den Peak-Shaving Timer auf", peak_timer_aufziehen),
+])
+def test_ohne_ladestand_ruhen_verbuchung_register_und_timer(blueprint, tag, alias_anfang, bauen):
+    """Dieselben Laeufe wie oben, nur ohne Ladestand: kein Zweig dieser Gruppen greift."""
+    h = bauen(blueprint, tag)
+    h.states.tabelle.update(_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=h.jetzt - dt.timedelta(hours=1)))
+    assert gewinner(h, gruppe(blueprint, alias_anfang)) is None
