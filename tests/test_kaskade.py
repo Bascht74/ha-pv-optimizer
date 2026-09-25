@@ -525,6 +525,35 @@ def test_prio7_meldung_bei_linearer_verteilung(blueprint, tag):
     assert "Voraussichtlich voll" not in meldung and "gedeckt wird" not in meldung, meldung
 
 
+@pytest.mark.parametrize("temp, strom, genannt", [
+    ("22.0", 14, False),   # kein Deckel
+    ("12.0", 14, False),   # Deckel 188 A liegt unter dem Maximum, aber weit ueber dem Sollwert
+    ("3.0", 10, True),     # Deckel 10 A unter dem Sollwert 14 A: er begrenzt
+])
+def test_temperaturdeckel_nur_genannt_wenn_er_begrenzt(blueprint, tag, temp, strom, genannt):
+    """
+    Die Szene aus test_prio7_meldung_ohne_ladevorlauf (Sollwert 14 A) und Prio 5 mit 25 A: Der
+    Deckel steht nur in der Meldung, wenn er den geschriebenen Wert kleiner macht - ein Deckel
+    unter dem Maximum allein erklaert keinen Sollwert, der weit darunter liegt.
+    """
+    from conftest import prognose
+    kalt = {**_z(blueprint, "bms1_temp_min_sensor", temp), **_z(blueprint, "bms2_temp_min_sensor", temp)}
+    e = fake_entity("pv_erzeugung_heute_sensor", "sensor")  # Realitaets-Check kuerzt nicht
+    h = szenario(blueprint, zeit(tag, 10, 0), soc=85.0, ladestrom=0, forecast=prognose(tag, [3.0] * 20, dt.time(8, 0), p10_anteil=1.0),
+                 profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999"), **kalt}, input_overrides={"ladevorlauf_stunden": "00:00:00"})
+    alias, aktionen = zweig_und_aktionen(h, blueprint)
+    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [strom]
+    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
+    assert ("Begrenzung durch Batterietemperatur" in meldung) is genannt, meldung
+
+    ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000"), **kalt}
+    h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=0, zustands_overrides=ov)
+    alias, aktionen = zweig_und_aktionen(h, blueprint)
+    assert alias.startswith("PRIO 5") and schreibt(aktionen) == [10 if genannt else 25]
+    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
+    assert ("Durch die Batterietemperatur auf" in meldung) is genannt, meldung
+
+
 # --------------------------------------------------------------------------
 # Was die Zweige neben der Kaskade schreiben. Nicht fuer jeden - nur dort, wo
 # der Schreibvorgang selbst eine Aussage traegt.
