@@ -4,9 +4,12 @@
 # Diese Datei ist eine VORLAGE, kein fertiges Package. Vor dem Einsatz an
 # einem Standort sind die mit <HIER EINTRAGEN> markierten Stellen anzupassen:
 #
-#   1. utility_meter.hausverbrauch_halbstuendlich.source
-#        -> der Tageszaehler des Hausverbrauchs (kWh, steigend). Der Blueprint
-#           nullt diesen Zaehler selbst alle 30 Minuten.
+#   1. sensor "Hausverbrauch Energie" (Riemann-Summe)
+#        -> die Gesamtlast des Hauses in W (Deye "Load Power"). Nicht der
+#           Deye-Tageszaehler: Der Wechselrichter schreibt seine kWh-Register nur
+#           alle zehn Minuten und in Schritten von 0,1 kWh, ein Lauf ab Minute 15
+#           liest dann einen alten Stand oder 0. Der Halbstundenzaehler darauf
+#           wird vom Blueprint selbst alle 30 Minuten genullt.
 #   2. binary_sensor "Ladesteuerung Eingriff Aktiv"
 #        -> die number-Entitaet des maximalen Ladestroms und deren Maximalwert
 #           (derselbe Wert wie der Blueprint-Input "Maximaler Ladestrom").
@@ -177,7 +180,7 @@ utility_meter:
   # lernte dann eine 0 und zoege sich ueber den Mittelwert Nacht fuer Nacht
   # weiter nach unten.
   hausverbrauch_halbstuendlich:       # -> Hausverbrauch halbstuendlich (kWh)
-    source: sensor.<HIER EINTRAGEN>   # Tageszaehler Hausverbrauch, kWh, steigend
+    source: sensor.hausverbrauch_energie   # Riemann-Sensor unten
     name: "Hausverbrauch Halbstündlich"
     net_consumption: false
     delta_values: false
@@ -234,9 +237,20 @@ template:
           {% set limit = states('number.<HIER EINTRAGEN>') | float(maximum) %}  {# Stellgroesse max. Ladestrom #}
           {{ limit < maximum and is_state('sun.sun', 'above_horizon') }}
 sensor:
+  # Hausverbrauch: Riemann-Summe ueber die Gesamtlast (W -> kWh), Quelle des
+  # Halbstundenzaehlers. Ueber einen Tag muss sie auf wenige Prozent zum
+  # Deye-Zaehler "Today Load Consumption" passen, sonst ist die Quelle falsch.
+  - platform: integration
+    source: sensor.<HIER EINTRAGEN>   # Deye "Load Power" (W), Gesamtlast des Hauses
+    name: "Hausverbrauch Energie"
+    unique_id: "optimizer_sensor_hausverbrauch_energie"
+    unit_prefix: k
+    round: 3
+    method: left
   # Notstromkreis (optional): der Deye liefert am Load-UPS-Ausgang nur Leistung,
-  # die Energie entsteht hier als Riemann-Summe (W -> kWh). Zum Nutzen
-  # einkommentieren, zusammen mit dem Zaehler oben.
+  # ein Energieregister gibt es dafuer nicht; die Energie entsteht hier als
+  # Riemann-Summe (W -> kWh). Zum Nutzen einkommentieren, zusammen mit dem
+  # Zaehler oben.
   # - platform: integration
   #   source: sensor.<HIER EINTRAGEN>   # Deye "Load UPS Power" (W)
   #   name: "Notstromlast Energie"
