@@ -16,6 +16,11 @@ Logbuch-Meldung trägt ihn.
 - The Prio 5 and Prio 7 messages named the battery temperature limit whenever it sat below the
   configured maximum, even when the new charge current stayed far under it. They now name it only
   when it actually caps the value written.
+- Messages about the morning blockade blamed the forecast when no feed-in peak was expected any
+  more, although the expected peak is the forecast minus the house consumption and the running
+  consumption measurement alone can move it across the threshold. The start and end of the
+  blockade now quote the expected peak with the forecast and consumption of its half hour; the
+  Prio 5 note and the evening diagnosis no longer name the forecast as the cause.
 
 ## [V6.16.0] - 2026-09-25
 
