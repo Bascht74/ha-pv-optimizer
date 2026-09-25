@@ -1859,6 +1859,18 @@ action:
         {% endfor %}
         {{ ns.best }}
       spitze_erwartet: "{{ spitze_erwartet_w >= schwelle_peak_shaving * peak_erwartung_anteil }}"
+      # Nur fuer die Meldungen: Die Spitze ist Prognose minus Hausverbrauch, und
+      # schon die laufende Verbrauchsmessung kann sie ueber die Schwelle heben.
+      spitze_erwartet_detail: >
+        {% set ns = namespace(best=0.0, txt='') %}
+        {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+          {% set t = as_datetime(s.period_start) | as_local %}
+          {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
+          {% set pv_w = (s.pv_estimate | float(0)) * 1000 %}
+          {% set haus_w = (json_profil_live[idx] | float(0.2)) * 2000 %}
+          {% if pv_w - haus_w > ns.best %}{% set ns.best = pv_w - haus_w %}{% set ns.txt = 'PV-Prognose ' ~ (pv_w | round(0) | int) ~ ' W − Hausverbrauch ' ~ (haus_w | round(0) | int) ~ ' W um ' ~ t.strftime('%H:%M') ~ ' Uhr' %}{% endif %}
+        {% endfor %}
+        {{ ns.txt }}
 
       # HINWEIS: Diese Variable wird derzeit nirgends gelesen (reine Diagnose).
       # Sie traegt die Blend-Formel trotzdem mit, damit bei einer Aenderung der
@@ -3400,7 +3412,7 @@ action:
             {%- elif aktueller_soc >= 99 %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≥ 99 %{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}.
             {%- elif not is_day %} die Sonne untergegangen ist.
             {%- elif not vor_blockade_ende %} die eingestellte Obergrenze {{ today_at(var_zeit_blockade | string).strftime('%H:%M') }} Uhr erreicht ist.
-            {%- elif not spitze_erwartet %} die Prognose keine Einspeisespitze mehr erwarten lässt: höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle.
+            {%- elif not spitze_erwartet %} keine Einspeisespitze mehr zu erwarten ist: höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle{% if spitze_erwartet_detail %} ({{ spitze_erwartet_detail }}){% endif %}.
             {%- elif blockade_dyn_kand == 0 %} vor der eingestellten Obergrenze {{ today_at(var_zeit_blockade | string).strftime('%H:%M') }} Uhr keine Halbstunde mehr als Ladebeginn in Frage kommt.
             {%- else %}{% set puffer = [ blockade_dyn_ueber_ges * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}{% set verf = blockade_dyn_ueber_ges - puffer %}{% set bedarf = (faktor_fallback | float(1.2)) * (freie_kwh + blockade_dyn_d_ges) %}{% set nk = 2 if (verf - bedarf) | abs < 0.1 else 1 %} der späteste Ladebeginn erreicht ist: Bedarf {{ bedarf | round(nk) }} kWh > Verfügbar {{ verf | round(nk) }} kWh ab der nächsten Halbstunde (Bedarf = freie Ladekapazität {{ freie_kwh | round(nk) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ges > 0 %} + Nachladebedarf {{ blockade_dyn_d_ges | round(nk) }} kWh für Stunden mit Hausverbrauch über PV{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss {{ blockade_dyn_ueber_ges | round(nk) }} kWh − Puffer {{ puffer | round(nk) }} kWh).{% endif %}
           entity_id: !input helper_logbook_dummy
@@ -3681,7 +3693,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >-
-                    {{ log_kopf }} Diagnose: Fehleinschätzung der Prognose, die Morgen-Blockade lief heute, aber die Netzeinspeisung hat die Peak-Shaving-Schwelle {{ schwelle_peak_shaving | round(0) }} W nie überschritten; die zurückgehaltene Kapazität wurde nicht gebraucht.
+                    {{ log_kopf }} Diagnose: Einspeisespitze überschätzt, die Morgen-Blockade lief heute, aber die Netzeinspeisung hat die Peak-Shaving-Schwelle {{ schwelle_peak_shaving | round(0) }} W nie überschritten; die zurückgehaltene Kapazität wurde nicht gebraucht.
                     {%- if var_max_soc_heute != '' %} (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) | float(0) | round(0) }} %.){% endif %}
                   entity_id: !input helper_logbook_dummy
 
@@ -4406,7 +4418,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere and (target_p3 | float(0)) >= temperatur_limit_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere and (target_p3 | float(0)) >= temperatur_limit_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da keine Einspeisespitze zu erwarten war (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -4441,7 +4453,7 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ log_kopf }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
+                    {{ log_kopf }} Prio 6 (Morgen-Blockade): Laden gestoppt, Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ null_ampere }} A, da höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W ≥ {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle{% if spitze_erwartet_detail %} ({{ spitze_erwartet_detail }}){% endif %}. Voraussichtlicher Ladebeginn {{ (as_datetime(blockade_dyn_t) | as_local).strftime('%H:%M') }} Uhr{% if (today_at(var_zeit_blockade | string) - (as_datetime(blockade_dyn_t) | as_local)).total_seconds() < 1800 %} (eingestellte Obergrenze){% endif %}: Bedarf {{ blockade_dyn_bedarf | round(blockade_nk | int(1)) }} kWh < Verfügbar {{ blockade_dyn_verf | round(blockade_nk | int(1)) }} kWh
                     (Bedarf = freie Ladekapazität {{ freie_kwh | round(blockade_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ab_t > 0.05 %} + Nachladebedarf ab Ladebeginn {{ blockade_dyn_d_ab_t | round(blockade_nk | int(1)) }} kWh{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss ab Ladebeginn {{ blockade_dyn_u_ab_t | round(blockade_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}, Prognose um {{ (100 - (100 * (trend_faktor if trend_aktiv else 1 / (faktor_fallback | float(1.2))))) | round(0) | int }} % gekürzt, − Puffer {{ ([ blockade_dyn_u_ab_t * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min) | round(blockade_nk | int(1)) }} kWh. Bis Ladebeginn {{ (blockade_dyn_ueber_ges - blockade_dyn_u_ab_t) | round(1) }} kWh Überschuss für Einspeisung und Lastspitzen-Kappung.) Voraussichtlich voll {{ plan_voll_um }}.
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value

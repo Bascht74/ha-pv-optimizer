@@ -525,6 +525,44 @@ def test_prio7_meldung_bei_linearer_verteilung(blueprint, tag):
     assert "Voraussichtlich voll" not in meldung and "gedeckt wird" not in meldung, meldung
 
 
+def _spitze_im_text(meldung: str, ctx: dict) -> None:
+    """Die Meldung nennt den Slot der Spitze; Prognose minus Hausverbrauch ergibt die genannte Spitze."""
+    import re
+    m = re.search(r"PV-Prognose (\d+) W − Hausverbrauch (\d+) W um (\d\d:\d\d) Uhr", meldung)
+    assert m, meldung
+    assert abs(int(m[1]) - int(m[2]) - float(ctx["spitze_erwartet_w"])) <= 1, meldung
+    assert "Prognose keine" not in meldung, meldung
+
+
+def test_blockade_start_nennt_die_erwartete_spitze(blueprint, tag):
+    """Die Spitze ist die Bedingung, die die Blockade erst zulaesst; der Start nennt sie samt ihrer zwei Teile."""
+    h = p6_morgen_blockade(blueprint, tag)
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
+    assert alias.startswith("PRIO 6")
+    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
+    assert f"da höchste erwartete Netzeinspeisung {round(ctx['spitze_erwartet_w'])} W ≥ 3150 W = 90 % der Schwelle (" in meldung, meldung
+    _spitze_im_text(meldung, ctx)
+
+
+def test_blockade_ende_schiebt_es_nicht_auf_die_prognose(blueprint, tag):
+    """
+    Faellt die erwartete Spitze unter die Schwelle, kann das allein die laufende Verbrauchsmessung
+    bewirkt haben. Die Meldung nennt deshalb Prognose und Hausverbrauch, statt die Prognose zu beschuldigen.
+    """
+    h = szenario(blueprint, zeit(tag, 7, 0), soc=84.0, input_overrides={"schwelle_peak_shaving": 20000},
+                 zustands_overrides=_z(blueprint, "helper_lade_modus", "blockade"))
+    ctx = h.auswerten()
+    assert ctx["aktueller_modus"] == "blockade" and not ctx["spitze_erwartet"] and ctx["spitze_erwartet_w"] > 0
+    schritt = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                   and "Morgen-Blockade beendet" in str(st.get("then")))
+    assert all(template_wahr(h, b["value_template"], ctx) for b in schritt["if"])
+    log = next(a for a in schritt["then"] if a.get("action") == "logbook.log")
+    meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
+    assert "da keine Einspeisespitze mehr zu erwarten ist: höchste erwartete Netzeinspeisung" in meldung, meldung
+    _spitze_im_text(meldung, ctx)
+
+
 @pytest.mark.parametrize("temp, strom, genannt", [
     ("22.0", 14, False),   # kein Deckel
     ("12.0", 14, False),   # Deckel 188 A liegt unter dem Maximum, aber weit ueber dem Sollwert
