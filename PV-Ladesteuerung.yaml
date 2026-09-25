@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.16.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.16.1]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -877,7 +877,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.16.0]"
+      bp_version: "[V6.16.1]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -4406,7 +4406,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
+                  message: "{{ log_kopf }} Prio 5 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere and (target_p3 | float(0)) >= temperatur_limit_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da die Prognose keine Einspeisespitze erwarten ließ (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -4535,7 +4535,7 @@ action:
                         {%- if (sim_a_vorlauf | int(0)) > 0 %}{% if ohne_vorlauf %} bis Ende des Ladefensters gedeckt wird{% elif vorlauf_passt %} bis {{ ladevorlauf_text }} vor Ende des Ladefensters gedeckt wird{% else %} in der nächsten halben Stunde gedeckt wird, da vom restlichen Ladefenster {{ nsf.h | round(2) }} h nach Abzug des Ladevorlaufs {{ ladevorlauf_text }} keine halbe Stunde bleibt{% endif %}
                         {%- elif fenster_gewinnt %} bis Ende des Ladefensters gedeckt wird{% if vorlauf_passt %}; bis {{ ladevorlauf_text }} davor reicht der Überschuss nicht mehr{% endif %}
                         {%- else %} gleichmäßig über {{ verf_stunden | round(1) }} h mit PV-Überschuss verteilt wird{% if sim_slots_fenster | length > 0 and benoetigt_kwh > 0 %}; der Überschuss im Ladefenster deckt ihn auch mit {{ max_ampere | int(140) }} A nicht{% endif %}{% endif %}
-                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if (sim_a_vorlauf | int(0)) > 0 %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
+                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if (sim_a_vorlauf | int(0)) > 0 %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon and temperatur_limit_ampere < ziel_p5_raw else '' }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:

@@ -10,6 +10,13 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.16.1] - 2026-09-25
+
+### Fixed
+- The Prio 5 and Prio 7 messages named the battery temperature limit whenever it sat below the
+  configured maximum, even when the new charge current stayed far under it. They now name it only
+  when it actually caps the value written.
+
 ## [V6.16.0] - 2026-09-25
 
 ### Added
@@ -1000,7 +1007,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...HEAD
+[V6.16.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.0...V6.16.1
 [V6.16.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...V6.16.0
 [V6.15.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...V6.15.1
 [V6.15.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.14.0...V6.15.0
