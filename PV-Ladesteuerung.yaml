@@ -522,6 +522,12 @@ blueprint:
             Wie weit die Notstromreserve einen Netzausfall vorausrechnet. Sie endet von selbst, sobald die vorsichtige Prognose die Notstromlast wieder deckt; der Zeitraum begrenzt sie nur in langen grauen Phasen. Größer = mehr Reserve im Winter.
           default: 48
           selector: {"number": {"min": 12, "max": 72, "step": 1, "unit_of_measurement": "h"}}
+        wr_eigenverbrauch_w:
+          name: "Entlade-Planung: Eigenverbrauch des Wechselrichters (W)"
+          description: >-
+            Was der Wechselrichter bei Netzausfall selbst aus der Batterie zieht, zusätzlich zur Notstromlast; geht nur in die Notstromreserve ein. Je nach Modell verschieden, bei mehreren parallelen Wechselrichtern die Summe. Größer = mehr Reserve.
+          default: 90
+          selector: {"number": {"min": 0, "max": 500, "step": 5, "unit_of_measurement": "W"}}
     sec_wallbox:
       name: "9 – Wallbox / evcc (Optional)"
       description: >-
@@ -711,10 +717,8 @@ action:
       # Batterie so viele Tage nicht voll, plant sie auf 100 %.
       lade_wirkungsgrad: 0.92
       vollladung_nach_tagen: 9
-      # Notstromreserve: Entladeverluste auf die Last am Notstromausgang, dazu der
-      # Eigenverbrauch des Wechselrichters je Halbstunde (rund 90 W).
+      # Notstromreserve: Entladeverluste auf die Last am Notstromausgang.
       entlade_wirkungsgrad: 0.95
-      wr_eigenverbrauch_kwh: 0.045
       # Die Untergrenze wird erst geschrieben, wenn der Ladestand ihr so nahe
       # kommt (Prozentpunkte): Ein Lauf Vorlauf reicht, darueber wirkt sie nicht.
       tou_schreib_vorlauf: 2
@@ -1399,6 +1403,7 @@ action:
       vertrauen_tag4: !input vertrauen_tag4
       nacht_p50_anteil: !input nacht_p50_anteil
       notstrom_zeitraum_h: !input notstrom_zeitraum_h
+      wr_eigenverbrauch_w: !input wr_eigenverbrauch_w
       var_wp_ziel_temp_pv: !input wp_ziel_temp_pv
       var_wp_ziel_number: !input wp_ziel_temp_number
       var_wp_hysterese_pv: !input wp_hysterese_pv
@@ -2578,6 +2583,7 @@ action:
         {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
         {% elif j is string and j | length > 20 and j[0] == '[' and (j | from_json) | length == 48 %}{{ j | from_json }}
         {% else %}{{ none }}{% endif %}
+      wr_eigenverbrauch_kwh: "{{ (wr_eigenverbrauch_w | float(90)) / 2000 }}"
       reserve_plan: >
         {% set ns = namespace(kum=0.0, best=0.0, bis=none) %}
         {% if notstrom_profil is not none %}
@@ -2840,6 +2846,7 @@ action:
               'vertrauen_tag4': vertrauen_tag4,
               'nacht_p50_anteil': nacht_p50_anteil,
               'notstrom_zeitraum_h': notstrom_zeitraum_h,
+              'wr_eigenverbrauch_w': wr_eigenverbrauch_w,
               'zeit_blockade_ende': var_zeit_blockade,
               'ladevorlauf_stunden': aufz_ladevorlauf_stunden,
               'faktor_fallback': faktor_fallback,

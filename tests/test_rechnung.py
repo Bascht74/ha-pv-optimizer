@@ -1671,6 +1671,27 @@ def test_notstromreserve_zeitraum_ist_einstellbar(blueprint, tag, stunden, tage,
     assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_plan"]["bis"] == ref["bis"].isoformat()
 
 
+@pytest.mark.parametrize("watt, kwh, stufe", [(0, 22 * 0.2 / 0.95, 25), (None, 22 * 0.245 / 0.95, 30), (180, 22 * 0.29 / 0.95, 35)])
+def test_notstromreserve_eigenverbrauch_ist_einstellbar(blueprint, tag, watt, kwh, stufe):
+    """
+    Die erste Lage oben (21:00, Notstromlast 200 Wh je Halbstunde, Defizit endet 08:00 nach 22 Slots).
+    Ohne Einstellung 90 W = 0,045 kWh je Halbstunde: 5,674 kWh, 27,6 % -> 30 %. 0 W: 22 x 0,2 / 0,95 =
+    4,632 kWh = 14,4 % -> 24,4 % -> 25 %. 180 W, etwa zwei Wechselrichter parallel: 22 x 0,29 / 0,95 =
+    6,716 kWh = 20,9 % -> 30,9 % -> 35 %.
+    """
+    j = zeit(tag, 21, 0)
+    fc = prognose_gleichmaessig(tag, 2.0)
+    ctx = szenario(blueprint, j, forecast=fc, prognose_tage_kwh=(40, 40, 40), soc=85.0,
+                   zustands_overrides=_notstrom_zustaende([200] * 48),
+                   input_overrides={} if watt is None else {"wr_eigenverbrauch_w": watt}).auswerten(bis="f_soc")
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(kwh, abs=0.001)
+    assert ctx["reserve_plan"]["bis"].endswith(f"{(tag + dt.timedelta(days=1)).isoformat()}T08:00:00+02:00")
+    assert ctx["reserve_5"] == stufe and ctx["f_soc"] == stufe
+    ref = reserve_referenz(j, tage_aus_szenario(j, (40, 40, 40), forecast=fc, a=0.0), [200] * 48,
+                           kap_kwh=ctx["batterie_kapazitaet"], eigen_kwh=(90 if watt is None else watt) / 2000)
+    assert ctx["reserve_plan"]["kwh"] == pytest.approx(ref["kwh"], abs=0.001) and ctx["reserve_pct"] == pytest.approx(ref["pct"], abs=0.01)
+
+
 def test_notstromreserve_am_tag_ohne_defizit(blueprint, tag):
     """12:00, heller Tag: PV10 0,7 kWh x 0,92 = 0,644 > 0,258 je Slot bis 18:00, Ueberschuss 12 x 0,386 = 4,63 kWh;
     die Nacht (28 Slots x 0,258 = 7,22 kWh) uebersteigt ihn: Reserve 2,59 kWh bis 08:00. Mit 40 kWh P10 heute

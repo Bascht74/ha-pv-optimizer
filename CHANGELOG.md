@@ -24,6 +24,11 @@ Logbuch-Meldung trägt ihn.
   total also covers packs of different sizes. The default 0 means "not entered": the startup check
   then stops the run and names the field, so an instance cannot silently plan with a fraction of its
   battery.
+- "Entlade-Planung: Eigenverbrauch des Wechselrichters (W)" sets what the inverter draws from the
+  battery itself during a grid outage, on top of the load at the backup output. The backup reserve
+  counted a fixed 90 W for it, while the draw differs between models and adds up when several
+  inverters run in parallel. The field defaults to 90 W, so an instance that leaves it alone behaves
+  as before.
 
 ### Changed
 - The battery counts as full for the day once the regulating state of charge reaches 99 % by day,
