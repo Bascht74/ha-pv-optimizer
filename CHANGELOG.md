@@ -51,8 +51,8 @@ Logbuch-Meldung trägt ihn.
   the inverter run down close to really empty in an outage, so the shift kept the night floor too
   high by the whole gap on days without a full charge. Instances without the field are unaffected.
 - The diagnostic recording carries `batterie_kapazitaet_ah` in `konfiguration` instead of
-  `pack_capacity_ah`; the cell temperatures, the charge rates, `notfall_ampere`,
-  `temperatur_limit_ampere` and `target_p0` are no longer recorded.
+  `pack_capacity_ah`, plus the new `wr_eigenverbrauch_w`; the cell temperatures, the charge rates,
+  `notfall_ampere`, `temperatur_limit_ampere` and `target_p0` are no longer recorded.
 
 ### Removed
 - Cell balancing (former Prio 1): the blueprint no longer throttles the charge current to the minimum
@@ -75,9 +75,9 @@ Logbuch-Meldung trägt ihn.
   profiles learned as one half hour; the backup profile's cold start filled every slot with it. The
   meters are now reset with `utility_meter.reset`, and a reading counts only when that reset lies at
   most 40 minutes back; otherwise the run resets the meter, learns the reading into neither profile
-  nor the grid-import sum of the hold, logs it and leaves it out of the recording's slot line. Existing
-  instances discard one half hour once after the update, because their meters were zeroed by
-  calibration so far.
+  nor the grid-import sum of the hold, logs it and writes `null` in its place in the recording's slot
+  line. Existing instances discard one half hour once after the update, because their meters were
+  zeroed by calibration so far.
 - The half hour that is skipped for an invalid profile helper resets the meters as well, so they no
   longer run up until the midnight rebuild; an unreadable house meter is no longer learned as zero.
 - "Solcast: Prognose heute" is now a required field: without it the run stops with the notice that

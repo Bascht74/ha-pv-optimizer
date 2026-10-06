@@ -1418,7 +1418,7 @@ action:
   # PFLICHTFELD-PRUEFUNG - direkt hinter den Input-Variablen, vor jedem Zweig,
   # der Messwerte verrechnet. Verlangt sind Entitaets-Felder ohne Leer-Behandlung
   # im Code - states('') wird 'unknown' und per float()-Default still zu einem
-  # Ersatzwert - und die Anzahl der Packs. Felder mit tragfaehigem Fallback
+  # Ersatzwert - und die Batteriekapazitaet. Felder mit tragfaehigem Fallback
   # bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall (Deye-Retry davor).
   # ====================================================================
   - variables:
