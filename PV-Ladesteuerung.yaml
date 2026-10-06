@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.17.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.18.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -213,32 +213,33 @@ blueprint:
       description: >-
         Die PV-Vorhersage. Sie ist die Grundlage für die vorausschauende Ladeplanung — ohne sie kann der Blueprint nicht entscheiden, ob er mit dem Laden warten kann.
         Leer bleiben dürfen die Prognosen morgen bis Tag 4; ohne sie entfällt die Entladeplanung.
+        Mehrere Dachflächen mit je eigener Solcast-Instanz: in jedes Feld den Sensor jeder Fläche eintragen, der Blueprint addiert sie Halbstunde für Halbstunde.
       collapsed: true
       input:
         solcast_heute_sensor:
           name: "Solcast: Prognose heute (mit Array)"
           description: >-
-            Der Solcast-Sensor für die Tagesprognose. Wichtig: Er muss das Attribut „detailedForecast“ (Halbstunden-Array) mitliefern — daraus baut der Blueprint seinen Vorabscan. Der reine kWh-Zahlenwert reicht nicht.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
+            Der Solcast-Sensor für die Tagesprognose, je Dachfläche einer. Wichtig: Er muss das Attribut „detailedForecast“ (Halbstunden-Array) mitliefern — daraus baut der Blueprint seinen Vorabscan. Der reine kWh-Zahlenwert reicht nicht.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
         solcast_morgen_sensor:
           name: "Solcast: Prognose morgen (kWh)"
           description: >-
-            Tagesprognose für morgen in kWh. Schaltet die Entlade-Planung ein: Die Batterie wird nachts nur so weit entladen, wie die nächsten Tage sie wieder auffüllen. Leer lassen = Planung aus.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
+            Tagesprognose für morgen in kWh, je Dachfläche ein Sensor. Schaltet die Entlade-Planung ein: Die Batterie wird nachts nur so weit entladen, wie die nächsten Tage sie wieder auffüllen. Leer lassen = Planung aus.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
         solcast_tag3_sensor:
           name: "Solcast: Prognose Tag 3 (kWh)"
           description: >-
-            Tagesprognose für übermorgen in kWh. Verlängert den Horizont der Entlade-Planung, damit die Nächte vor einer Sonnenstrecke schon Platz schaffen. Mit Attribut „detailedForecast“ rechnet die Planung mit den Halbstunden des Tages. Optional.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
+            Tagesprognose für übermorgen in kWh, je Dachfläche ein Sensor. Verlängert den Horizont der Entlade-Planung, damit die Nächte vor einer Sonnenstrecke schon Platz schaffen. Mit Attribut „detailedForecast“ rechnet die Planung mit den Halbstunden des Tages. Optional.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
         solcast_tag4_sensor:
           name: "Solcast: Prognose Tag 4 (kWh)"
           description: >-
-            Tagesprognose für den Tag nach übermorgen in kWh, dritter Tag des Planungshorizonts. Optional.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
+            Tagesprognose für den Tag nach übermorgen in kWh, je Dachfläche ein Sensor, dritter Tag des Planungshorizonts. Optional.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
     sec_helpers:
       name: "5 – Helfer-Entitäten (Pflicht)"
       description: >-
@@ -853,7 +854,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.17.0]"
+      bp_version: "[V6.18.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1362,7 +1363,7 @@ action:
           # ohne zugewiesenen Helfer festhaelt. Der Ladestand wird gegen das rohe
           # Register geprueft - beide in der Skala des Wechselrichters.
           hb_lage: >
-            {{ hb_planung != '' and not is_state('sun.sun', 'above_horizon') and hb_soc_gueltig
+            {{ hb_planung | default('', true) | length > 0 and not is_state('sun.sun', 'above_horizon') and hb_soc_gueltig
                and hb_tou_ist - hb_min_register >= 5
                and hb_soc_roh <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
@@ -1437,6 +1438,33 @@ action:
       var_solcast_morgen: !input solcast_morgen_sensor
       var_solcast_tag3: !input solcast_tag3_sensor
       var_solcast_tag4: !input solcast_tag4_sensor
+      # Je Solcast-Feld ein Sensor je Dachflaeche; aeltere Instanzen tragen einen einzelnen String.
+      solcast_heute_liste: "{{ var_solcast_heute if (var_solcast_heute is iterable and var_solcast_heute is not string) else ([var_solcast_heute] if var_solcast_heute else []) }}"
+      solcast_morgen_liste: "{{ var_solcast_morgen if (var_solcast_morgen is iterable and var_solcast_morgen is not string) else ([var_solcast_morgen] if var_solcast_morgen else []) }}"
+      solcast_tag3_liste: "{{ var_solcast_tag3 if (var_solcast_tag3 is iterable and var_solcast_tag3 is not string) else ([var_solcast_tag3] if var_solcast_tag3 else []) }}"
+      solcast_tag4_liste: "{{ var_solcast_tag4 if (var_solcast_tag4 is iterable and var_solcast_tag4 is not string) else ([var_solcast_tag4] if var_solcast_tag4 else []) }}"
+      # Die heutigen Halbstunden aller Dachflaechen, je Zeitpunkt addiert; none, wenn kein
+      # Sensor das Array traegt. Zeitpunkt als Text: eine Variable mit datetime-Objekten
+      # kaeme in Home Assistant als String zurueck.
+      solcast_heute_fc: >
+        {% set ns = namespace(roh=[], da=false) %}
+        {% for e in solcast_heute_liste %}
+          {% set fc = state_attr(e, 'detailedForecast') %}
+          {% if fc is not none %}
+            {% set ns.da = true %}
+            {% for s in fc %}
+              {% set t = as_datetime(s.period_start) | as_local %}
+              {% set ns.roh = ns.roh + [[as_timestamp(t), t.isoformat(), s.pv_estimate | float(0), s.get('pv_estimate10', s.pv_estimate) | float(0)]] %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+        {% if ns.da %}
+          {% set nl = namespace(l=[]) %}
+          {% for ts, gruppe in ns.roh | groupby(0) %}
+            {% set nl.l = nl.l + [{'period_start': gruppe[0][1], 'pv_estimate': gruppe | sum(attribute=2), 'pv_estimate10': gruppe | sum(attribute=3)}] %}
+          {% endfor %}
+          {{ nl.l }}
+        {% else %}{{ none }}{% endif %}
 
       var_vmax1: !input vmax1_sensor
       var_vmax2: !input vmax2_sensor
@@ -1818,7 +1846,7 @@ action:
       # mittlere Prognose keine Spitze nahe der Peak-Shaving-Schwelle hergibt.
       spitze_erwartet_w: >
         {% set ns = namespace(best=0.0) %}
-        {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+        {% for s in (solcast_heute_fc or []) %}
           {% set t = as_datetime(s.period_start) | as_local %}
           {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
           {% set w = (s.pv_estimate | float(0)) * 1000 - (json_profil_live[idx] | float(0.2)) * 2000 %}
@@ -1830,7 +1858,7 @@ action:
       # schon die laufende Verbrauchsmessung kann sie ueber die Schwelle heben.
       spitze_erwartet_detail: >
         {% set ns = namespace(best=0.0, txt='') %}
-        {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+        {% for s in (solcast_heute_fc or []) %}
           {% set t = as_datetime(s.period_start) | as_local %}
           {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
           {% set pv_w = (s.pv_estimate | float(0)) * 1000 %}
@@ -1923,8 +1951,8 @@ action:
         {% set ns = namespace(blend_bisher=0.0, erste=none, letzte=none, p50_rest=0.0, blend_rest=0.0, pmax=0.0) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
-        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
-          {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
+        {% if solcast_heute_fc is not none %}
+          {% for slot in solcast_heute_fc %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start.date() == jetzt.date() %}
               {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
@@ -2037,8 +2065,8 @@ action:
         {% set ns = namespace(alle=[], ev=ev_bedarf_kwh | float(0)) %}
         {% set jetzt = now() %}
         {% set slot_start = jetzt.replace(minute=(0 if jetzt.minute < 30 else 30), second=0, microsecond=0) %}
-        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
-          {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
+        {% if solcast_heute_fc is not none %}
+          {% for slot in solcast_heute_fc %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start.date() == jetzt.date() and s_start >= slot_start %}
               {% if s_start == slot_start %}
@@ -2509,9 +2537,9 @@ action:
         {% set b_abschlag = (trend_faktor | float(1.0)) if trend_aktiv
                             else (1 / (faktor_fallback | float(1.2))) %}
         {% set ns = namespace(alle=[]) %}
-        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
+        {% if solcast_heute_fc is not none %}
           {% set blockade_time = today_at(var_zeit_blockade | string) %}
-          {% for slot in state_attr(var_solcast_heute, 'detailedForecast') %}
+          {% for slot in solcast_heute_fc %}
             {% set s_start = as_datetime(slot.period_start) | as_local %}
             {% if s_start > now() and s_start.date() == now().date() %}
               {% set blend = (slot.pv_estimate * (blend_p50_anteil | float(0.5)) + slot.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
@@ -2667,7 +2695,7 @@ action:
   # muss. Kumulierte Halbstunden-Bilanzen ueber die Solcast-Slots von heute bis
   # Tag 4, Ueberschuss nach Vorlauf gedaempft. Aktiv nur mit Prognose morgen.
   - variables:
-      entlade_aktiv: "{{ var_solcast_morgen != '' }}"
+      entlade_aktiv: "{{ solcast_morgen_liste | length > 0 }}"
       verbrauch_tag_kwh: "{{ json_profil | map('float') | sum }}"
       tage_seit_voll: >
         {% set s = states(var_json_tracking) if var_json_tracking != '' else '' %}
@@ -2676,61 +2704,87 @@ action:
         {% else %}{% set liste = [] %}{% endif %}
         {{ 0 if liste | length == 0 else (now().date() - (liste | max | as_datetime).date()).days }}
       zellausgleich_faellig: "{{ tage_seit_voll > zellausgleich_nach_tagen }}"
-      # Je Solcast-Tagessensor die 48 Halbstunden (kWh) nach Kalenderdatum: k als
-      # P50/P10-Blend fuer die Planung, k10 als reines P10 fuer die Notstromreserve.
-      # Der Datumsabgleich faengt den Sensorwechsel um Mitternacht ab, der bis zu 30
-      # Minuten nach dem Datum kommen kann. Ohne Slot-Attribut wird die Tagessumme in
-      # der heutigen Tagesform verteilt.
+      # Die 48 Halbstunden (kWh) je Kalendertag, aus allen Solcast-Sensoren aller Felder
+      # addiert: k als P50/P10-Blend fuer die Planung, k10 als reines P10 fuer die
+      # Notstromreserve. Jeder Slot zaehlt am Datum seines Arrays; so traegt jede Dachflaeche
+      # einmal je Tag bei, auch wenn ihre Sensoren um Mitternacht spaeter rollen als die der
+      # anderen. Ohne Slot-Attribut wird die Tagessumme in der heutigen Tagesform verteilt.
       solcast_slot_tage: >
         {% set a = nacht_p50_anteil | float(0.5) %}
-        {% set ns = namespace(tage=[], form=[0.0] * 48, summe=0.0, form10=[0.0] * 48, summe10=0.0, d0=none) %}
-        {% set fc = state_attr(var_solcast_heute, 'detailedForecast') if var_solcast_heute != '' else none %}
-        {% if fc %}
-          {% set nsf = namespace(k=[0.0] * 48, k10=[0.0] * 48, datum=none) %}
-          {% for s in fc %}
-            {% set t = as_datetime(s.period_start) | as_local %}
-            {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
-            {% set p10 = (s.get('pv_estimate10', s.pv_estimate) | float(0)) * 0.5 %}
-            {% set kwh = (s.pv_estimate | float(0)) * 0.5 * a + p10 * (1 - a) %}
-            {% set nsf.k = nsf.k[:idx] + [kwh] + nsf.k[idx + 1:] %}
-            {% set nsf.k10 = nsf.k10[:idx] + [p10] + nsf.k10[idx + 1:] %}
-            {% if loop.first %}{% set nsf.datum = t.date() %}{% endif %}
-          {% endfor %}
-          {% set ns.form = nsf.k %}{% set ns.summe = nsf.k | sum %}{% set ns.d0 = nsf.datum %}
-          {% set ns.form10 = nsf.k10 %}{% set ns.summe10 = nsf.k10 | sum %}
-          {% set ns.tage = ns.tage + [{'datum': nsf.datum.isoformat(), 'k': nsf.k, 'k10': nsf.k10, 'summe': ns.summe, 'slots': true}] %}
-        {% endif %}
+        {% set heute = now().date() %}
+        {# Gestern bis Tag 4, flach: Position = Tag * 48 + Halbstunde, Tag 0 = gestern. #}
+        {# kh: nur die Heute-Sensoren, deren Tagessumme ist die Summe ihrer Slots. #}
+        {% set ns = namespace(k=[0.0] * 240, k10=[0.0] * 240, kh=[0.0] * 240, summe=[0.0] * 5, da=[false] * 5,
+                              slots=[false] * 5, form=[0.0] * 48, form10=[0.0] * 48, fs=0.0, fs10=0.0, d0=none) %}
+        {% for e in solcast_heute_liste %}
+          {% set fc = state_attr(e, 'detailedForecast') %}
+          {% if fc %}
+            {% for s in fc %}
+              {% set t = as_datetime(s.period_start) | as_local %}
+              {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
+              {% set p10 = (s.get('pv_estimate10', s.pv_estimate) | float(0)) * 0.5 %}
+              {% set kwh = (s.pv_estimate | float(0)) * 0.5 * a + p10 * (1 - a) %}
+              {% set ns.form = ns.form[:idx] + [ns.form[idx] + kwh] + ns.form[idx + 1:] %}
+              {% set ns.form10 = ns.form10[:idx] + [ns.form10[idx] + p10] + ns.form10[idx + 1:] %}
+              {% if ns.d0 is none %}{% set ns.d0 = t.date() %}{% endif %}
+              {% set d = (t.date() - heute).days + 1 %}
+              {% if 0 <= d <= 4 %}
+                {% set i = d * 48 + idx %}
+                {% set ns.k = ns.k[:i] + [ns.k[i] + kwh] + ns.k[i + 1:] %}
+                {% set ns.k10 = ns.k10[:i] + [ns.k10[i] + p10] + ns.k10[i + 1:] %}
+                {% set ns.kh = ns.kh[:i] + [ns.kh[i] + kwh] + ns.kh[i + 1:] %}
+                {% set ns.da = ns.da[:d] + [true] + ns.da[d + 1:] %}
+                {% set ns.slots = ns.slots[:d] + [true] + ns.slots[d + 1:] %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+        {% set ns.fs = ns.form | sum %}{% set ns.fs10 = ns.form10 | sum %}
         {# Ohne heutige Form: Tagessumme gleichmaessig auf 08:00-18:00 verteilen. #}
-        {% if ns.summe <= 0 %}{% set ns.form = [0.0] * 16 + [0.05] * 20 + [0.0] * 12 %}{% set ns.summe = 1.0 %}{% endif %}
-        {% if ns.summe10 <= 0 %}{% set ns.form10 = ns.form %}{% set ns.summe10 = ns.summe %}{% endif %}
-        {% set basis = ns.d0 if ns.d0 is not none else now().date() %}
-        {% for e in [var_solcast_morgen, var_solcast_tag3, var_solcast_tag4] %}
-          {% if e != '' and states(e) not in ['unknown', 'unavailable', ''] %}
+        {% if ns.fs <= 0 %}{% set ns.form = [0.0] * 16 + [0.05] * 20 + [0.0] * 12 %}{% set ns.fs = 1.0 %}{% endif %}
+        {% if ns.fs10 <= 0 %}{% set ns.form10 = ns.form %}{% set ns.fs10 = ns.fs %}{% endif %}
+        {% set basis = ((ns.d0 if ns.d0 is not none else heute) - heute).days + 1 %}
+        {% for liste in [solcast_morgen_liste, solcast_tag3_liste, solcast_tag4_liste] %}
+          {% set tag_nr = loop.index %}
+          {% for e in liste if states(e) not in ['unknown', 'unavailable', ''] %}
             {% set p50 = states(e) | float(0) %}
             {% set p10 = state_attr(e, 'estimate10') | float(p50) %}
             {% set summe = p50 * a + p10 * (1 - a) %}
             {% set fcd = state_attr(e, 'detailedForecast') %}
-            {% set nsd = namespace(k=[0.0] * 48, k10=[0.0] * 48, datum=basis + timedelta(days=loop.index), slots=false) %}
             {% if fcd %}
               {% for s in fcd %}
                 {% set t = as_datetime(s.period_start) | as_local %}
                 {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
                 {% set s10 = (s.get('pv_estimate10', s.pv_estimate) | float(0)) * 0.5 %}
                 {% set kwh = (s.pv_estimate | float(0)) * 0.5 * a + s10 * (1 - a) %}
-                {% set nsd.k = nsd.k[:idx] + [kwh] + nsd.k[idx + 1:] %}
-                {% set nsd.k10 = nsd.k10[:idx] + [s10] + nsd.k10[idx + 1:] %}
-                {% if loop.first %}{% set nsd.datum = t.date() %}{% set nsd.slots = true %}{% endif %}
+                {% set d = (t.date() - heute).days + 1 %}
+                {% if 0 <= d <= 4 %}
+                  {% set i = d * 48 + idx %}
+                  {% set ns.k = ns.k[:i] + [ns.k[i] + kwh] + ns.k[i + 1:] %}
+                  {% set ns.k10 = ns.k10[:i] + [ns.k10[i] + s10] + ns.k10[i + 1:] %}
+                  {% if loop.first %}{% set ns.summe = ns.summe[:d] + [ns.summe[d] + summe] + ns.summe[d + 1:] %}{% endif %}
+                  {% set ns.da = ns.da[:d] + [true] + ns.da[d + 1:] %}
+                  {% set ns.slots = ns.slots[:d] + [true] + ns.slots[d + 1:] %}
+                {% endif %}
               {% endfor %}
-            {% else %}
-              {% set nsm = namespace(l=[], l10=[]) %}
-              {% for v in ns.form %}{% set nsm.l = nsm.l + [v * summe / ns.summe] %}{% endfor %}
-              {% for v in ns.form10 %}{% set nsm.l10 = nsm.l10 + [v * p10 / ns.summe10] %}{% endfor %}
-              {% set nsd.k = nsm.l %}{% set nsd.k10 = nsm.l10 %}
+            {% elif 0 <= basis + tag_nr <= 4 %}
+              {% set d = basis + tag_nr %}
+              {% for v in ns.form %}
+                {% set i = d * 48 + loop.index0 %}
+                {% set ns.k = ns.k[:i] + [ns.k[i] + v * summe / ns.fs] + ns.k[i + 1:] %}
+                {% set ns.k10 = ns.k10[:i] + [ns.k10[i] + ns.form10[loop.index0] * p10 / ns.fs10] + ns.k10[i + 1:] %}
+              {% endfor %}
+              {% set ns.summe = ns.summe[:d] + [ns.summe[d] + summe] + ns.summe[d + 1:] %}
+              {% set ns.da = ns.da[:d] + [true] + ns.da[d + 1:] %}
             {% endif %}
-            {% set ns.tage = ns.tage + [{'datum': nsd.datum.isoformat(), 'k': nsd.k, 'k10': nsd.k10, 'summe': summe, 'slots': nsd.slots}] %}
-          {% endif %}
+          {% endfor %}
         {% endfor %}
-        {{ ns.tage }}
+        {% set nso = namespace(tage=[]) %}
+        {% for d in range(5) if ns.da[d] %}
+          {% set nso.tage = nso.tage + [{'datum': (heute + timedelta(days=d - 1)).isoformat(), 'k': ns.k[d * 48:(d + 1) * 48],
+                                         'k10': ns.k10[d * 48:(d + 1) * 48], 'summe': (ns.kh[d * 48:(d + 1) * 48] | sum) + ns.summe[d], 'slots': ns.slots[d]}] %}
+        {% endfor %}
+        {{ nso.tage }}
       # Rollierend ab jetzt, 72 h in Halbstunden: Ueberschuss je Slot mal Vertrauen
       # nach Vorlauf (unter 24 h voll, dann tag3/tag4), Defizite ungedaempft. Die
       # Summe wird bei null geklemmt: Defizite vor einer Sonnenstrecke traegt die
@@ -2947,21 +3001,30 @@ action:
       aufz_aktiv: "{{ states.notify.pv_optimizer_aufzeichnung is not none }}"
       aufz_zeile: >-
         {% if not aufz_aktiv %}{{ '' }}{% else %}
-        {# to_json kann keine datetime-Objekte: period_start der Solcast-Slots als ISO-String. #}
-        {% set fc = namespace(liste=[], morgen=none, tag3=none, tag4=none) %}
-        {% for s in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
-          {% set fc.liste = fc.liste + [{'period_start': as_datetime(s.period_start).isoformat(),
-               'pv_estimate': s.pv_estimate, 'pv_estimate10': s.pv_estimate10,
-               'pv_estimate90': s.get('pv_estimate90')}] %}
+        {# to_json kann keine datetime-Objekte: period_start der Solcast-Slots als ISO-String.
+           Ein Eintrag je Dachflaeche. Folgetage nur mit den Feldern, die die Planung liest;
+           none, wenn das Attribut fehlt. #}
+        {% set fc = namespace(heute=[], folge=[]) %}
+        {% for e in solcast_heute_liste %}
+          {% set nsd = namespace(l=[]) %}
+          {% for s in (state_attr(e, 'detailedForecast') or []) %}
+            {% set nsd.l = nsd.l + [{'period_start': as_datetime(s.period_start).isoformat(),
+                 'pv_estimate': s.pv_estimate, 'pv_estimate10': s.pv_estimate10,
+                 'pv_estimate90': s.get('pv_estimate90')}] %}
+          {% endfor %}
+          {% set fc.heute = fc.heute + [('solcast_heute_sensor', e, {'detailedForecast': nsd.l})] %}
         {% endfor %}
-        {# Folgetage nur mit den Feldern, die die Planung liest; none, wenn das Attribut fehlt. #}
-        {% for e in [var_solcast_morgen, var_solcast_tag3, var_solcast_tag4] %}
-          {% set fcd = state_attr(e, 'detailedForecast') if e != '' else none %}
-          {% if fcd %}
-            {% set nsd = namespace(l=[]) %}
-            {% for s in fcd %}{% set nsd.l = nsd.l + [{'period_start': as_datetime(s.period_start).isoformat(), 'pv_estimate': s.pv_estimate, 'pv_estimate10': s.pv_estimate10}] %}{% endfor %}
-            {% if loop.index == 1 %}{% set fc.morgen = nsd.l %}{% elif loop.index == 2 %}{% set fc.tag3 = nsd.l %}{% else %}{% set fc.tag4 = nsd.l %}{% endif %}
-          {% endif %}
+        {% for name, liste in [('solcast_morgen_sensor', solcast_morgen_liste), ('solcast_tag3_sensor', solcast_tag3_liste),
+                               ('solcast_tag4_sensor', solcast_tag4_liste)] %}
+          {% for e in liste %}
+            {% set fcd = state_attr(e, 'detailedForecast') %}
+            {% set nsd = namespace(l=none) %}
+            {% if fcd %}
+              {% set nsd.l = [] %}
+              {% for s in fcd %}{% set nsd.l = nsd.l + [{'period_start': as_datetime(s.period_start).isoformat(), 'pv_estimate': s.pv_estimate, 'pv_estimate10': s.pv_estimate10}] %}{% endfor %}
+            {% endif %}
+            {% set fc.folge = fc.folge + [(name, e, {'estimate10': state_attr(e, 'estimate10'), 'detailedForecast': nsd.l})] %}
+          {% endfor %}
         {% endfor %}
         {% set ents = [
              ('battery_soc_sensor', var_battery_soc, {}),
@@ -2988,10 +3051,7 @@ action:
              ('notstrom_utility_sensor', var_notstrom_kwh, {}),
              ('notstrom_json_text', var_notstrom_json, {}),
              ('wr_shutdown_soc', var_wr_shutdown_soc, {}),
-             ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
-             ('solcast_morgen_sensor', var_solcast_morgen, {'estimate10': state_attr(var_solcast_morgen, 'estimate10'), 'detailedForecast': fc.morgen}),
-             ('solcast_tag3_sensor', var_solcast_tag3, {'estimate10': state_attr(var_solcast_tag3, 'estimate10'), 'detailedForecast': fc.tag3}),
-             ('solcast_tag4_sensor', var_solcast_tag4, {'estimate10': state_attr(var_solcast_tag4, 'estimate10'), 'detailedForecast': fc.tag4}),
+           ] + fc.heute + fc.folge + [
              ('helper_lade_modus', var_lade_modus, {}),
              ('helper_logbook_dummy', var_logbook_dummy, {}),
              ('helper_batterie_heute_voll', var_batterie_heute_voll, {}),
@@ -3150,7 +3210,7 @@ action:
                 {% set jetzt = now() %}
                 {% set start = as_datetime(opt_start) | as_local %}
                 {% set heute = namespace(k=[0.0] * 48, summe=0.0) %}
-                {% for sl in (state_attr(var_solcast_heute, 'detailedForecast') or []) %}
+                {% for sl in (solcast_heute_fc or []) %}
                   {% set t = as_datetime(sl.period_start) | as_local %}
                   {% if t.date() == jetzt.date() %}
                     {% set idx = t.hour * 2 + (1 if t.minute >= 30 else 0) %}
