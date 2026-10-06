@@ -10,6 +10,28 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.0.0] - 2026-10-06
+
+### Changed
+- The battery counts as full for the day once the regulating state of charge reaches 99 % by day,
+  instead of when a cell voltage reaches the balancing threshold. Peak shaving, the emergency branch,
+  the sunset accounting and the 100-%-day list read this marker as before; the run that sets it logs
+  it and clears the "battery not full" notice, which now names the day's highest charge against 99 %.
+- The discharge planning still aims at 100 % after nine days without a full battery, now counted from
+  that marker. Log, notice and recording call it a full charge (`vollladung_faellig` replaces
+  `zellausgleich_faellig`), since no balancing follows it any more.
+- The priorities after Prio 0 move up by one: Fall B is Prio 1, the timed top-up Prio 6, the
+  emergency branch Prio 7. The input sections after section 7 move up by one as well, and the general
+  ToU minimum moves to the charging-strategy section.
+
+### Removed
+- Cell balancing (former Prio 1): the blueprint no longer throttles the charge current to the minimum
+  when a cell reaches the threshold; the BMS reduces the current at the top on its own. With it go the
+  cell-voltage trigger, the battery-voltage fallback for a failed BMS, the follow-up timer and the
+  inputs for the highest cell voltage of each pack, the battery voltage, the balancing start voltage,
+  its duration and the full-battery voltage. Home Assistant ignores their leftover values; the package
+  template no longer creates the timer or the `top_balancing` mode.
+
 ## [V6.18.0] - 2026-10-06
 
 ### Added
@@ -1038,7 +1060,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...HEAD
+[V7.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...V7.0.0
 [V6.18.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.17.0...V6.18.0
 [V6.17.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...V6.17.0
 [V6.16.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.0...V6.16.1

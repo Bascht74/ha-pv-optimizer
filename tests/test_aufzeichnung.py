@@ -280,7 +280,7 @@ def _lauf(blueprint, standort, zeit_prefix):
 def test_ohne_erwartete_spitze_keine_blockade_aber_gedrosselt(blueprint):
     """
     PV, 05.09. 08:00: Prognose-Spitze 5,8 kW nach Abzug des Hausverbrauchs, Schwelle
-    11,9 kW, 90 % davon 10,7 kW. Nichts zu kappen -> keine Blockade. Prio 7 bleibt
+    11,9 kW, 90 % davon 10,7 kW. Nichts zu kappen -> keine Blockade. Prio 6 bleibt
     gedrosselt (Simulation 18 A fuer 8,3 kWh in 11 h), damit die Batterie so spaet
     voll wird, wie die Prognose es zulaesst. Real hielt die Blockade an diesem Tag
     bis 13:00 bei 14 kWh Einspeisung, und die Batterie wurde nicht voll.

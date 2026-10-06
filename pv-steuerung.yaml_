@@ -80,7 +80,6 @@ input_select:
       - blockade
       - peak_shaving
       - wp_sperre
-      - top_balancing
       - fall_b_max
       - nacht
       # Wird derzeit von keinem Zweig gesetzt. Bleibt fuer eine kuenftige
@@ -153,10 +152,6 @@ input_number:
 timer:
   # restore ueberall: Ohne das faellt ein laufender Timer beim Neustart aus, und
   # der Zweig, den er absichert, sieht einen Zustand, den es nicht mehr gibt.
-  zellausgleich_nachlauf:             # -> Timer: Zellausgleich-Nachlauf
-    name: "Zellausgleich Nachlauf"
-    icon: mdi:timer-sand
-    restore: true
   peak_shaving_hold:                  # -> Timer: Peak-Shaving Hold
     name: "Peak Shaving Hold"
     icon: mdi:timer-flash
@@ -184,7 +179,7 @@ utility_meter:
     name: "Hausverbrauch Halbstündlich"
     net_consumption: false
     delta_values: false
-  # Nur mit Wallbox (Sektion 11): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
+  # Nur mit Wallbox (Sektion 10): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
   # vom Blueprint zusammen mit dem Hausverbrauch-Zaehler genullt. Beide im Feld
   # "Wallbox-Ladung halbstuendlich" auswaehlen. Zum Nutzen einkommentieren und
   # die Quelle eintragen - ein stehengebliebener Platzhalter laesst Home

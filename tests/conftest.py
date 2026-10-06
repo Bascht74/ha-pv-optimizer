@@ -134,7 +134,7 @@ def szenario(
         jetzt = jetzt.replace(tzinfo=TZ)
     inputs = standard_inputs(blueprint)
     # Zwei Packs, wie an beiden Standorten: die optionalen Pack-3-Inputs bleiben leer.
-    inputs.update({"vmax3_sensor": "", "bms3_temp_min_sensor": "", "bms3_temp_max_sensor": ""})
+    inputs.update({"bms3_temp_min_sensor": "", "bms3_temp_max_sensor": ""})
     # Schatten-BMS: ohne Angabe nicht zugewiesen - der Standardfall, in dem der
     # Blueprint allein mit dem Ladestand des Wechselrichters rechnet.
     if schatten_soc is None:
@@ -158,13 +158,11 @@ def szenario(
         # Batterie & BMS
         z("battery_soc_sensor", soc),
         z("battery_power_sensor", -1500),
-        z("vmax1_sensor", 3.35), z("vmax2_sensor", 3.34), z("vmax3_sensor", "unavailable"),
         z("battery_total_charge", 1000.0),
         z("bms1_temp_min_sensor", 22.0), z("bms2_temp_min_sensor", 22.5), z("bms3_temp_min_sensor", "unavailable"),
         z("bms1_temp_max_sensor", 24.0), z("bms2_temp_max_sensor", 24.5), z("bms3_temp_max_sensor", "unavailable"),
         # Wechselrichter
         z("wr_max_charge_current", ladestrom, last_changed=jetzt - dt.timedelta(minutes=45)),
-        z("wr_battery_voltage_sensor", 53.0),
         *[z(f"wr_tou_{i}", 20) for i in range(1, 7)],
         # Netz & PV
         z("grid_export_sensor", -500), z("grid_export_kwh_heute", 3.2),
@@ -189,7 +187,7 @@ def szenario(
         z("helper_halten_bezug", 0.0),
         z("eingriff_dauer_sensor", 0.0),
         # Timer
-        z("helper_timer_peak", "idle"), z("helper_timer_cooldown", "idle"),
+        z("helper_timer_peak", "idle"),
         z("helper_timer_wp_anlauf", "idle"),
         z("helper_timer_wp_boost", "idle", last_changed=jetzt - dt.timedelta(seconds=boost_timer_idle_seit_s)),
     ]

@@ -46,60 +46,53 @@ def p0_temperaturdeckel(blueprint, tag):
     return szenario(blueprint, zeit(tag, 12, 0), ladestrom=200.0, zustands_overrides=ov)
 
 
-def p1_zellausgleich(blueprint, tag):
-    """Eine Zellspannung erreicht die Balancing-Schwelle, die Batterie war heute noch nicht voll."""
-    return szenario(blueprint, zeit(tag, 12, 0), soc=98.0,
-                    zustands_overrides=_z(blueprint, "vmax1_sensor", "3.45"))
-
-
-def p2_fall_b(blueprint, tag):
+def p1_fall_b(blueprint, tag):
     """Niedriger Ladestand: die Restzeit reicht nicht, der Strom wird aufgerissen."""
     return szenario(blueprint, zeit(tag, 12, 0), soc=40.0)
 
 
-def p3_wp_anlaufsperre(blueprint, tag):
+def p2_wp_anlaufsperre(blueprint, tag):
     """Der Anlauf-Timer der Waermepumpe laeuft, der Ladestrom wird gehalten."""
     return szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_boost_aktiv": True},
                     zustands_overrides=_z(blueprint, "helper_timer_wp_anlauf", "active"))
 
 
-def p4_wp_kompressor(blueprint, tag):
+def p3_wp_kompressor(blueprint, tag):
     """Der Verdichter laeuft, der Ueberschuss gehoert ihm."""
     return szenario(blueprint, zeit(tag, 12, 0),
                     zustands_overrides=_z(blueprint, "wp_kompressor_sensor", "on"))
 
 
-def p5_peak_shaving(blueprint, tag):
+def p4_peak_shaving(blueprint, tag):
     """Der Kappungs-Timer laeuft und die Einspeisung liegt ueber der Schwelle."""
     ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000")}
     return szenario(blueprint, zeit(tag, 12, 0), soc=84.0, zustands_overrides=ov)
 
 
-def p6_morgen_blockade(blueprint, tag):
+def p5_morgen_blockade(blueprint, tag):
     """Frueh am Tag, Platz fuer eine erwartete Einspeisespitze halten."""
     return szenario(blueprint, zeit(tag, 7, 0), soc=84.0, input_overrides={"schwelle_peak_shaving": 3500})
 
 
-def p7_dynamisch(blueprint, tag):
+def p6_dynamisch(blueprint, tag):
     """Normalbetrieb: gedrosselt so laden, dass die Batterie spaet voll wird."""
     return szenario(blueprint, zeit(tag, 12, 0))
 
 
-def p8_notbetrieb(blueprint, tag):
+def p7_notbetrieb(blueprint, tag):
     """Der Ladestand des Wechselrichters fehlt seit einer Stunde."""
     return szenario(blueprint, zeit(tag, 12, 0), soc="unavailable", ladestrom=50.0)
 
 
 ZWEIGE = [
     ("PRIO 0", p0_temperaturdeckel),
-    ("PRIO 1", p1_zellausgleich),
-    ("PRIO 2", p2_fall_b),
-    ("PRIO 3", p3_wp_anlaufsperre),
-    ("PRIO 4", p4_wp_kompressor),
-    ("PRIO 5", p5_peak_shaving),
-    ("PRIO 6", p6_morgen_blockade),
-    ("PRIO 7", p7_dynamisch),
-    ("PRIO 8", p8_notbetrieb),
+    ("PRIO 1", p1_fall_b),
+    ("PRIO 2", p2_wp_anlaufsperre),
+    ("PRIO 3", p3_wp_kompressor),
+    ("PRIO 4", p4_peak_shaving),
+    ("PRIO 5", p5_morgen_blockade),
+    ("PRIO 6", p6_dynamisch),
+    ("PRIO 7", p7_notbetrieb),
 ]
 
 
@@ -244,25 +237,8 @@ def test_temperaturdeckel_schreibt_die_laderate(blueprint, tag):
     assert ctx["temperatur_limit_ampere"] < ctx["max_ampere"]
 
 
-def test_zellausgleich_setzt_strom_timer_und_modus(blueprint, tag):
-    """
-    Prio 1 schreibt den Ausgleichs-Ladestrom, markiert die Batterie als voll und
-    startet den Nachlauf-Timer. Die drei gehoeren zusammen: Ohne den Timer endet
-    der Ausgleich nie, ohne die Markierung liefe er beim naechsten Lauf erneut an.
-    """
-    h = p1_zellausgleich(blueprint, tag)
-    ctx = h.auswerten()
-    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 1")
-    assert schreibt(aktionen) == [ctx["target_p1"]]
-    assert ctx["target_p1"] < ctx["max_ampere"], "Ausgleich laedt bewusst klein"
-    assert schreibt(aktionen, "input_select.select_option") == ["top_balancing"]
-    dienste = [s for s, _, _ in aktionen]
-    assert "timer.start" in dienste and "input_boolean.turn_on" in dienste
-
-
 def test_fall_b_reisst_auf_das_maximum_auf(blueprint, tag):
-    h = p2_fall_b(blueprint, tag)
+    h = p1_fall_b(blueprint, tag)
     ctx = h.auswerten()
     _, aktionen = zweig_und_aktionen(h, blueprint, ctx)
     assert schreibt(aktionen) == [ctx["max_ampere"]]
@@ -270,36 +246,36 @@ def test_fall_b_reisst_auf_das_maximum_auf(blueprint, tag):
 
 
 def test_anlaufsperre_haelt_den_strom_statt_ihn_zu_schreiben(blueprint, tag):
-    """Prio 3 haelt bewusst: kein Schreibvorgang, nur der Modus."""
-    _, aktionen = zweig_und_aktionen(p3_wp_anlaufsperre(blueprint, tag), blueprint)
+    """Prio 2 haelt bewusst: kein Schreibvorgang, nur der Modus."""
+    _, aktionen = zweig_und_aktionen(p2_wp_anlaufsperre(blueprint, tag), blueprint)
     assert schreibt(aktionen) == []
     assert "wp_sperre" in schreibt(aktionen, "input_select.select_option")
 
 
 def test_kompressor_sperre_stoppt_das_laden(blueprint, tag):
-    _, aktionen = zweig_und_aktionen(p4_wp_kompressor(blueprint, tag), blueprint)
+    _, aktionen = zweig_und_aktionen(p3_wp_kompressor(blueprint, tag), blueprint)
     assert schreibt(aktionen) == [0]
 
 
-def test_ohne_kompressorsensor_sperrt_prio_4_nicht(blueprint, tag):
+def test_ohne_kompressorsensor_sperrt_prio_3_nicht(blueprint, tag):
     """
     Unbelegtes Feld - der Regelfall an beiden Standorten. Traegt die Groesse ihr
-    Nein als Text statt als Boolean, gewinnt Prio 4 jeden Lauf und kein Zweig
+    Nein als Text statt als Boolean, gewinnt Prio 3 jeden Lauf und kein Zweig
     darunter ist mehr zu sehen.
     """
     h = szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_kompressor_sensor": ""})
     assert h.auswerten()["wp_kompressor_aktiv"] is False
-    assert zweig(h, blueprint) == "PRIO 7"
+    assert zweig(h, blueprint) == "PRIO 6"
 
 
 def test_blockade_stoppt_das_laden(blueprint, tag):
-    _, aktionen = zweig_und_aktionen(p6_morgen_blockade(blueprint, tag), blueprint)
+    _, aktionen = zweig_und_aktionen(p5_morgen_blockade(blueprint, tag), blueprint)
     assert schreibt(aktionen) == [0]
     assert "blockade" in schreibt(aktionen, "input_select.select_option")
 
 
 def test_peak_shaving_hebt_den_strom_an(blueprint, tag):
-    h = p5_peak_shaving(blueprint, tag)
+    h = p4_peak_shaving(blueprint, tag)
     ctx = h.auswerten()
     _, aktionen = zweig_und_aktionen(h, blueprint, ctx)
     assert schreibt(aktionen) == [ctx["target_p3"]]
@@ -307,7 +283,7 @@ def test_peak_shaving_hebt_den_strom_an(blueprint, tag):
 
 
 def test_dynamisches_laden_schreibt_den_gedrosselten_sollwert(blueprint, tag):
-    h = p7_dynamisch(blueprint, tag)
+    h = p6_dynamisch(blueprint, tag)
     ctx = h.auswerten()
     _, aktionen = zweig_und_aktionen(h, blueprint, ctx)
     assert schreibt(aktionen) == [ctx["target_p5"]]
@@ -324,7 +300,7 @@ def test_waermepumpe_hat_vorrang_vor_der_kappung(blueprint, tag):
           **_z(blueprint, "grid_export_sensor", "-8000")}
     h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, input_overrides={"wp_boost_aktiv": True},
                  zustands_overrides=ov)
-    assert zweig(h, blueprint) == "PRIO 3"
+    assert zweig(h, blueprint) == "PRIO 2"
 
 
 def test_volle_batterie_laesst_kappung_und_nachladen_aus(blueprint, tag):
@@ -339,24 +315,24 @@ def test_nachts_greift_kein_zweig(blueprint, tag):
 
 
 def test_fall_b_legt_das_dynamische_laden_still(blueprint, tag):
-    """Steht der Modus schon auf Fall B, gewinnt Prio 7 zwar, stoppt aber ohne zu schreiben."""
+    """Steht der Modus schon auf Fall B, gewinnt Prio 6 zwar, stoppt aber ohne zu schreiben."""
     eid = fake_entity("helper_lade_modus", "input_select")
     h = szenario(blueprint, zeit(tag, 12, 0), soc=93.0,
                  zustands_overrides={eid: Zustand(eid, "fall_b_max")})
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 7")
+    assert alias.startswith("PRIO 6")
     assert schreibt(aktionen) == []
     assert any(s == "stop" for s, _, _ in aktionen)
 
 
 def test_kappung_wartet_den_mindestabstand_ab(blueprint, tag):
-    """Wurde das Register gerade geschrieben, gewinnt Prio 5, schreibt aber nicht."""
+    """Wurde das Register gerade geschrieben, gewinnt Prio 4, schreibt aber nicht."""
     eid = fake_entity("wr_max_charge_current", "number")
     ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000"),
           eid: Zustand(eid, "200.0", last_changed=zeit(tag, 12, 0) - dt.timedelta(seconds=10))}
     h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, zustands_overrides=ov)
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 5")
+    assert alias.startswith("PRIO 4")
     assert schreibt(aktionen) == []
 
 
@@ -387,12 +363,12 @@ ZIELSTROM_10_UHR = {80.0: 20, 89.9: 12, 90.0: 11, 92.0: 10}
     (92.0, 9, 45, "peak_shaving", True),    # ebenso +1 A ueber 90 %
     (92.0, 11, 45, "peak_shaving", False),  # aber ueber 90 % nicht nach unten
 ])
-def test_prio7_schwellen_fuer_anheben_und_absenken(blueprint, tag, soc, ist, minuten, modus, neu):
+def test_prio6_schwellen_fuer_anheben_und_absenken(blueprint, tag, soc, ist, minuten, modus, neu):
     """
     Anheben ab 10 A sofort, ab 5 A nach einer Stunde Ruhe; absenken nur unter 90 % und
     erst ab 30 A, nach einer Stunde ab 20 A. Kleinere Schritte kosten Registerschreiben,
     ohne dass die Batterie schneller voll wird; ueber 90 % verzoegerte ein Absenken das
-    Vollwerden. Hat ein anderer Zweig zuletzt geschrieben, zieht Prio 7 sofort nach.
+    Vollwerden. Hat ein anderer Zweig zuletzt geschrieben, zieht Prio 6 sofort nach.
     """
     from conftest import prognose
     jetzt = zeit(tag, 10, 0)
@@ -402,54 +378,19 @@ def test_prio7_schwellen_fuer_anheben_und_absenken(blueprint, tag, soc, ist, min
                  profil_kwh=0.2, zustands_overrides=ov)
     ctx = h.auswerten()
     alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 7") and ctx["target_p5"] == ZIELSTROM_10_UHR[soc]
+    assert alias.startswith("PRIO 6") and ctx["target_p5"] == ZIELSTROM_10_UHR[soc]
     assert schreibt(aktionen, "number.set_value", ctx["var_wr_max_charge"]) == ([ZIELSTROM_10_UHR[soc]] if neu else [])
 
 
-@pytest.mark.parametrize("offset, erwartet", [
-    (2.0, 9),    # min_ampere 7 A + 2 A
-    (2.3, 10),   # 9,3 A aufgerundet
-])
-def test_zellausgleich_laedt_mit_mindeststrom_und_regelabweichung(blueprint, tag, offset, erwartet):
-    """Der kleine Reststrom muss wirklich an der Batterie ankommen, deshalb mit Regelabweichung und aufgerundet."""
-    h = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, input_overrides={"regler_offset_a": offset},
-                 zustands_overrides=_z(blueprint, "vmax1_sensor", "3.45"))
-    alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 1") and schreibt(aktionen) == [erwartet]
-
-
-@pytest.mark.parametrize("timer, vmax, ist, erwartet", [
-    ("idle", "3.45", 200, None),      # heute schon voll: die Schwelle startet keinen zweiten Ausgleich
-    ("active", "3.30", 200, [9]),     # Nachlauf: haelt 9 A, auch unter der Schwelle
-    ("active", "3.30", 7, [9]),       # 2 A daneben: nachgeschrieben
-    ("active", "3.30", 10, []),       # 1 A daneben: stehen gelassen
-])
-def test_zellausgleich_sperre_und_nachlauf(blueprint, tag, timer, vmax, ist, erwartet):
-    """
-    Der Ausgleich startet einmal am Tag und laeuft dann ueber den Nachlauf-Timer, nicht ueber
-    die Zellspannung. Ein zweiter Start setzte Timer und Markierung erneut; nachgeschrieben
-    wird erst ab 2 A Abweichung, darunter gilt der Sollwert als uebernommen.
-    """
-    ov = {**_z(blueprint, "helper_batterie_heute_voll", "on"), **_z(blueprint, "helper_timer_cooldown", timer),
-          **_z(blueprint, "vmax1_sensor", vmax)}
-    h = szenario(blueprint, zeit(tag, 12, 0), soc=98.0, ladestrom=ist, zustands_overrides=ov)
-    alias, aktionen = zweig_und_aktionen(h, blueprint)
-    if erwartet is None:
-        assert alias is None and aktionen == []
-    else:
-        assert alias.startswith("PRIO 1") and schreibt(aktionen) == erwartet
-        assert "timer.start" not in [s for s, _, _ in aktionen]
-
-
 @pytest.mark.parametrize("soc, prio, strom, text", [
-    (88.7, "PRIO 2", 350, "da Bedarf 4.36 kWh > Verfügbar 4.32 kWh"),
-    (88.9, "PRIO 7", 26, "mit 24 A + 2.0 A Regelabweichung bis Ende des Ladefensters gedeckt wird; "
+    (88.7, "PRIO 1", 350, "da Bedarf 4.36 kWh > Verfügbar 4.32 kWh"),
+    (88.9, "PRIO 6", 26, "mit 24 A + 2.0 A Regelabweichung bis Ende des Ladefensters gedeckt wird; "
                          "bis 1 h davor reicht der Überschuss nicht mehr"),
 ])
 def test_kippstelle_von_fall_b_in_der_kaskade(blueprint, tag, soc, prio, strom, text):
     """
-    Die Lage aus test_kippstelle_von_fall_b: knapp darueber reisst Prio 2 auf das Maximum
-    350 A auf (bei 22 Grad kein Temperaturdeckel), knapp darunter regelt Prio 7. Deren
+    Die Lage aus test_kippstelle_von_fall_b: knapp darueber reisst Prio 1 auf das Maximum
+    350 A auf (bei 22 Grad kein Temperaturdeckel), knapp darunter regelt Prio 6. Deren
     Zielstrom: bis 1 h vor Fensterende kommen hoechstens 4 x 0,8 = 3,2 kWh an, zu wenig fuer
     3,57 kWh; im vollen Fenster 3,57 / (6 x 0,0256) = 23,2 -> 24 A, + 2 A.
     """
@@ -462,7 +403,7 @@ def test_kippstelle_von_fall_b_in_der_kaskade(blueprint, tag, soc, prio, strom, 
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert text in meldung, meldung
     # Die Uhrzeit waere das Ende des um den Vorlauf gekuerzten Fensters, das hier nicht reicht.
-    assert prio != "PRIO 7" or "Voraussichtlich voll" not in meldung, meldung
+    assert prio != "PRIO 6" or "Voraussichtlich voll" not in meldung, meldung
 
 
 @pytest.mark.parametrize("soc, ist, strom, text, voll_um", [
@@ -470,7 +411,7 @@ def test_kippstelle_von_fall_b_in_der_kaskade(blueprint, tag, soc, prio, strom, 
     (96.0, 40, 53, "mit 51 A + 2.0 A Regelabweichung in der nächsten halben Stunde gedeckt wird, da vom restlichen "
                    "Ladefenster 1.25 h nach Abzug des Ladevorlaufs 1 h keine halbe Stunde bleibt (freie", True),
 ])
-def test_prio7_meldung_bei_kurzem_ladefenster(blueprint, tag, soc, ist, strom, text, voll_um):
+def test_prio6_meldung_bei_kurzem_ladefenster(blueprint, tag, soc, ist, strom, text, voll_um):
     """
     16:45, 3 kW bis 18:00: Vom Ladefenster bleiben 1,25 h, der erste Slot ist angebrochen, und nach 1 h
     Vorlauf bleibt keine halbe Stunde. Die Kurzfassung rechnet dann mit der naechsten halben Stunde, die
@@ -483,13 +424,13 @@ def test_prio7_meldung_bei_kurzem_ladefenster(blueprint, tag, soc, ist, strom, t
     h = szenario(blueprint, zeit(tag, 16, 45), soc=soc, ladestrom=ist, forecast=prognose(tag, [3.0] * 20, dt.time(8, 0), p10_anteil=1.0),
                  profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999")})
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [strom]
+    assert alias.startswith("PRIO 6") and schreibt(aktionen) == [strom]
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert text in meldung and "davor reicht" not in meldung, meldung
     assert ("Voraussichtlich voll um 17:15 Uhr." in meldung) is voll_um, meldung
 
 
-def test_prio7_meldung_ohne_ladevorlauf(blueprint, tag):
+def test_prio6_meldung_ohne_ladevorlauf(blueprint, tag):
     """
     10:00, 3 kW bis 18:00, Ladevorlauf 0: Das gekuerzte Fenster ist das volle, 16 Halbstunden mit je
     1,5 - 0,2 = 1,3 kWh. 85 %: 4,82 kWh / (8 h x 0,0512 kWh je A und Stunde) = 11,8 -> 12 A + 2 A.
@@ -500,13 +441,13 @@ def test_prio7_meldung_ohne_ladevorlauf(blueprint, tag):
     h = szenario(blueprint, zeit(tag, 10, 0), soc=85.0, ladestrom=200, forecast=prognose(tag, [3.0] * 20, dt.time(8, 0), p10_anteil=1.0),
                  profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999")}, input_overrides={"ladevorlauf_stunden": "00:00:00"})
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [14]
+    assert alias.startswith("PRIO 6") and schreibt(aktionen) == [14]
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert "mit 12 A + 2.0 A Regelabweichung bis Ende des Ladefensters gedeckt wird (freie" in meldung, meldung
     assert "Voraussichtlich voll um 18:00 Uhr." in meldung, meldung
 
 
-def test_prio7_meldung_bei_linearer_verteilung(blueprint, tag):
+def test_prio6_meldung_bei_linearer_verteilung(blueprint, tag):
     """
     15:00, 0,6 kW bis 18:00: je Halbstunde 0,3 - 0,2 = 0,1 kWh, sechs Halbstunden 0,6 kWh gegen 1,0 kWh
     Bedarf (unter der Bagatellgrenze, also kein Fall B). Auch der Hoechststrom deckt ihn nicht, die
@@ -518,7 +459,7 @@ def test_prio7_meldung_bei_linearer_verteilung(blueprint, tag):
     h = szenario(blueprint, zeit(tag, 15, 0), soc=96.9, ladestrom=0, forecast=prognose(tag, [0.6] * 20, dt.time(8, 0), p10_anteil=1.0),
                  profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999"), **_z(blueprint, "helper_lade_modus", "peak_shaving")})
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [9]
+    assert alias.startswith("PRIO 6") and schreibt(aktionen) == [9]
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert ("mit 6.5 A + 2.0 A Regelabweichung gleichmäßig über 3.0 h mit PV-Überschuss verteilt wird; der Überschuss "
             "im Ladefenster deckt ihn auch mit 350 A nicht (freie") in meldung, meldung
@@ -536,10 +477,10 @@ def _spitze_im_text(meldung: str, ctx: dict) -> None:
 
 def test_blockade_start_nennt_die_erwartete_spitze(blueprint, tag):
     """Die Spitze ist die Bedingung, die die Blockade erst zulaesst; der Start nennt sie samt ihrer zwei Teile."""
-    h = p6_morgen_blockade(blueprint, tag)
+    h = p5_morgen_blockade(blueprint, tag)
     ctx = h.auswerten()
     alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 6")
+    assert alias.startswith("PRIO 5")
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert f"da höchste erwartete Netzeinspeisung {round(ctx['spitze_erwartet_w'])} W ≥ 3150 W = 90 % der Schwelle (" in meldung, meldung
     _spitze_im_text(meldung, ctx)
@@ -570,7 +511,7 @@ def test_blockade_ende_schiebt_es_nicht_auf_die_prognose(blueprint, tag):
 ])
 def test_temperaturdeckel_nur_genannt_wenn_er_begrenzt(blueprint, tag, temp, strom, genannt):
     """
-    Die Szene aus test_prio7_meldung_ohne_ladevorlauf (Sollwert 14 A) und Prio 5 mit 25 A: Der
+    Die Szene aus test_prio6_meldung_ohne_ladevorlauf (Sollwert 14 A) und Prio 4 mit 25 A: Der
     Deckel steht nur in der Meldung, wenn er den geschriebenen Wert kleiner macht - ein Deckel
     unter dem Maximum allein erklaert keinen Sollwert, der weit darunter liegt.
     """
@@ -580,14 +521,14 @@ def test_temperaturdeckel_nur_genannt_wenn_er_begrenzt(blueprint, tag, temp, str
     h = szenario(blueprint, zeit(tag, 10, 0), soc=85.0, ladestrom=0, forecast=prognose(tag, [3.0] * 20, dt.time(8, 0), p10_anteil=1.0),
                  profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999"), **kalt}, input_overrides={"ladevorlauf_stunden": "00:00:00"})
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [strom]
+    assert alias.startswith("PRIO 6") and schreibt(aktionen) == [strom]
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert ("Begrenzung durch Batterietemperatur" in meldung) is genannt, meldung
 
     ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000"), **kalt}
     h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=0, zustands_overrides=ov)
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 5") and schreibt(aktionen) == [10 if genannt else 25]
+    assert alias.startswith("PRIO 4") and schreibt(aktionen) == [10 if genannt else 25]
     meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
     assert ("Durch die Batterietemperatur auf" in meldung) is genannt, meldung
 
@@ -717,31 +658,63 @@ def _benachrichtigungs_ids(knoten, dienst):
     return []
 
 
-def test_nicht_voll_hinweis_nennt_den_ueberfaelligen_zellausgleich(blueprint, tag):
+def test_nicht_voll_hinweis_nennt_die_ueberfaellige_vollladung(blueprint, tag):
     """
-    Mit Entlade-Planung und ueberfaelligem Zellausgleich (zuletzt voll vor 12 Tagen, faellig nach 9) fehlt Sonne,
+    Mit Entlade-Planung und ueberfaelliger Vollladung (zuletzt voll vor 12 Tagen, faellig nach 9) fehlt Sonne,
     nicht die Auslegung: kein Rat, die Auslegung zu pruefen. Ohne Planung bleibt er. Feste Kennung: ein neuer
-    Abend ersetzt den Hinweis, der naechste Zellausgleich (Prio 1 markiert die Batterie als voll) entfernt ihn.
+    Abend ersetzt den Hinweis, der Voll-Marker entfernt ihn.
     """
     import json
     zs = {**_z(blueprint, "json_tracking_sensor", json.dumps([(tag - dt.timedelta(days=12)).isoformat()])),
-          **_z(blueprint, "eingriff_dauer_sensor", "2.3"), **_z(blueprint, "helper_max_soc_heute", "88")}
+          **_z(blueprint, "eingriff_dauer_sensor", "2.3"), **_z(blueprint, "helper_max_soc_heute", "98.7")}
     zweige = gruppe(blueprint, "Aktionen bei Sonnenuntergang")
     mit = szenario(blueprint, zeit(tag, 18, 30), soc=60.0, trigger_id="sunset_check", zustands_overrides=zs)
     ctx = mit.auswerten()
-    assert ctx["zellausgleich_faellig"] is True and ctx["ziel_soc_eff"] == 100
+    assert ctx["vollladung_faellig"] is True and ctx["ziel_soc_eff"] == 100
     _, aktionen = zweig_und_aktionen(mit, blueprint, ctx, zweige=zweige)
     hinweis = schreibt(aktionen, "persistent_notification.create")
     assert len(hinweis) == 1 and "Auslegung" not in hinweis[0]
-    assert "Zellausgleich seit 3 Tagen überfällig" in hinweis[0]
-    assert "Höchster Tages-Ladestand (SOC) 88 %, Ziel-Ladestand 100 %" in hinweis[0]
+    # Abgerundet, damit 98,7 % nicht als 99 % < 99 % dasteht
+    assert ("Vollladung seit 3 Tagen überfällig und auch heute nicht erreicht: höchster Tages-Ladestand (SOC) "
+            "98 % < 99 %. (Ziel-Ladestand 100 %; Batterie seit 12 Tagen nicht voll, Vollladung fällig nach 9 Tagen; "
+            "Eingriffsdauer 2.3 h.)") in hinweis[0], hinweis[0]
     ohne = szenario(blueprint, zeit(tag, 18, 30), soc=60.0, trigger_id="sunset_check", prognose_tage_kwh=None, zustands_overrides=zs)
     _, aktionen = zweig_und_aktionen(ohne, blueprint, zweige=zweige)
-    assert "Bitte die Auslegung/Logik prüfen" in schreibt(aktionen, "persistent_notification.create")[0]
+    assert "98 % < 99 %. Bitte die Auslegung prüfen." in schreibt(aktionen, "persistent_notification.create")[0]
     angelegt = [i for i in _benachrichtigungs_ids(blueprint["action"], "persistent_notification.create") if i not in ("bms_offline_warning", "soc_fehlt_warning")]
     assert angelegt == ["batterie_nicht_voll"]
-    prio1 = next(z for z in gruppe(blueprint, "PRIO 0") if z["alias"].startswith("PRIO 1"))
-    assert _benachrichtigungs_ids(prio1, "persistent_notification.dismiss") == ["batterie_nicht_voll"]
+    assert _benachrichtigungs_ids(_voll_marker(blueprint), "persistent_notification.dismiss") == ["batterie_nicht_voll"]
+
+
+def _voll_marker(blueprint):
+    """Der Block, der die Batterie ab 99 % fuer den Rest des Tages als voll markiert."""
+    return next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s
+                and "aktueller_soc >= 99 and not heute_schon_voll" in " ".join(str(s["if"]).split()))
+
+
+@pytest.mark.parametrize("uhrzeit, soc, voll, trigger_id, markiert", [
+    ((12, 0), 99.0, "off", "monitoring_5min", True),    # erreicht 99 %: ab jetzt voll
+    ((12, 0), 98.9, "off", "monitoring_5min", False),   # knapp darunter nicht
+    ((12, 0), 99.5, "on", "monitoring_5min", False),    # schon markiert: kein zweites Mal
+    ((23, 58), 99.5, "off", "maintenance", False),      # der Wartungslauf hat ihn eben zurueckgesetzt
+    ((12, 0), "unavailable", "off", "monitoring_5min", False),  # ohne Ladestand kein Urteil
+])
+def test_voll_marker_ab_99_prozent_bei_tag(blueprint, tag, uhrzeit, soc, voll, trigger_id, markiert):
+    """
+    Ab 99 % gilt die Batterie fuer den Rest des Tages als voll; Lastspitzen-Kappung, Notbetrieb,
+    Abendbilanz und die 100-%-Tage-Liste lesen den Marker. Nur bei Tag, sonst setzte der Wartungslauf
+    um 23:58 den gerade zurueckgesetzten Marker fuer den neuen Tag.
+    """
+    h = szenario(blueprint, zeit(tag, *uhrzeit), soc=soc, trigger_id=trigger_id,
+                 zustands_overrides=_z(blueprint, "helper_batterie_heute_voll", voll))
+    ctx = h.auswerten()
+    schritt = _voll_marker(blueprint)
+    assert all(template_wahr(h, b["value_template"], ctx) for b in schritt["if"]) is markiert
+    if markiert:
+        meldung = next(a for a in schritt["then"] if a.get("action") == "logbook.log")["data"]["message"]
+        assert ("Batterie voll: für den Rest des Tages als voll markiert, da Ladestand (SOC) 99 % ≥ 99 %."
+                in str(h._aufloesen(meldung, ctx)))
+        assert [a.get("action") for a in schritt["then"]][:2] == ["input_boolean.turn_on", "persistent_notification.dismiss"]
 
 
 def test_tou_minimum_setzt_alle_sechs_register(blueprint, tag):
@@ -776,7 +749,7 @@ def test_peak_shaving_ende_trennt_abbruch_vom_ablauf(blueprint, tag):
 def test_wp_boost_start_hebt_das_ziel_und_startet_beide_timer(blueprint, tag):
     """
     Zieltemperatur, Hysterese und beide Timer gehoeren zusammen: Ohne den
-    Anlauf-Timer nimmt Prio 3 der anlaufenden Pumpe den Ueberschuss nicht frei,
+    Anlauf-Timer nimmt Prio 2 der anlaufenden Pumpe den Ueberschuss nicht frei,
     ohne den Laufzeit-Timer faellt das Ziel nie auf den Normalwert zurueck.
     """
     h = wp_boost_start(blueprint, tag)
@@ -918,14 +891,14 @@ def test_tag_tor_schweigt_waehrend_der_morgen_blockade(blueprint, tag):
 # Notbetrieb ohne Ladestand
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("soc, stunde, gegenprobe_soc, sonst", [
-    ("unavailable", 12, 40.0, "PRIO 2"),   # als 0 % gerechnet raste sonst Fall B ein
-    ("0", 12, 40.0, "PRIO 2"),             # eine gemeldete 0 ist kein Messwert
-    ("255", 12, 84.0, "PRIO 7"),           # ueber 100 ebenso wenig
-    ("unavailable", 7, 84.0, "PRIO 6"),    # morgens statt der Blockade
+    ("unavailable", 12, 40.0, "PRIO 1"),   # als 0 % gerechnet raste sonst Fall B ein
+    ("0", 12, 40.0, "PRIO 1"),             # eine gemeldete 0 ist kein Messwert
+    ("255", 12, 84.0, "PRIO 6"),           # ueber 100 ebenso wenig
+    ("unavailable", 7, 84.0, "PRIO 5"),    # morgens statt der Blockade
 ])
 def test_notbetrieb_laedt_voll_ohne_einzurasten(blueprint, tag, soc, stunde, gegenprobe_soc, sonst):
     """
-    Ohne Ladestand gewinnt Prio 8: voller Strom, und kein Modus, der den Tag ueber
+    Ohne Ladestand gewinnt Prio 7: voller Strom, und kein Modus, der den Tag ueber
     einrastet. Die Gegenprobe mit gueltigem Ladestand zeigt den Zweig, den der
     Notbetrieb verdraengt.
     """
@@ -934,7 +907,7 @@ def test_notbetrieb_laedt_voll_ohne_einzurasten(blueprint, tag, soc, stunde, geg
     h = szenario(blueprint, zeit(tag, stunde, 0), soc=soc, **kw)
     ctx = h.auswerten()
     alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 8")
+    assert alias.startswith("PRIO 7")
     assert schreibt(aktionen) == [ctx["max_ampere"]]
     assert schreibt(aktionen, "input_select.select_option") == []
     assert ctx["blockade_aktiv"] is False and ctx["tou_schreiben"] is False
@@ -950,19 +923,19 @@ def test_notbetrieb_wartet_einen_aussetzer_ab(blueprint, tag):
 
 
 def test_notbetrieb_bleibt_unter_der_temperaturgrenze(blueprint, tag):
-    """Kalte Zellen: Prio 8 laedt nur bis zum Temperaturdeckel, nicht bis zum Maximum."""
+    """Kalte Zellen: Prio 7 laedt nur bis zum Temperaturdeckel, nicht bis zum Maximum."""
     ov = {**_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=zeit(tag, 11, 0)),
           **_z(blueprint, "bms1_temp_min_sensor", "12.0"), **_z(blueprint, "bms2_temp_min_sensor", "12.0")}
     h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=10.0, zustands_overrides=ov)
     ctx = h.auswerten()
     alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 8")
+    assert alias.startswith("PRIO 7")
     assert schreibt(aktionen) == [ctx["temperatur_limit_ampere"]]
     assert 10 < ctx["temperatur_limit_ampere"] < ctx["max_ampere"]
 
 
 def test_notbetrieb_endet_mit_voller_batterie(blueprint, tag):
-    """Hat der Zellausgleich die Batterie heute als voll markiert, laedt Prio 8 nicht erneut auf."""
+    """Ist die Batterie heute schon als voll markiert, laedt Prio 7 nicht erneut auf."""
     ov = {**_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=zeit(tag, 11, 0)),
           **_z(blueprint, "helper_batterie_heute_voll", "on")}
     h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=50.0, zustands_overrides=ov)
@@ -971,14 +944,14 @@ def test_notbetrieb_endet_mit_voller_batterie(blueprint, tag):
 
 def test_notbetrieb_uebernimmt_von_laufender_lastspitzen_kappung(blueprint, tag):
     """
-    Faellt der Ladestand bei laufendem Kappungs-Timer aus, gewinnt nicht Prio 5, die ohne
+    Faellt der Ladestand bei laufendem Kappungs-Timer aus, gewinnt nicht Prio 4, die ohne
     Spitze nichts schreibt und den Strom bis zum Ablauf des Timers stehen liesse.
     """
     ov = _z(blueprint, "helper_timer_peak", "active")
-    assert zweig(szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=50.0, zustands_overrides=ov), blueprint) == "PRIO 5"
+    assert zweig(szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=50.0, zustands_overrides=ov), blueprint) == "PRIO 4"
     h = szenario(blueprint, zeit(tag, 12, 0), soc="unavailable", ladestrom=50.0, zustands_overrides=ov)
     alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 8") and schreibt(aktionen) == [h.auswerten()["max_ampere"]]
+    assert alias.startswith("PRIO 7") and schreibt(aktionen) == [h.auswerten()["max_ampere"]]
 
 
 @pytest.mark.parametrize("alias_anfang, bauen", [
