@@ -16,9 +16,8 @@ Logbuch-Meldung trägt ihn.
 - The four required fields "PV-Leistung geglättet (W)", "Solcast: aktuelle Leistung (W)", "Solcast:
   verbleibende Leistung heute (kWh)" and "Solcast: Prognose nächste Stunde (kWh)". No decision read
   them; the charge planning takes its forecast from "Solcast: Prognose heute (mit Array)". Leftover
-  entries are ignored, and an instance that left one empty no longer stops at the startup check.
-- The helper template no longer offers the smoothed PV power sensor "PV Power Geglättet", which only
-  fed the removed field. A site that copied it from the template can delete it.
+  entries are ignored, and an instance that left one empty no longer stops at the startup check. A
+  smoothed PV power sensor built only for the first field can be deleted.
 
 ### Fixed
 - The helper template counts the half-hourly house consumption from a Riemann sum of the total load
