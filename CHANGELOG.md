@@ -25,8 +25,10 @@ Logbuch-Meldung trägt ihn.
   the sunset accounting and the 100-%-day list read this marker as before; the run that sets it logs
   it and clears the "battery not full" notice, which now names the day's highest charge against 99 %.
 - The discharge planning still aims at 100 % after nine days without a full battery, now counted from
-  that marker. Log, notice and recording call it a full charge (`vollladung_faellig` replaces
-  `zellausgleich_faellig`), since no balancing follows it any more.
+  that marker. A full day counts the moment the marker is set rather than when the list takes it at
+  23:58, so the evening after a full charge no longer plans for 100 %. Log, notice and recording call
+  it a full charge (`vollladung_faellig` replaces `zellausgleich_faellig`), since no balancing follows
+  it any more.
 - The priorities after Prio 0 move up by one: Fall B is Prio 1, the timed top-up Prio 6, the
   emergency branch Prio 7. The input sections after section 7 move up by one as well, and the general
   ToU minimum moves to the charging-strategy section.
@@ -50,11 +52,12 @@ Logbuch-Meldung trägt ihn.
   profiles learned as one half hour; the backup profile's cold start filled every slot with it. The
   meters are now reset with `utility_meter.reset`, and a reading counts only when that reset lies at
   most 40 minutes back; otherwise the run resets the meter, learns the reading into neither profile
-  nor the grid-import sum of the hold and logs it. Existing instances discard one half hour once after
-  the update, because their meters were zeroed by calibration so far.
+  nor the grid-import sum of the hold, logs it and leaves it out of the recording's slot line. Existing
+  instances discard one half hour once after the update, because their meters were zeroed by
+  calibration so far.
 - The half hour that is skipped for an invalid profile helper resets the meters as well, so they no
   longer run up until the midnight rebuild; an unreadable house meter is no longer learned as zero.
-- "Solcast: Prognose heute" is a required field again: without it the run stops with the notice that
+- "Solcast: Prognose heute" is now a required field: without it the run stops with the notice that
   names missing fields, instead of planning the charge as if no PV were coming.
 
 ## [V6.18.0] - 2026-10-06
