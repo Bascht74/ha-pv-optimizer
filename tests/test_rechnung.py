@@ -89,8 +89,8 @@ def test_realitaets_check_faktor_ist_ueber_die_halbstunde_konstant(blueprint, ta
         # Ist-Erzeugung = 85 % des bis jetzt prognostizierten Blends
         t = h.auswerten(bis="trend_dict")["trend_dict"]
         from ha_jinja import Zustand, Zustand
-        h.states.tabelle[h.inputs["pv_erzeugung_heute_sensor"]] = Zustand(
-            h.inputs["pv_erzeugung_heute_sensor"], str(round(0.85 * t["blend_bisher"], 4)))
+        pv = h.inputs["pv_erzeugung_heute_sensor"][0]
+        h.states.tabelle[pv] = Zustand(pv, str(round(0.85 * t["blend_bisher"], 4)))
         faktoren.append(h.auswerten(bis="trend_faktor")["trend_faktor"])
     assert max(faktoren) - min(faktoren) < 0.005, f"Faktor saegt: {faktoren}"
     assert faktoren[0] == pytest.approx(0.85, abs=0.005)
@@ -741,6 +741,7 @@ def test_schatten_unter_halbem_wechselrichterwert_bricht_warmwasser_nicht_ab(blu
     # Realitaets-Check kuerzt nicht; Batterie laedt, Einspeisung unter der Boost-Schwelle.
     for name, wert in (("pv_erzeugung_heute_sensor", "999"), ("battery_power_sensor", "-6000"), ("grid_export_sensor", "-500")):
         eid = standard_inputs(blueprint)[name]
+        eid = eid[0] if isinstance(eid, list) else eid
         zs[eid] = Zustand(eid, wert)
     ctx = szenario(blueprint, zeit(tag, 11, 0), soc=20.0, schatten_soc="5.88", forecast=prognose(tag, [8.0] * 20, dt.time(8, 0), p10_anteil=1.0),
                    profil_kwh=0.2, zustands_overrides=zs,
@@ -1303,6 +1304,77 @@ def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
                   zustands_overrides={wb: Zustand(wb, "0.2"), wb2: Zustand(wb2, "0.3")}, trigger_id="update_json")
     ctx4 = _update_json_zweig(blueprint, h4, zeit(tag, 14, 0))
     assert ctx4["wallbox_slot_kwh"] == pytest.approx(0.5) and ctx4["last_half_hour_kwh"] == pytest.approx(0.4) and ctx4["wallbox_liste"] == [wb, wb2]
+
+
+def _genullte_zaehler(blueprint, h, ctx):
+    """Die Zaehler, die der update_json-Lauf per utility_meter.calibrate nullt (nur Zweige, deren Bedingung gilt)."""
+    block = next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s and "update_json" in str(s["if"]))
+    def wahr(bedingungen):
+        return all(h._aufloesen(b["value_template"], ctx) for b in bedingungen if b.get("condition") == "template")
+    def gehe(schritte):
+        for st in schritte:
+            if st.get("action") == "utility_meter.calibrate":
+                ziel = h._aufloesen(st["target"]["entity_id"], ctx)
+                yield from (ziel if isinstance(ziel, list) else [ziel])
+            elif "if" in st and wahr(st["if"]):
+                yield from gehe(st["then"])
+    return list(gehe(block["then"]))
+
+
+def test_parallele_wechselrichter_erzeugung_wird_addiert(blueprint, tag):
+    """
+    Zwei Wechselrichter parallel an einem Akku, die Prognose deckt beide: Der Realitaets-Check
+    vergleicht die Summe beider Tageszaehler. Rechts 60 %, Links 40 % von 85 % der Prognose
+    ergeben 0,85; Rechts allein ergaebe 0,6 x 0,85 = 0,51.
+    """
+    r, l = "sensor.wr_rechts_erzeugung_heute", "sensor.wr_links_erzeugung_heute"
+    blend = szenario(blueprint, zeit(tag, 14, 0), forecast=prognose_gleichmaessig(tag, KW)).auswerten(bis="trend_dict")["trend_dict"]["blend_bisher"]
+    zs = {r: Zustand(r, str(round(0.6 * 0.85 * blend, 4))), l: Zustand(l, str(round(0.4 * 0.85 * blend, 4)))}
+    beide = szenario(blueprint, zeit(tag, 14, 0), forecast=prognose_gleichmaessig(tag, KW), zustands_overrides=zs,
+                     input_overrides={"pv_erzeugung_heute_sensor": [r, l]}).auswerten(bis="trend_faktor")
+    assert beide["trend_real_bisher"] == pytest.approx(0.85 * blend, abs=0.001)
+    assert beide["trend_faktor"] == pytest.approx(0.85, abs=0.002)
+    allein = szenario(blueprint, zeit(tag, 14, 0), forecast=prognose_gleichmaessig(tag, KW), zustands_overrides=zs,
+                      input_overrides={"pv_erzeugung_heute_sensor": r}).auswerten(bis="trend_faktor")
+    assert allein["trend_faktor"] == pytest.approx(0.51, abs=0.002)
+
+
+def test_parallele_wechselrichter_hausverbrauch_wird_addiert_und_genullt(blueprint, tag):
+    """
+    Je Wechselrichter ein Halbstundenzaehler: Das Profil lernt die Summe, beide Zaehler
+    werden genullt. Ein einzelner Zaehler als Text (aeltere Instanz) bleibt ein Eintrag.
+    """
+    r, l = "sensor.haus_rechts_halbstuendlich", "sensor.haus_links_halbstuendlich"
+    zs = {r: Zustand(r, "0.5"), l: Zustand(l, "0.3")}
+    ov = {"hausverbrauch_utility_sensor": [r, l], "wallbox_kwh_sensor": []}
+    h = szenario(blueprint, zeit(tag, 14, 0), input_overrides=ov, zustands_overrides=zs, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
+    assert ctx["hausverbrauch_liste"] == [r, l] and ctx["last_half_hour_kwh"] == pytest.approx(0.8)
+    assert _genullte_zaehler(blueprint, h, ctx) == [r, l]
+    # Live-Anschluss nach 20 Minuten: 0,8 / (20/30) = 1,2 kWh, unter dem Deckel 3 x 0,5.
+    live = szenario(blueprint, zeit(tag, 14, 20), profil_kwh=0.5, input_overrides=ov, zustands_overrides=zs).auswerten(bis="haus_live_kwh")
+    assert live["haus_live_kwh"] == pytest.approx(1.2, abs=0.005)
+    # Liefert ein Zaehler nichts, gibt es keine Hochrechnung statt einer zu kleinen.
+    halb = {r: Zustand(r, "0.5"), l: Zustand(l, "unavailable")}
+    ohne = szenario(blueprint, zeit(tag, 14, 20), profil_kwh=0.5, input_overrides=ov, zustands_overrides=halb).auswerten(bis="haus_live_kwh")
+    assert ohne["haus_live_kwh"] == -1
+    # Aeltere Instanz: ein Text statt einer Liste.
+    alt = szenario(blueprint, zeit(tag, 14, 0), input_overrides={"hausverbrauch_utility_sensor": r, "wallbox_kwh_sensor": []},
+                   zustands_overrides=zs, trigger_id="update_json")
+    ctx_alt = _update_json_zweig(blueprint, alt, zeit(tag, 14, 0))
+    assert ctx_alt["last_half_hour_kwh"] == pytest.approx(0.5) and _genullte_zaehler(blueprint, alt, ctx_alt) == [r]
+
+
+@pytest.mark.parametrize("feld, bezeichnung", [
+    ("pv_erzeugung_heute_sensor", "PV-Erzeugung heute (kWh)"),
+    ("hausverbrauch_utility_sensor", "Hausverbrauch halbstündlich (kWh)"),
+])
+@pytest.mark.parametrize("leer", ["", []])
+def test_leere_mehrfachauswahl_ist_ein_fehlendes_pflichtfeld(blueprint, tag, feld, bezeichnung, leer):
+    """Eine leere Liste gilt wie ein leeres Textfeld als fehlend; zwei Eintraege und ein Text gelten als belegt."""
+    assert szenario(blueprint, zeit(tag, 10, 5), input_overrides={feld: leer}).auswerten(bis="pflicht_liste")["pflicht_liste"] == [bezeichnung]
+    for belegt in (["sensor.a", "sensor.b"], "sensor.a"):
+        assert szenario(blueprint, zeit(tag, 10, 5), input_overrides={feld: belegt}).auswerten(bis="pflicht_liste")["pflicht_liste"] == []
 
 
 # --------------------------------------------------------------------------

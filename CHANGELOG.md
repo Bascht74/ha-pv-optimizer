@@ -12,6 +12,13 @@ Logbuch-Meldung trägt ihn.
 
 ## [V7.0.0] - 2026-10-06
 
+### Added
+- "PV-Erzeugung heute" and "Hausverbrauch halbstündlich" take several sensors, one per inverter, for
+  plants where inverters run in parallel on one battery. The blueprint sums them, so the trend
+  correction compares the whole plant's production with a forecast that covers all of it, and the
+  consumption profile learns the whole house load; every half-hourly meter is reset after its half
+  hour. An instance with one sensor per field works unchanged.
+
 ### Changed
 - The battery counts as full for the day once the regulating state of charge reaches 99 % by day,
   instead of when a cell voltage reaches the balancing threshold. Peak shaving, the emergency branch,
