@@ -1447,7 +1447,7 @@ action:
              ('Helfer: Logbuch-Anker', var_logbook_dummy)
            ] %}
         {# Die Vorgabe 0 heisst "nicht eingetragen": Mit einer zu kleinen Kapazitaet
-           rechnete das Energiemodell still mit einem Bruchteil der Batterie. #}
+           rechnet das Energiemodell still mit einem Bruchteil der Batterie. #}
         {% if (batterie_kapazitaet_ah | float(0)) <= 0 %}
           {% set pflicht = pflicht + [('Batteriekapazität gesamt (Ah)', '')] %}
         {% endif %}
@@ -3242,7 +3242,7 @@ action:
                   message: >-
                     {{ log_kopf }} Mitternachts-Check: Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum)
                     {%- if (max_ampere | round(0)) < (aktueller_ladestrom | round(0)) %} gesenkt, da er darüber lag.
-                    {%- else %} geöffnet, da er nachts nicht auf Maximum stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{% endif %}
+                    {%- else %} geöffnet, da er nachts nicht darauf stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{% endif %}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -3905,7 +3905,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 1 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält."
+                  message: "{{ log_kopf }} Prio 1 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
