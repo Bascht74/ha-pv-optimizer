@@ -49,9 +49,9 @@ Logbuch-Meldung trägt ihn.
   missed run, a restart gap) holds hours or days of consumption, which the consumption and backup
   profiles learned as one half hour; the backup profile's cold start filled every slot with it. The
   meters are now reset with `utility_meter.reset`, and a reading counts only when that reset lies at
-  most 40 minutes back; otherwise the run resets the meter, leaves the profiles and the grid-import
-  sum of the hold unchanged and logs the discarded reading. Existing instances discard one half hour
-  once after the update, because their meters were zeroed by calibration so far.
+  most 40 minutes back; otherwise the run resets the meter, learns the reading into neither profile
+  nor the grid-import sum of the hold and logs it. Existing instances discard one half hour once after
+  the update, because their meters were zeroed by calibration so far.
 - The half hour that is skipped for an invalid profile helper resets the meters as well, so they no
   longer run up until the midnight rebuild; an unreadable house meter is no longer learned as zero.
 - "Solcast: Prognose heute" is a required field again: without it the run stops with the notice that

@@ -1512,13 +1512,21 @@ def test_meldung_beim_verwerfen(blueprint, tag):
     meldung = h.render(next(a for a in schritt["then"] if a.get("action") == "logbook.log")["data"]["message"], ctx)
     assert meldung == (f"{ctx['log_kopf']} Verbrauchs- und Notstromprofil: Halbstunde ab 13:30 Uhr nicht gelernt, Zähler zurückgesetzt. "
                        "Zählerstand verworfen, da letzte Rücksetzung länger als 40 Min her "
-                       "(Hausverbrauch 200.32 kWh, Wallbox 11.70 kWh, zuletzt zurückgesetzt vor 5 Tagen; Notstromlast 0.62 kWh, nie zurückgesetzt).")
+                       "(Hausverbrauch 200.32 kWh, zuletzt zurückgesetzt vor 5 Tagen; Wallbox 11.70 kWh, zuletzt zurückgesetzt vor 10 Std; "
+                       "Notstromlast 0.62 kWh, nie zurückgesetzt).")
     # Nur der Notstromzaehler alt: der Hausverbrauch wurde gelernt und steht nicht in der Meldung.
     ov2 = {z: Zustand(z, "0.9", _zurueckgesetzt(t)), n: Zustand(n, "0.623", _zurueckgesetzt(t, 90))}
     h2, ctx2 = _halbstundenlauf(blueprint, tag, overrides=ov2)
     meldung2 = h2.render(next(a for a in schritt["then"] if a.get("action") == "logbook.log")["data"]["message"], ctx2)
     assert meldung2.endswith("Notstromprofil: Halbstunde ab 13:30 Uhr nicht gelernt, Zähler zurückgesetzt. "
                              "Zählerstand verworfen, da letzte Rücksetzung länger als 40 Min her (Notstromlast 0.62 kWh, zuletzt zurückgesetzt vor 90 Min).")
+    # Nur die Wallbox alt: die Meldung nennt deren Alter, nicht das des frischen Hauszaehlers.
+    ov3 = {z: Zustand(z, "0.9", _zurueckgesetzt(t)), wb: Zustand(wb, "11.697", _zurueckgesetzt(t, 600))}
+    h3, ctx3 = _halbstundenlauf(blueprint, tag, overrides=ov3)
+    meldung3 = h3.render(next(a for a in schritt["then"] if a.get("action") == "logbook.log")["data"]["message"], ctx3)
+    assert meldung3.endswith("Verbrauchsprofil: Halbstunde ab 13:30 Uhr nicht gelernt, Zähler zurückgesetzt. "
+                             "Zählerstand verworfen, da letzte Rücksetzung länger als 40 Min her (Wallbox 11.70 kWh, zuletzt zurückgesetzt vor 10 Std).")
+    assert _slot_zeile(blueprint, h3, ctx3)["wallbox_kwh"] is None
 
 
 @pytest.mark.parametrize("wert, fehlt", [([], True), ("", True), (["sensor.solcast_ost"], False), (["sensor.solcast_ost", "sensor.solcast_nord"], False)])

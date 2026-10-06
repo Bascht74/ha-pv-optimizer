@@ -1117,22 +1117,30 @@ action:
               {% if v is none %}{% set ns.ok = false %}{% else %}{% set ns.s = ns.s + v %}{% endif %}
             {% endfor %}
             {{ (ns.s | round(4)) if ns.ok else none }}
-          # Ein Zaehlerstand zaehlt nur, wenn dieser Block den Zaehler zur vorigen
-          # Halbstunde zurueckgesetzt hat. Vor dem ersten Lauf oder nach einer Pause
-          # traegt er Stunden bis Tage, die sonst als eine Halbstunde gelernt wuerden.
-          # 40 Minuten lassen dem vorigen Lauf Verzug; ohne Ruecksetzzeit gilt er als alt.
+          # Ein Zaehlerstand zaehlt nur, wenn der vorige Halbstundenlauf den Zaehler
+          # zurueckgesetzt hat: dann liegt last_reset hoechstens 30 Minuten zurueck, 40
+          # lassen Spielraum. Vor dem ersten Lauf oder nach einem ausgefallenen Lauf traegt
+          # er Stunden bis Tage, die sonst als eine Halbstunde gelernt wuerden.
           haus_lesbar: >
             {% set ns = namespace(ok=hausverbrauch_liste | length > 0) %}
             {% for e in hausverbrauch_liste %}{% if states(e) | float(none) is none %}{% set ns.ok = false %}{% endif %}{% endfor %}
             {{ ns.ok }}
           haus_zaehler_alter_min: >
             {% set ns = namespace(m=0) %}
-            {% for e in hausverbrauch_liste + wallbox_liste if states(e) | float(none) is not none %}
+            {% for e in hausverbrauch_liste if states(e) | float(none) is not none %}
               {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
               {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
             {% endfor %}
             {{ ns.m | round(0) | int }}
-          haus_zaehler_frisch: "{{ haus_lesbar and haus_zaehler_alter_min <= 40 }}"
+          # Ein Wallbox-Zaehler ohne Wert zaehlt 0 und haelt das Lernen nicht auf.
+          wallbox_zaehler_alter_min: >
+            {% set ns = namespace(m=0) %}
+            {% for e in wallbox_liste if states(e) | float(none) is not none %}
+              {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
+              {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
+            {% endfor %}
+            {{ ns.m | round(0) | int }}
+          haus_zaehler_frisch: "{{ haus_lesbar and haus_zaehler_alter_min <= 40 and wallbox_zaehler_alter_min <= 40 }}"
           np_zaehler_alter_min: >
             {% set ns = namespace(m=0) %}
             {% for e in np_liste %}
@@ -1190,7 +1198,8 @@ action:
                   {%- if m >= 1000000 -%}nie zurückgesetzt{%- elif m >= 2880 -%}zuletzt zurückgesetzt vor {{ (m / 1440) | round(0) | int }} Tagen{%- elif m >= 120 -%}zuletzt zurückgesetzt vor {{ (m / 60) | round(0) | int }} Std{%- else -%}zuletzt zurückgesetzt vor {{ m }} Min{%- endif -%}
                 {%- endmacro -%}
                 {%- set teile = [] -%}
-                {%- if haus_alt -%}{%- set teile = teile + ['Hausverbrauch ' ~ '%.2f' | format(haus_roh_kwh) ~ ' kWh' ~ ((', Wallbox ' ~ '%.2f' | format(wallbox_slot_kwh) ~ ' kWh') if wallbox_liste | length > 0 else '') ~ ', ' ~ alter(haus_zaehler_alter_min)] -%}{%- endif -%}
+                {%- if haus_alt and haus_zaehler_alter_min > 40 -%}{%- set teile = teile + ['Hausverbrauch ' ~ '%.2f' | format(haus_roh_kwh) ~ ' kWh, ' ~ alter(haus_zaehler_alter_min)] -%}{%- endif -%}
+                {%- if haus_alt and wallbox_zaehler_alter_min > 40 -%}{%- set teile = teile + ['Wallbox ' ~ '%.2f' | format(wallbox_slot_kwh) ~ ' kWh, ' ~ alter(wallbox_zaehler_alter_min)] -%}{%- endif -%}
                 {%- if np_alt_stand -%}{%- set teile = teile + ['Notstromlast ' ~ '%.2f' | format(np_kwh) ~ ' kWh, ' ~ alter(np_zaehler_alter_min)] -%}{%- endif -%}
                 {{ teile | join('; ') }}
           - action: logbook.log
@@ -1369,7 +1378,7 @@ action:
             data:
               message: >-
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
-                    'slot_kwh': (last_half_hour_kwh | round(3)) if haus_zaehler_frisch else none, 'wallbox_kwh': wallbox_slot_kwh | round(3),
+                    'slot_kwh': (last_half_hour_kwh | round(3)) if haus_zaehler_frisch else none, 'wallbox_kwh': (wallbox_slot_kwh | round(3)) if haus_zaehler_frisch else none,
                     'notstrom_kwh': np_kwh if np_zaehler_frisch else none, 'halten': hb_lage,
                     'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': hb_soc_roh if hb_soc_gueltig else none,
                     'soc_versatz': hb_versatz | round(2),
