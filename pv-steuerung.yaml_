@@ -9,7 +9,9 @@
 #           Deye-Tageszaehler: Der Wechselrichter schreibt seine kWh-Register nur
 #           alle zehn Minuten und in Schritten von 0,1 kWh, ein Lauf ab Minute 15
 #           liest dann einen alten Stand oder 0. Der Halbstundenzaehler darauf
-#           wird vom Blueprint selbst alle 30 Minuten genullt.
+#           wird vom Blueprint selbst alle 30 Minuten genullt. Laufen mehrere
+#           Wechselrichter parallel, je Geraet ein Paar aus Riemann-Summe und
+#           Zaehler anlegen und im Feld alle Zaehler auswaehlen.
 #   2. binary_sensor "Ladesteuerung Eingriff Aktiv"
 #        -> die number-Entitaet des maximalen Ladestroms und deren Maximalwert
 #           (derselbe Wert wie der Blueprint-Input "Maximaler Ladestrom").

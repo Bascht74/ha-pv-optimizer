@@ -10,6 +10,15 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.0.0] - 2026-10-06
+
+### Added
+- "PV-Erzeugung heute" and "Hausverbrauch halbstündlich" take several sensors, one per inverter, for
+  plants where inverters run in parallel on one battery. The blueprint sums them, so the trend
+  correction compares the whole plant's production with a forecast that covers all of it, and the
+  consumption profile learns the whole house load; every half-hourly meter is reset after its half
+  hour. An instance with one sensor per field works unchanged.
+
 ## [V6.18.0] - 2026-10-06
 
 ### Added
@@ -1038,7 +1047,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...HEAD
+[V7.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...V7.0.0
 [V6.18.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.17.0...V6.18.0
 [V6.17.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...V6.17.0
 [V6.16.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.0...V6.16.1

@@ -129,6 +129,23 @@ def test_aufzeichnung_je_dachflaeche_ein_eintrag(blueprint, tag):
             assert a[k] == b[k], (hh, k)
 
 
+def test_aufzeichnung_je_wechselrichter_ein_eintrag(blueprint, tag):
+    """Zwei parallele Wechselrichter: je Messfeld zwei Eintraege, und die Zeile baut den Lauf nach."""
+    pv, haus = ["sensor.pv_heute_r", "sensor.pv_heute_l"], ["sensor.haus_r", "sensor.haus_l"]
+    vorher = zeit(tag, 14, 15)
+    zs = {e: Zustand(e, w, {}, vorher) for e, w in zip(pv + haus, ("18.4", "9.1", "0.31", "0.12"))}
+    original = szenario(blueprint, zeit(tag, 14, 20), soc=70.0, profil_kwh=0.4, zustands_overrides=zs,
+                        input_overrides={"pv_erzeugung_heute_sensor": pv, "hausverbrauch_utility_sensor": haus})
+    aufz = aufzeichnen(original, blueprint)
+    for name, ids in (("pv_erzeugung_heute_sensor", pv), ("hausverbrauch_utility_sensor", haus)):
+        assert [e["state"] for e in aufz["entitaeten"] if e["input"] == name] == [zs[i].state for i in ids], name
+    kopie = szenario_aus_aufzeichnung(blueprint, json.loads(json.dumps(aufz)))
+    a, b = original.auswerten(), kopie.auswerten()
+    assert a["trend_real_bisher"] == pytest.approx(27.5) and a["haus_live_kwh"] == pytest.approx(0.645)
+    for k in VERGLEICH + ["trend_real_bisher", "haus_live_kwh", "json_profil_live"]:
+        assert a[k] == b[k], k
+
+
 # Aufzeichnungen sind private Standortdaten und liegen nur lokal (tests/fixtures/*.jsonl ist
 # per .gitignore ausgeschlossen). Ohne Datei ueberspringen sich die Tests darauf.
 def _zeilen():
