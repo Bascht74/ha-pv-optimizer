@@ -231,30 +231,30 @@ def test_kippstelle_von_fall_b(blueprint, tag, kw, soc, erwartet, grund):
 
 
 # --------------------------------------------------------------------------
-# Kapazitaet = Kapazitaet eines Packs x Anzahl Packs
+# Kapazitaet = Batteriekapazitaet gesamt (Ah) x Nennspannung
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("packs", [1, 2.0, 3])
-def test_kapazitaet_folgt_der_anzahl_packs(blueprint, tag, packs):
+@pytest.mark.parametrize("ah", [314, 628.0, 990])
+def test_kapazitaet_folgt_der_gesamtkapazitaet(blueprint, tag, ah):
     """
-    314 Ah je Pack bei 51,2 V; freie_kwh geht mit derselben Kapazitaet in Blockade,
-    Fall B und Prio 6 ein (Ladestand 84 % -> 16 % frei). 2.0 ist der Wert, den das
-    Zahlenfeld der Oberflaeche liefern kann.
+    51,2 V; freie_kwh geht mit derselben Kapazitaet in Blockade, Fall B und Prio 6 ein
+    (Ladestand 84 % -> 16 % frei). 628.0 ist der Wert, den das Zahlenfeld der Oberflaeche
+    liefern kann.
     """
-    ctx = szenario(blueprint, zeit(tag, 10, 5), soc=84.0, input_overrides={"anzahl_packs": packs}).auswerten(bis="freie_kwh")
+    ctx = szenario(blueprint, zeit(tag, 10, 5), soc=84.0, input_overrides={"batterie_kapazitaet_ah": ah}).auswerten(bis="freie_kwh")
     assert ctx["pflicht_liste"] == []
-    assert ctx["batterie_kapazitaet"] == pytest.approx(int(packs) * 314 * 51.2 / 1000, abs=0.05)
-    assert ctx["freie_kwh"] == pytest.approx(int(packs) * 314 * 51.2 / 1000 * 0.16, abs=0.05)
+    assert ctx["batterie_kapazitaet"] == pytest.approx(ah * 51.2 / 1000, abs=0.05)
+    assert ctx["freie_kwh"] == pytest.approx(ah * 51.2 / 1000 * 0.16, abs=0.05)
 
 
-def test_ohne_anzahl_packs_bricht_der_start_ab(blueprint, tag):
+def test_ohne_gesamtkapazitaet_bricht_der_start_ab(blueprint, tag):
     """
     Die Vorgabe 0 heisst "nicht eingetragen": Nach dem Reimport bricht der Start ab und
-    nennt das Feld, statt still mit einem Pack zu rechnen.
+    nennt das Feld, statt still mit einer leeren Batterie zu rechnen.
     """
     from conftest import standard_inputs
-    assert standard_inputs(blueprint)["anzahl_packs"] == 0
-    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"anzahl_packs": 0})
-    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == ["Anzahl Packs"]
+    assert standard_inputs(blueprint)["batterie_kapazitaet_ah"] == 0
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"batterie_kapazitaet_ah": 0})
+    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == ["Batteriekapazität gesamt (Ah)"]
 
 
 # --------------------------------------------------------------------------
@@ -1070,11 +1070,11 @@ def test_halten_mit_schatten_bms_in_der_skala_des_registers(blueprint, tag, deye
     e = fake_entity("helper_halten_bezug", "input_number")
     zs = {**_tou(tou), e: Zustand(e, "1.0")}
     h = szenario(blueprint, zeit(tag, 3, 0), soc=deye, schatten_soc=schatten, hausverbrauch_slot_kwh=0.3,
-                 zustands_overrides=zs, input_overrides={"pack_capacity_ah": 200}, trigger_id="update_json")
+                 zustands_overrides=zs, input_overrides={"batterie_kapazitaet_ah": 400}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
     assert ctx["hb_lage"] is (zurueck is not None), grund
     kette = szenario(blueprint, zeit(tag, 3, 0), soc=deye, schatten_soc=schatten, zustands_overrides=zs,
-                     input_overrides={"pack_capacity_ah": 200}).auswerten(bis="halten_aktiv")
+                     input_overrides={"batterie_kapazitaet_ah": 400}).auswerten(bis="halten_aktiv")
     assert kette["halten_aktiv"] is ctx["hb_lage"], "Kette und Halbstundenlauf pruefen dasselbe"
     if zurueck is not None:
         assert ctx["hb_min_register"] == 12 and ctx["hb_zurueck_kwh"] == pytest.approx(zurueck, abs=0.001), grund
@@ -1115,12 +1115,12 @@ def test_slot_zeile_mit_schatten_bms_in_der_skala_der_kette(blueprint, tag):
     """
     zs = _tou(42)
     h = szenario(blueprint, zeit(tag, 3, 0), soc=42.0, schatten_soc=50.36, zustands_overrides=zs,
-                 input_overrides={"pack_capacity_ah": 200}, trigger_id="update_json")
+                 input_overrides={"batterie_kapazitaet_ah": 400}, trigger_id="update_json")
     zeile = _slot_zeile(blueprint, h, _update_json_zweig(blueprint, h, zeit(tag, 3, 0)))
     assert zeile["soc_versatz"] == pytest.approx(-8.36) and zeile["tou_ist"] == pytest.approx(50.36)
     assert zeile["zurueckgehalten_kwh"] == pytest.approx(6.144, abs=0.001) and zeile["halten"] is True
     kette = szenario(blueprint, zeit(tag, 3, 0), soc=42.0, schatten_soc=50.36, zustands_overrides=zs,
-                     input_overrides={"pack_capacity_ah": 200}).auswerten(bis="zurueckgehalten_kwh")
+                     input_overrides={"batterie_kapazitaet_ah": 400}).auswerten(bis="zurueckgehalten_kwh")
     assert kette["soc_versatz"] == pytest.approx(zeile["soc_versatz"])
     assert kette["tou_ist"] == pytest.approx(zeile["tou_ist"])
     assert kette["zurueckgehalten_kwh"] == pytest.approx(zeile["zurueckgehalten_kwh"], abs=0.001)

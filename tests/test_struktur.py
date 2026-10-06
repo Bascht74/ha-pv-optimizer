@@ -193,7 +193,7 @@ def test_direkte_entity_inputs_sind_pflichtfelder(blueprint):
                     for k, v in s["variables"].items() if isinstance(v, InputTag)}
     pflicht_tpl = next(s["variables"]["pflichtfelder_fehlend"] for s in blueprint["action"]
                        if isinstance(s, dict) and "pflichtfelder_fehlend" in s.get("variables", {}))
-    # Nur die unbedingte Basisliste zaehlt. Die Bloecke dahinter (Pack 2/3, Waermepumpe)
+    # Nur die unbedingte Basisliste zaehlt. Die Bloecke dahinter (Kapazitaet, Waermepumpe)
     # verlangen ihre Felder nur unter einer Bedingung - direkt eingesetzt wuerden sie die
     # Automation schon beim Laden zerlegen, lange bevor die Bedingung greift.
     basis = pflicht_tpl[pflicht_tpl.index("{% set pflicht = ["):].split("] %}")[0]

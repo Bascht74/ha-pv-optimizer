@@ -133,8 +133,8 @@ def szenario(
     if jetzt.tzinfo is None:
         jetzt = jetzt.replace(tzinfo=TZ)
     inputs = standard_inputs(blueprint)
-    # Zwei Packs, wie an beiden Standorten.
-    inputs["anzahl_packs"] = 2
+    # Zwei Packs zu 314 Ah, wie an der Dachterrasse.
+    inputs["batterie_kapazitaet_ah"] = 628
     # Schatten-BMS: ohne Angabe nicht zugewiesen - der Standardfall, in dem der
     # Blueprint allein mit dem Ladestand des Wechselrichters rechnet.
     if schatten_soc is None:
@@ -349,10 +349,11 @@ def szenario_aus_aufzeichnung(blueprint: dict, aufz: dict) -> Harness:
     # Aufzeichnungen aelterer Versionen tragen Felder, die es nicht mehr gibt.
     definiert = input_definitionen(blueprint)
     inputs.update({k: v for k, v in aufz["konfiguration"].items() if k in definiert})
-    # Vor V8.0.0 zaehlten die belegten Felder "niedrigste Zelltemperatur" die Packs.
-    if "anzahl_packs" in definiert and "anzahl_packs" not in aufz["konfiguration"]:
+    # Bis V6.18.0: Kapazitaet eines Packs mal Anzahl der belegten Felder "niedrigste
+    # Zelltemperatur", wie der Blueprint damals rechnete.
+    if "batterie_kapazitaet_ah" in definiert and "batterie_kapazitaet_ah" not in aufz["konfiguration"]:
         alt = {e["input"] for e in aufz["entitaeten"]} & {"bms1_temp_min_sensor", "bms2_temp_min_sensor", "bms3_temp_min_sensor"}
-        inputs["anzahl_packs"] = max(len(alt), 1)
+        inputs["batterie_kapazitaet_ah"] = float(aufz["konfiguration"].get("pack_capacity_ah", 314)) * max(len(alt), 1)
     aufgezeichnet = {e["input"] for e in aufz["entitaeten"] if e["input"] in definiert}
     mehrfach = {name for name, d in definiert.items()
                 if (d.get("selector") or {}).get("entity", {}).get("multiple")}

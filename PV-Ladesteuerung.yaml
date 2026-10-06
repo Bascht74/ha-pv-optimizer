@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V8.0.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.0.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -39,18 +39,12 @@ blueprint:
             Sensor mit dem aufsummierten Gesamt-Ladezähler in kWh (nur steigend, wird nie zurückgesetzt). Daran erkennt der Blueprint, ob die Verbindung zum Wechselrichter steht: Meldet der Zähler „nicht verfügbar“, bricht er den Lauf ab, statt mit Ersatzwerten zu regeln. Nicht leer lassen.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
-        pack_capacity_ah:
-          name: "Kapazität EINES Packs (Ah)"
+        batterie_kapazitaet_ah:
+          name: "Batteriekapazität gesamt (Ah)"
           description: >-
-            Nennkapazität eines einzelnen Batterie-Packs in Amperestunden (z. B. 314 Ah). Mal der Anzahl Packs ergibt sie die Batteriekapazität. Wichtig: nicht die Summe aller Packs eintragen!
-          default: 314
-          selector: {"number": {"min": 50, "max": 500, "step": 1, "unit_of_measurement": "Ah"}}
-        anzahl_packs:
-          name: "Anzahl Packs"
-          description: >-
-            Wie viele Packs dieser Kapazität am Wechselrichter hängen. Bedarf, Fall B und Entlade-Planung rechnen mit Kapazität × Anzahl. Die Vorgabe 0 heißt „nicht eingetragen“: Dann bricht der Blueprint den Start ab und nennt das Feld im Logbuch.
+            Gesamtkapazität ALLER Batterie-Packs am Wechselrichter zusammengezählt, nicht die eines einzelnen Packs. Beispiel: zwei Packs zu je 314 Ah → 628 Ah eintragen. Die Vorgabe 0 heißt „nicht eingetragen“: Dann bricht der Blueprint den Start ab und nennt das Feld im Logbuch.
           default: 0
-          selector: {"number": {"min": 0, "max": 8, "step": 1, "mode": "box"}}
+          selector: {"number": {"min": 0, "max": 5000, "step": 1, "mode": "box", "unit_of_measurement": "Ah"}}
         nominale_spannung:
           name: "Nominale Batteriespannung (V)"
           description: >-
@@ -690,7 +684,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V8.0.0]"
+      bp_version: "[V7.0.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1239,9 +1233,8 @@ action:
           hb_tou_4: !input wr_tou_4
           hb_tou_5: !input wr_tou_5
           hb_tou_6: !input wr_tou_6
-          hb_pack_ah: !input pack_capacity_ah
+          hb_kapazitaet_ah: !input batterie_kapazitaet_ah
           hb_spannung: !input nominale_spannung
-          hb_anzahl_packs: !input anzahl_packs
           hb_tou_ist: >
             {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
@@ -1269,8 +1262,7 @@ action:
                and hb_tou_ist - hb_min_register >= 5
                and hb_soc_roh <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
-          hb_packs: "{{ [hb_anzahl_packs | int(1), 1] | max }}"
-          hb_zurueck_kwh: "{{ [(hb_tou_ist - hb_min_register) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
+          hb_zurueck_kwh: "{{ [(hb_tou_ist - hb_min_register) / 100 * (hb_kapazitaet_ah | float(0)) * (hb_spannung | float(51.2)) / 1000, 0] | max }}"
       # AUFZEICHNUNG DES SLOTS: Der Halbstunden-Verbrauch ist nur hier lesbar,
       # der Halbstundenlauf sieht den Zaehler schon genullt. Mit dieser Zeile
       # laesst sich die Bezugssumme im Halten ohne den Helfer nachrechnen.
@@ -1388,8 +1380,7 @@ action:
       var_schwelle_peak_shaving: !input schwelle_peak_shaving
       var_schwelle_wp_boost: !input schwelle_wp_boost
 
-      pack_capacity_ah: !input pack_capacity_ah
-      anzahl_packs: !input anzahl_packs
+      batterie_kapazitaet_ah: !input batterie_kapazitaet_ah
 
       var_ladevorlauf: !input ladevorlauf_stunden
       faktor_fallback: !input faktor_fallback
@@ -1455,10 +1446,10 @@ action:
              ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6),
              ('Helfer: Logbuch-Anker', var_logbook_dummy)
            ] %}
-        {# Die Vorgabe 0 heisst "nicht eingetragen": Mit einem Pack zu wenig rechnete
-           das Energiemodell still mit einem Bruchteil der Batterie. #}
-        {% if (anzahl_packs | int(0)) < 1 %}
-          {% set pflicht = pflicht + [('Anzahl Packs', '')] %}
+        {# Die Vorgabe 0 heisst "nicht eingetragen": Mit einer zu kleinen Kapazitaet
+           rechnete das Energiemodell still mit einem Bruchteil der Batterie. #}
+        {% if (batterie_kapazitaet_ah | float(0)) <= 0 %}
+          {% set pflicht = pflicht + [('Batteriekapazität gesamt (Ah)', '')] %}
         {% endif %}
         {# Die Wärmepumpen-Felder sind nur Pflicht, wenn der Boost eingeschaltet ist. #}
         {% if var_wp_boost_aktiv %}
@@ -1544,7 +1535,7 @@ action:
         {% set p = (var_dauer_wp_laufzeit | string).split(':') %}
         {{ ((p[0] | int(0)) + (p[1] | int(0)) / 60) if p | length >= 2 else 2.0 }}
 
-      pack_capacity_ah: "{{ pack_capacity_ah | float(314) }}"
+      batterie_kapazitaet_ah: "{{ batterie_kapazitaet_ah | float(0) }}"
 
       puffer_kwh: "{{ puffer_kwh | float(1.0) }}"
       # Dauer-Felder kommen als "HH:MM:SS" aus dem time-Selector; gerechnet
@@ -1608,7 +1599,7 @@ action:
         {%- if st is none %}der Sensor für den Ladestand (SOC) nicht existiert
         {%- else %}der Ladestand (SOC) des Wechselrichters seit {{ ((as_timestamp(now()) - as_timestamp(st.last_changed)) / 60) | round(0) | int }} Minuten fehlt (Wartezeit {{ (offline_debounce_s / 60) | round(0) | int }} Minuten, Sensor meldet {{ st.state }}){% endif %}
 
-      batterie_kapazitaet: "{{ (pack_capacity_ah * nominale_spannung * ([anzahl_packs | int(1), 1] | max)) / 1000 }}"
+      batterie_kapazitaet: "{{ batterie_kapazitaet_ah * nominale_spannung / 1000 }}"
 
       # Haus-Profil ist in kWh/Halbstunde. Fallback (nur bis der erste update_json-Lauf
       # den Helfer gefüllt hat): neutrale 0.2 kWh/Halbstunde (~400 W).
@@ -2825,8 +2816,7 @@ action:
         {% endfor %}
         {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'lauf_start': lauf_start, 'trigger': trigger.id, 'sun': states('sun.sun'),
             'konfiguration': {
-              'pack_capacity_ah': pack_capacity_ah,
-              'anzahl_packs': anzahl_packs,
+              'batterie_kapazitaet_ah': batterie_kapazitaet_ah,
               'nominale_spannung': nominale_spannung,
               'max_ampere': max_ampere,
               'min_ampere': min_ampere,

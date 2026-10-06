@@ -38,7 +38,7 @@ keine Zusatz-Software.
    (`https://raw.githubusercontent.com/Bascht74/ha-pv-optimizer/main/PV-Ladesteuerung.yaml`).
    Updates: Blueprint erneut importieren, GitHub liefert die Datei bis zu 5 Minuten aus dem Cache.
 3. **Automation anlegen** und die Felder zuweisen. Pflichtfelder prüft der Blueprint beim Start
-   selbst und nennt fehlende im Logbuch; dazu zählt „Anzahl Packs“, solange es auf 0 steht. Optionale
+   selbst und nennt fehlende im Logbuch; dazu zählt „Batteriekapazität gesamt“, solange sie auf 0 steht. Optionale
    Felder (Wärmepumpe, Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
 
 **Ladestand (Sektion 1):** Der Blueprint nimmt den Ladestand als Messwert und rechnet ihn nicht
