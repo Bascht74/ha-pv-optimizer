@@ -5,6 +5,8 @@ name: Release
 # CHANGELOG.md als Release-Notes und legt Tag und GitHub-Release an.
 # Bricht ab, wenn die Tests rot sind, der Tag schon existiert oder die
 # Sektion fehlt - so kann kein Release ohne Changelog-Eintrag entstehen.
+# "ersetzen" loescht ein vorhandenes Release samt Tag erst nach allen
+# Pruefungen: fuer Nachtraege zu einer Version, die noch keiner importiert hat.
 on:
   workflow_dispatch:
     inputs:
@@ -12,6 +14,11 @@ on:
         description: "Version wie in blueprint.name, z. B. V5.10.1 - erscheint als Name des Laufs und wird gegen das Repository geprueft"
         required: false
         type: string
+      ersetzen:
+        description: "Vorhandenes Release und Tag dieser Version loeschen und auf den aktuellen Stand neu anlegen"
+        required: false
+        type: boolean
+        default: false
 
 # Ohne run-name hiesse jeder Lauf nur "Release"; die Versionsnummer ist das,
 # was man in der Liste sucht.
@@ -35,6 +42,7 @@ jobs:
         id: v
         env:
           EINGABE: ${{ inputs.version }}
+          ERSETZEN: ${{ inputs.ersetzen }}
         run: |
           version=$(sed -n '2p' PV-Ladesteuerung.yaml | grep -o 'V[0-9]*\.[0-9]*\.[0-9]*')
           test -n "$version" || { echo "Keine Version in blueprint.name"; exit 1; }
@@ -42,7 +50,8 @@ jobs:
             echo "Eingabe $EINGABE passt nicht zu blueprint.name ($version)"; exit 1
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
-            echo "Tag $version existiert bereits"; exit 1
+            [ "$ERSETZEN" = "true" ] || { echo "Tag $version existiert bereits (Eingabe ersetzen setzt ihn neu)"; exit 1; }
+            echo "Tag $version existiert und wird ersetzt"; echo "vorhanden=true" >> "$GITHUB_OUTPUT"
           fi
           awk -v v="$version" 'BEGIN{gsub(/\./,"\\.",v); re="^## \\[?" v "\\]?( |$)"} $0 ~ re {f=1; next} /^## / {f=0} f' CHANGELOG.md | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
           test -s notes.md || { echo "CHANGELOG.md hat keine Sektion $version"; exit 1; }
@@ -57,6 +66,14 @@ jobs:
           echo "  [x] Merge nach main ist die Veroeffentlichung; danach: Blueprint an den Standorten neu importieren"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Release $version:"; cat notes.md
+      - name: Vorhandenes Release und Tag loeschen
+        if: steps.v.outputs.vorhanden == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          gh release delete "$VERSION" --cleanup-tag --yes \
+            || gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION"
       - name: Tag und Release anlegen
         env:
           GH_TOKEN: ${{ github.token }}
