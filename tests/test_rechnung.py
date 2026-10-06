@@ -656,6 +656,23 @@ def test_vollladung_faellig_hebt_das_ziel_auf_100(blueprint, tag):
     assert ctx["f_soc"] == 65
 
 
+def test_vollladung_zaehlt_den_heutigen_volltag_sofort(blueprint, tag):
+    """
+    Dieselbe Lage, die Batterie war heute aber schon voll: Die Liste bekommt den Tag erst um 23:58,
+    der Abend plant trotzdem wieder auf 90 % -> Untergrenze 90 - 31,4 = 58,6 -> 55.
+    """
+    from conftest import fake_entity, standard_inputs
+    eid = fake_entity("json_tracking_sensor", "input_text")
+    voll = standard_inputs(blueprint)["helper_batterie_heute_voll"]
+    liste = json.dumps([(tag - dt.timedelta(days=d)).isoformat() for d in (12, 13, 14)])
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(15, 5, 5),
+                   zustands_overrides={eid: Zustand(eid, liste), voll: Zustand(voll, "on")}).auswerten(bis="tou_schreiben")
+    assert ctx["tage_seit_voll"] == 12
+    assert ctx["vollladung_faellig"] is False
+    assert ctx["ziel_soc_eff"] == 90
+    assert ctx["f_soc"] == 55
+
+
 # --------------------------------------------------------------------------
 # Abend-Diagnose: was die Prognose fuer heute allein versprach
 # --------------------------------------------------------------------------

@@ -242,8 +242,8 @@ blueprint:
         json_tracking_sensor:
           name: "Helfer: 100-%-Tage-Liste"
           description: >-
-            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage). War sie zu lange nicht voll, plant die
-            Entlade-Untergrenze auf 100 %. Muss ein input_text sein — ein Sensor würde die Liste umformatieren.
+            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage). War sie länger als 9 Tage nicht voll, hebt die
+            Entlade-Planung ihren Ziel-Ladestand auf 100 %. Muss ein input_text sein — ein Sensor würde die Liste umformatieren.
           default: ""
           selector: {"entity": {"domain": "input_text"}}
         helper_blockade_beendet:
@@ -724,7 +724,7 @@ trigger:
     platform: homeassistant
     event: start
     id: ha_start
-  - alias: "Trigger: Tägliche Maintenance (Reset & BMS Check)"
+  - alias: "Trigger: Tägliche Maintenance (100-%-Tage & Reset)"
     platform: time
     at: "23:58:00"
     id: maintenance
@@ -2605,7 +2605,8 @@ action:
         {% elif s is string and s.startswith('[') %}{% set liste = s | from_json %}
         {% else %}{% set liste = [] %}{% endif %}
         {{ 0 if liste | length == 0 else (now().date() - (liste | max | as_datetime).date()).days }}
-      vollladung_faellig: "{{ tage_seit_voll > vollladung_nach_tagen }}"
+      # Der heutige Volltag zaehlt sofort, die Liste bekommt ihn erst um 23:58.
+      vollladung_faellig: "{{ tage_seit_voll > vollladung_nach_tagen and not heute_schon_voll }}"
       # Die 48 Halbstunden (kWh) je Kalendertag, aus allen Solcast-Sensoren aller Felder
       # addiert: k als P50/P10-Blend fuer die Planung, k10 als reines P10 fuer die
       # Notstromreserve. Jeder Slot zaehlt am Datum seines Arrays; so traegt jede Dachflaeche
