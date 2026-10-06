@@ -24,6 +24,10 @@
 #        Leistung am Load-UPS-Ausgang des Deye eintragen ("Load UPS Power", W).
 #        Optionale Bloecke bleiben sonst auskommentiert stehen: ein
 #        stehengebliebener Platzhalter verwirft die ganze Gruppe.
+#   5. Nur fuer das Dashboard (optional): die drei Wirkungsgrad-Sensoren und
+#        die geglaettete PV-Leistung einkommentieren und den Praefix der
+#        Deye-Sensoren bzw. die PV-Leistung eintragen. Der Blueprint liest
+#        keinen davon.
 #
 # Alles andere ist standortunabhaengig. Nach dem Einbinden ueber packages:
 # sind die Entitaeten den Blueprint-Inputs zuzuweisen; die Zuordnung steht
@@ -235,6 +239,50 @@ template:
           {% set maximum = 350 %}                                        {# Standard; nur aendern, wenn der Blueprint-Input "Maximaler Ladestrom" abweicht #}
           {% set limit = states('number.<HIER EINTRAGEN>') | float(maximum) %}  {# Stellgroesse max. Ladestrom #}
           {{ limit < maximum and is_state('sun.sun', 'above_horizon') }}
+  # Dashboard (optional): Wirkungsgrade aus den Energiezaehlern der
+  # Solarman-Integration. Der Praefix ist der gemeinsame Anfang der Deye-
+  # Sensoren, z. B. 'sensor.deye_' fuer sensor.deye_today_losses. Die
+  # Gesamtwerte halten den letzten Stand, solange ein Zaehler fehlt; die
+  # Batterie liegt anfangs ueber 100 %, wenn die Zaehler mit vollem Akku starten.
+  # - sensor:
+  #     - name: "Wechselrichter Tageseffizienz"
+  #       unique_id: "optimizer_sensor_wr_effizienz_heute"
+  #       unit_of_measurement: "%"
+  #       state_class: measurement
+  #       icon: mdi:percent-circle
+  #       state: >
+  #         {% set wr = 'sensor.<HIER EINTRAGEN>_' %}
+  #         {% set verlust = states(wr ~ 'today_losses') | float(0) %}
+  #         {% set ein = states(wr ~ 'today_production') | float(0)
+  #                    + states(wr ~ 'today_battery_discharge') | float(0)
+  #                    + states(wr ~ 'today_energy_import') | float(0) %}
+  #         {{ ((1 - verlust / ein) * 100) | round(1) if ein > 0.5 else none }}
+  #     - name: "Wechselrichter Gesamteffizienz"
+  #       unique_id: "optimizer_sensor_wr_effizienz_gesamt"
+  #       unit_of_measurement: "%"
+  #       state_class: measurement
+  #       icon: mdi:percent-circle-outline
+  #       state: >
+  #         {% set wr = 'sensor.<HIER EINTRAGEN>_' %}
+  #         {% set teile = ['total_losses', 'total_production', 'total_battery_discharge', 'total_energy_import'] %}
+  #         {% if teile | map('regex_replace', '^', wr) | map('states') | map('is_number') | min %}
+  #           {% set ein = states(wr ~ 'total_production') | float
+  #                      + states(wr ~ 'total_battery_discharge') | float
+  #                      + states(wr ~ 'total_energy_import') | float %}
+  #           {{ ((1 - states(wr ~ 'total_losses') | float / ein) * 100) | round(1) if ein > 1 else this.state }}
+  #         {% else %}{{ this.state }}{% endif %}
+  #     - name: "Batterie-Effizienz gesamt"
+  #       unique_id: "optimizer_sensor_batterie_effizienz_gesamt"
+  #       unit_of_measurement: "%"
+  #       state_class: measurement
+  #       icon: mdi:battery-sync
+  #       state: >
+  #         {% set wr = 'sensor.<HIER EINTRAGEN>_' %}
+  #         {% set teile = ['total_battery_charge', 'total_battery_discharge'] %}
+  #         {% if teile | map('regex_replace', '^', wr) | map('states') | map('is_number') | min %}
+  #           {% set rein = states(wr ~ 'total_battery_charge') | float %}
+  #           {{ (states(wr ~ 'total_battery_discharge') | float / rein * 100) | round(1) if rein > 1 else this.state }}
+  #         {% else %}{{ this.state }}{% endif %}
 sensor:
   # Hausverbrauch: Riemann-Summe ueber die Gesamtlast (W -> kWh), Quelle des
   # Halbstundenzaehlers. Ueber einen Tag muss sie auf wenige Prozent zum
@@ -257,6 +305,16 @@ sensor:
   #   unit_prefix: k
   #   round: 3
   #   method: left
+  # Dashboard (optional): PV-Leistung als gleitender Mittelwert ueber 30
+  # Minuten, damit der Verlauf nicht jeder Wolke folgt.
+  # - platform: filter
+  #   name: "PV Leistung Geglättet"
+  #   unique_id: "optimizer_sensor_pv_power_geglaettet"
+  #   entity_id: sensor.<HIER EINTRAGEN>   # Deye "PV Power" (W)
+  #   filters:
+  #     - filter: time_simple_moving_average
+  #       window_size: "00:30:00"
+  #       precision: 0
   - platform: history_stats           # -> Diagnose: Eingriffsdauer heute
     name: "Ladesteuerung Eingriff Dauer Heute"
     unique_id: "optimizer_sensor_intervention_duration_today"
