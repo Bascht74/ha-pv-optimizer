@@ -51,6 +51,11 @@ und der kommt in das optionale Feld darunter. Ist es gesetzt, rechnet der Bluepr
 dessen Skala und rechnet die Untergrenze erst beim Schreiben in die Skala des Wechselrichters um — der
 kennt nur sein eigenes BMS. Den Wechselrichter stellt in jedem Fall nur dieser Blueprint.
 
+**Solcast (Sektion 4):** Die Prognose-Felder nehmen je Dachfläche einen Sensor. Wer jede Fläche als
+eigene Solcast-Instanz führt, trägt in „Prognose heute“, „morgen“, „Tag 3“ und „Tag 4“ jeweils die
+Sensoren aller Flächen ein; der Blueprint addiert sie Halbstunde für Halbstunde. Liegen alle Flächen
+in einer Instanz, addiert Solcast sie selbst, dann genügt ein Sensor je Feld.
+
 **Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
 Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
 Utility-Meter über dessen Ladeenergie (bleibt aus dem Verbrauchsprofil heraus, Vorlage im Package)

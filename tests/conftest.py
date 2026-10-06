@@ -95,6 +95,20 @@ def prognose_gleichmaessig(tag: dt.date, kw: float, von: dt.time = dt.time(8, 0)
     return prognose(tag, [kw] * slots, von)
 
 
+def tagessensor(slots: list[dict]) -> tuple[str, dict]:
+    """Zustand und Attribute eines Solcast-Tagessensors zu seinem Slot-Array."""
+    p50 = sum(s["pv_estimate"] for s in slots) * 0.5
+    p10 = sum(s["pv_estimate10"] for s in slots) * 0.5
+    return str(round(p50, 4)), {"estimate10": round(p10, 4), "detailedForecast": slots}
+
+
+def slots_addiert(*arrays: list[dict]) -> list[dict]:
+    """Ein Array, das die Slots mehrerer Dachflaechen je Zeitpunkt addiert - die Sicht eines Summensensors."""
+    return [{"period_start": teile[0]["period_start"],
+             **{f: sum(t[f] for t in teile) for f in ("pv_estimate", "pv_estimate10", "pv_estimate90")}}
+            for teile in zip(*arrays)]
+
+
 # --------------------------------------------------------------------------
 # Szenario-Bauer
 # --------------------------------------------------------------------------
@@ -130,7 +144,8 @@ def szenario(
         inputs.update({"solcast_morgen_sensor": "", "solcast_tag3_sensor": "", "solcast_tag4_sensor": ""})
     if input_overrides:
         inputs.update(input_overrides)
-    e = lambda name: inputs[name]  # noqa: E731
+    # Mehrfachauswahl (Solcast je Dachflaeche): das Szenario belegt die erste Entitaet.
+    e = lambda name: (inputs[name] or [""])[0] if isinstance(inputs[name], list) else inputs[name]  # noqa: E731
 
     vor_1h = jetzt - dt.timedelta(hours=1)
     profil = [profil_kwh] * 48 if isinstance(profil_kwh, (int, float)) else list(profil_kwh)
@@ -186,6 +201,22 @@ def szenario(
     if zustands_overrides:
         tabelle.update(zustands_overrides)
     return Harness(blueprint, inputs, tabelle, jetzt, trigger_id, integrationen)
+
+
+def szenario_dachflaechen(blueprint: dict, jetzt: dt.datetime, felder: dict[str, list[tuple[str, dict]]],
+                          **kw) -> Harness:
+    """
+    Wie szenario(), aber die genannten Solcast-Felder mit einer Entitaet je Dachflaeche:
+    felder bildet den Input-Namen auf (Zustand, Attribute) je Flaeche ab.
+    """
+    inputs = dict(kw.pop("input_overrides", None) or {})
+    zustaende = dict(kw.pop("zustands_overrides", None) or {})
+    for feld, flaechen in felder.items():
+        basis = fake_entity(feld, "sensor")   # benannt wie in szenario_aus_aufzeichnung
+        inputs[feld] = [basis if i == 0 else f"{basis}_{i}" for i in range(len(flaechen))]
+        for eid, (state, attrs) in zip(inputs[feld], flaechen):
+            zustaende[eid] = Zustand(eid, state, attrs, jetzt - dt.timedelta(hours=1))
+    return szenario(blueprint, jetzt, input_overrides=inputs, zustands_overrides=zustaende, **kw)
 
 
 # --------------------------------------------------------------------------

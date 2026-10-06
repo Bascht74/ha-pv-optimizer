@@ -943,6 +943,105 @@ def test_solcast_sensoren_noch_nicht_gerollt(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
+# Mehrere Dachflaechen: je Solcast-Feld ein Sensor je Flaeche, je Halbstunde addiert
+# --------------------------------------------------------------------------
+SOLCAST_FELDER = ("solcast_heute_sensor", "solcast_morgen_sensor", "solcast_tag3_sensor", "solcast_tag4_sensor")
+
+
+def test_zwei_dachflaechen_ergeben_die_summe_beider_prognosen(blueprint, tag):
+    """
+    Sued 2 kW von 10:00 bis 13:30, West 2 kW von 12:00 bis 15:30: zusammen 4 kW von 12:00 bis 13:30.
+    Erwartete Spitze 4000 W - Hausverbrauch 0,19 kWh x 2000 = 3620 W. Alles, was aus der heutigen
+    Prognose rechnet, stimmt mit einem Sensor ueberein, der beide Flaechen schon addiert traegt.
+    """
+    from conftest import prognose, slots_addiert, szenario_dachflaechen, tagessensor
+    sued = prognose(tag, [2.0] * 8, dt.time(10, 0))
+    west = prognose(tag, [2.0] * 8, dt.time(12, 0))
+    summe = slots_addiert(sued, west)
+    for jetzt in (zeit(tag, 9, 0), zeit(tag, 12, 10)):
+        zwei = szenario_dachflaechen(blueprint, jetzt, {"solcast_heute_sensor": [tagessensor(sued), tagessensor(west)]},
+                                     forecast=summe).auswerten()
+        eins = szenario(blueprint, jetzt, forecast=summe).auswerten()
+        assert zwei["spitze_erwartet_w"] == pytest.approx(3620.0)
+        assert zwei["spitze_erwartet_detail"] == "PV-Prognose 4000 W − Hausverbrauch 380 W um 12:00 Uhr"
+        for n in ("solcast_heute_fc", "trend_daten", "slot_daten", "blockade_dyn_json", "target_p5", "fall_b_aktiv"):
+            assert zwei[n] == eins[n], (jetzt, n)
+
+
+def test_dachflaechen_in_der_entlade_planung(blueprint, tag):
+    """
+    Morgen und Tag 3 je Flaeche mit Slot-Array, Tag 4 nur als Tagessumme (3 + 2 kWh, in der heutigen
+    Form verteilt). Morgen: 16 Halbstunden mit je (2 kW x 0,5 + 1,4 kW x 0,5) x 0,5 h = 0,85 kWh = 13,6 kWh.
+    Die Planung rechnet jeden Tag als Summe beider Flaechen; Referenz ist plan_referenz mit den hier
+    addierten Slots.
+    """
+    from conftest import plan_referenz, prognose, szenario_dachflaechen, tagessensor
+    jetzt = zeit(tag, 21, 0)
+    t = [tag + dt.timedelta(days=i) for i in range(4)]
+    sued = [prognose(d, [2.0 * f] * 8, dt.time(10, 0)) for d, f in zip(t, (1.0, 1.0, 0.5))]
+    west = [prognose(d, [2.0 * f] * 8, dt.time(12, 0)) for d, f in zip(t, (1.0, 1.0, 0.5))]
+    felder = {name: [tagessensor(s), tagessensor(w)] for name, s, w in zip(SOLCAST_FELDER, sued, west)}
+    felder["solcast_tag4_sensor"] = [("3.0", {"estimate10": 3.0}), ("2.0", {"estimate10": 2.0})]
+    ctx = szenario_dachflaechen(blueprint, jetzt, felder, soc=85.0).auswerten(bis="f_soc")
+    assert ctx["nacht_p50_anteil"] == 0.5
+
+    def blend(*arrays):
+        k = [0.0] * 48
+        for arr in arrays:
+            for s in arr:
+                k[s["period_start"].hour * 2 + s["period_start"].minute // 30] += (s["pv_estimate"] + s["pv_estimate10"]) * 0.25
+        return k
+    tage = {d: blend(s, w) for d, s, w in zip(t, sued, west)}
+    tage[t[3]] = [v * 5.0 / sum(tage[t[0]]) for v in tage[t[0]]]
+    je_tag = {x["datum"]: x for x in ctx["solcast_slot_tage"]}
+    assert sum(je_tag[t[1].isoformat()]["k"]) == pytest.approx(13.6) and je_tag[t[1].isoformat()]["summe"] == pytest.approx(13.6)
+    assert je_tag[t[3].isoformat()]["summe"] == pytest.approx(5.0) and je_tag[t[3].isoformat()]["slots"] is False
+    for d in t:
+        assert je_tag[d.isoformat()]["k"] == pytest.approx(tage[d]), d
+    ref = plan_referenz(jetzt, tage, [0.19] * 48, kap_kwh=ctx["batterie_kapazitaet"], soc=85.0)
+    assert ctx["b_stern_pct"] == pytest.approx(ref["b_pct"], abs=0.01) and ctx["f_soc"] == ref["f_soc"]
+
+
+def test_dachflaechen_rollen_um_mitternacht_nacheinander(blueprint, tag):
+    """
+    00:15, die Sensoren der Westflaeche zeigen noch den Vortag (heute = gestern, morgen = heute ...), die der
+    Suedflaeche sind schon gerollt. Jede Flaeche zaehlt je Kalendertag genau einmal, die Planung ist dieselbe
+    wie nach dem Rollen beider. Je Feld addiert ergaebe 'heute' Sued von heute plus West von gestern.
+    """
+    from conftest import prognose, szenario_dachflaechen, tagessensor
+    heute = tag + dt.timedelta(days=1)
+    jetzt = zeit(heute, 0, 15)
+    tage = [heute + dt.timedelta(days=i) for i in range(-1, 4)]   # gestern bis Tag 4
+    sued = {d: tagessensor(prognose(d, [2.0] * 8, dt.time(10, 0))) for d in tage}
+    west = {d: tagessensor(prognose(d, [1.5] * 8, dt.time(12, 0))) for d in tage}
+
+    def lauf(west_zurueck):
+        felder = {name: [sued[tage[i + 1]], west[tage[i + 1 - west_zurueck]]] for i, name in enumerate(SOLCAST_FELDER)}
+        return szenario_dachflaechen(blueprint, jetzt, felder, soc=85.0).auswerten(bis="f_soc")
+    gerollt, verzoegert = lauf(0), lauf(1)
+    k = lambda ctx, d: next(x["k"] for x in ctx["solcast_slot_tage"] if x["datum"] == d.isoformat())  # noqa: E731
+    for d in tage[1:4]:   # heute bis Tag 3: der Horizont dieses Laufs
+        assert k(verzoegert, d) == pytest.approx(k(gerollt, d)), d
+    assert sum(k(gerollt, heute)) == pytest.approx(8 * (2.0 + 1.4 + 1.5 + 1.05) * 0.25)
+    assert verzoegert["b_stern_pct"] == pytest.approx(gerollt["b_stern_pct"], abs=0.01)
+    assert verzoegert["f_soc"] == gerollt["f_soc"]
+
+
+def test_einzelner_solcast_sensor_als_text_rechnet_wie_bisher(blueprint, tag):
+    """Instanzen von vor der Mehrfachauswahl tragen je Feld einen String statt einer Liste."""
+    for jetzt in (zeit(tag, 10, 0), zeit(tag, 21, 0)):
+        liste = szenario(blueprint, jetzt, soc=85.0)
+        text = szenario(blueprint, jetzt, soc=85.0, input_overrides={n: liste.inputs[n][0] for n in SOLCAST_FELDER})
+        a, b = liste.auswerten(), text.auswerten()
+        for n in ("solcast_heute_fc", "solcast_slot_tage", "spitze_erwartet_w", "slot_daten", "blockade_dyn_json",
+                  "b_stern_pct", "f_soc", "target_p5", "entlade_aktiv"):
+            assert a[n] == b[n], (jetzt, n)
+    for leer in ("", []):
+        ctx = szenario(blueprint, zeit(tag, 10, 0), input_overrides={n: leer for n in SOLCAST_FELDER}).auswerten(bis="f_soc")
+        assert ctx["solcast_heute_fc"] is None and ctx["solcast_slot_tage"] == [] and ctx["entlade_aktiv"] is False
+
+
+# --------------------------------------------------------------------------
 # Netzbezug im Halten: Verlust nur, was nachts bezogen UND tags eingespeist wurde
 # --------------------------------------------------------------------------
 def _halten(bezug, export_heute):
@@ -1001,6 +1100,19 @@ def test_netzbezug_im_halten_laeuft_im_update_json_zweig_auf(blueprint, tag, bis
     assert ctx["hb_lage"] is (erwartet is not None) and ctx["hb_haelt"] is (erwartet is not None)
     if erwartet is not None:
         assert ctx["hb_neu"] == pytest.approx(erwartet, abs=0.001)
+
+
+@pytest.mark.parametrize("planung, erwartet", [
+    (["sensor.fx_solcast_morgen_sensor", "sensor.fx_solcast_morgen_sensor_1"], True),   # zwei Dachflaechen
+    ("sensor.fx_solcast_morgen_sensor", True),                                          # aeltere Instanz, ein String
+    ("", False), ([], False),                                                           # Planung aus
+])
+def test_halten_im_update_json_zweig_kennt_jede_form_des_planungsfelds(blueprint, tag, planung, erwartet):
+    from conftest import fake_entity
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "65") for i in range(1, 7)}
+    h = szenario(blueprint, zeit(tag, 3, 0), soc=65.0, zustands_overrides=tous, trigger_id="update_json",
+                 input_overrides={"solcast_morgen_sensor": planung})
+    assert _update_json_zweig(blueprint, h, zeit(tag, 3, 0))["hb_lage"] is erwartet
 
 
 @pytest.mark.parametrize("stunde, soc, tou, erwartet", [
@@ -1249,14 +1361,14 @@ def test_optimizer_anfrage_aus_dem_lauf(blueprint, tag):
     # Morgen: die vertraute Tagessumme der Entlade-Planung (P10/P50-Mischung), nicht das rohe P50 des Sensors
     morgen = next(t["pv"] for t in ctx["prognose_tage"] if t["name"] == "morgen")
     assert sum(ts["ft"]) / 1000 == pytest.approx(morgen, rel=0.02)
-    assert morgen <= float(h.states.tabelle[h.inputs["solcast_morgen_sensor"]].state)   # synthetisch P10 = P50
+    assert morgen <= float(h.states.tabelle[h.inputs["solcast_morgen_sensor"][0]].state)   # synthetisch P10 = P50
     # Heute: dieselbe Slot-Mischung wie slot_daten (P10/P50 mit Realitaets-Check)
     tag_ctx = szenario(blueprint, zeit(tag, 10, 0), soc=60.0, input_overrides={"optimizer_url": "http://localhost:7050"})
     tctx, _ = _optimizer_zweig(blueprint, tag_ctx, antwort={"status": 200, "content": {}})
     ta = tctx["opt_anfrage"]; ta = ta if isinstance(ta, dict) else json.loads(ta)
     anteil = tctx["blend_p50_anteil"]; ab = tctx["pv_abschlag"]
     fc = {s_["period_start"] if isinstance(s_["period_start"], str) else s_["period_start"].isoformat(): s_
-          for s_ in tag_ctx.states.tabelle[tag_ctx.inputs["solcast_heute_sensor"]].attributes["detailedForecast"]}
+          for s_ in tag_ctx.states.tabelle[tag_ctx.inputs["solcast_heute_sensor"][0]].attributes["detailedForecast"]}
     start = tag_ctx.jetzt.replace(minute=0, second=0, microsecond=0)
     slot = fc[(start + dt.timedelta(minutes=30)).isoformat()]
     erwartet = (slot["pv_estimate"] * anteil + slot["pv_estimate10"] * (1 - anteil)) * 0.5 * ab * 1000

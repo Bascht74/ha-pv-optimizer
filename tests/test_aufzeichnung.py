@@ -109,6 +109,26 @@ def test_aufzeichnung_reproduziert_den_lauf(blueprint, tag, hh, soc):
         assert a[k] == b[k], f"{k}: Original {a[k]!r}, aus Aufzeichnung {b[k]!r}"
 
 
+def test_aufzeichnung_je_dachflaeche_ein_eintrag(blueprint, tag):
+    """Zwei Dachflaechen: je Solcast-Feld zwei Eintraege mit dem eigenen Array, und die Zeile baut den Lauf nach."""
+    from conftest import prognose, szenario_dachflaechen, tagessensor
+    felder = {name: [tagessensor(prognose(tag + dt.timedelta(days=i), [2.0] * 8, dt.time(10, 0))),
+                     tagessensor(prognose(tag + dt.timedelta(days=i), [1.5] * 8, dt.time(12, 0)))]
+              for i, name in enumerate(("solcast_heute_sensor", "solcast_morgen_sensor", "solcast_tag3_sensor", "solcast_tag4_sensor"))}
+    for hh in (12, 21):
+        original = szenario_dachflaechen(blueprint, zeit(tag, hh, 0), felder, soc=70.0)
+        aufz = aufzeichnen(original, blueprint)
+        for name in felder:
+            eintraege = [e for e in aufz["entitaeten"] if e["input"] == name]
+            assert len(eintraege) == 2, name
+            assert eintraege[0]["attributes"]["detailedForecast"] != eintraege[1]["attributes"]["detailedForecast"], name
+        kopie = szenario_aus_aufzeichnung(blueprint, json.loads(json.dumps(aufz)))
+        assert kopie.inputs == original.inputs
+        a, b = original.auswerten(), kopie.auswerten()
+        for k in VERGLEICH + ["solcast_heute_fc", "solcast_slot_tage", "b_stern_pct", "f_soc"]:
+            assert a[k] == b[k], (hh, k)
+
+
 # Aufzeichnungen sind private Standortdaten und liegen nur lokal (tests/fixtures/*.jsonl ist
 # per .gitignore ausgeschlossen). Ohne Datei ueberspringen sich die Tests darauf.
 def _zeilen():
