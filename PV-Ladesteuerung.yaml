@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.1.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.1.1]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -543,13 +543,13 @@ blueprint:
         ev_restbedarf_sensor:
           name: "Autos: offener Ladebedarf (kWh)"
           description: >-
-            Je Ladepunkt die Energie, die das angesteckte Auto bis zu seinem Ladeziel noch aufnimmt (evcc: „Charge Remaining Energy“). Mehrere auswählbar, die Werte werden addiert und gehen vom heutigen PV-Überschuss ab, bevor die Batterie eingeplant wird.
+            Je Ladepunkt die Energie, die das Auto bis zu seinem Ladeziel noch aufnimmt (evcc: „Charge Remaining Energy“). Die Summe der angesteckten Autos geht vom heutigen PV-Überschuss ab, bevor die Batterie eingeplant wird. Wirkt nur zusammen mit „Autos: angesteckt“.
           default: []
           selector: {"entity": {"domain": "sensor", "multiple": true}}
         ev_verbunden_sensor:
           name: "Autos: angesteckt"
           description: >-
-            Je Ladepunkt der Sensor, ob ein Auto angesteckt ist (evcc: „Connected“), in derselben Reihenfolge wie der offene Ladebedarf. Ein abgestecktes Auto zählt dann nicht, denn evcc meldet für es einen Bedarf ab 0 %. Leer: jeder Bedarf zählt.
+            Je Ladepunkt der Sensor, ob ein Auto angesteckt ist (evcc: „Connected“), in derselben Reihenfolge wie der offene Ladebedarf. Ein Bedarf zählt nur mit angestecktem Auto, denn evcc meldet für ein abgestecktes einen Bedarf ab 0 %. Ohne diesen Sensor zählt kein Bedarf.
           default: []
           selector: {"entity": {"domain": "binary_sensor", "multiple": true}}
         optimizer_url:
@@ -696,7 +696,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.1.0]"
+      bp_version: "[V7.1.1]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1832,12 +1832,13 @@ action:
   - variables:
       # Offener Ladebedarf der Autos (kWh). Sie laden zuerst: der Ueberschuss der
       # naechsten Slots geht an sie, bis er gedeckt ist, erst der Rest an die Batterie.
-      # Ein abgestecktes Auto zaehlt nicht: evcc rechnet dessen Bedarf ab 0 %.
+      # Nur ein Ladepunkt mit beiden Sensoren und angestecktem Auto zaehlt: evcc
+      # rechnet den Bedarf eines abgesteckten Autos ab 0 %.
       ev_bedarf_kwh: >
         {% set ns = namespace(s=0.0) %}
         {% for e in ev_liste %}
           {% set v = ev_verbunden_liste[loop.index0] if loop.index0 < ev_verbunden_liste | length else '' %}
-          {% if v == '' or is_state(v, 'on') %}{% set ns.s = ns.s + ([states(e) | float(0), 0] | max) %}{% endif %}
+          {% if v != '' and is_state(v, 'on') %}{% set ns.s = ns.s + ([states(e) | float(0), 0] | max) %}{% endif %}
         {% endfor %}
         {{ ns.s | round(3) }}
       slot_daten: >
