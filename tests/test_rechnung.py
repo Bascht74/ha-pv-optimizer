@@ -1063,6 +1063,11 @@ def _update_json_zweig(blueprint, h, trigger_zeit):
     return ctx
 
 
+def _zurueckgesetzt(t: dt.datetime, minuten: float = 30) -> dict:
+    """Attribute eines utility_meter, das minuten vor t zurueckgesetzt wurde (HA speichert UTC)."""
+    return {"last_reset": (t - dt.timedelta(minutes=minuten)).astimezone(dt.timezone.utc).isoformat()}
+
+
 @pytest.mark.parametrize("bisher, slot_kwh, soc, tou, erwartet", [
     (2.0, 0.6, 65.0, 65, 2.6),        # Halten: Slot-Verbrauch kommt dazu
     (14.2, 0.6, 65.0, 65, 14.469),    # Deckel: (65-20) % x 32.154 kWh (2 x 314 Ah x 51.2 V) zurueckgehalten
@@ -1285,14 +1290,15 @@ def test_auto_bedarf_geht_vom_ueberschuss_der_ersten_slots_ab(blueprint, tag):
 def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
     from conftest import fake_entity
     wb = fake_entity("wallbox_kwh_sensor", "sensor")
-    h = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}, trigger_id="update_json")
+    frisch = _zurueckgesetzt(zeit(tag, 14, 0))   # vom vorigen Halbstundenlauf zurueckgesetzt
+    h = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6", frisch)}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
-    assert ctx["wallbox_slot_kwh"] == 0.6 and ctx["last_half_hour_kwh"] == pytest.approx(0.3)
+    assert ctx["wallbox_slot_kwh"] == 0.6 and ctx["last_half_hour_kwh"] == pytest.approx(0.3) and ctx["haus_zaehler_frisch"] is True
     # Zeitversatz der Zaehler: nie negativ.
-    h2 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.2, zustands_overrides={wb: Zustand(wb, "0.5")}, trigger_id="update_json")
+    h2 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.2, zustands_overrides={wb: Zustand(wb, "0.5", frisch)}, trigger_id="update_json")
     assert _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))["last_half_hour_kwh"] == 0
     # Live-Anschluss: 0.9 kWh nach 20 Minuten, davon 0.6 Wallbox -> 0.3 / (20/30) = 0.45 kWh je Slot.
-    live = szenario(blueprint, zeit(tag, 14, 20), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6")}).auswerten(bis="haus_live_kwh")
+    live = szenario(blueprint, zeit(tag, 14, 20), hausverbrauch_slot_kwh=0.9, zustands_overrides={wb: Zustand(wb, "0.6", frisch)}).auswerten(bis="haus_live_kwh")
     assert live["haus_live_kwh"] == pytest.approx(0.45, abs=0.005)
     # Ohne Feld: der volle Zaehler.
     h3 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": []}, trigger_id="update_json")
@@ -1300,9 +1306,135 @@ def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):
     # Zwei Wallboxen: Summe, und beide Zaehler werden genullt.
     wb2 = "sensor.wallbox_2_halbstuendlich"
     h4 = szenario(blueprint, zeit(tag, 14, 0), hausverbrauch_slot_kwh=0.9, input_overrides={"wallbox_kwh_sensor": [wb, wb2]},
-                  zustands_overrides={wb: Zustand(wb, "0.2"), wb2: Zustand(wb2, "0.3")}, trigger_id="update_json")
+                  zustands_overrides={wb: Zustand(wb, "0.2", frisch), wb2: Zustand(wb2, "0.3", frisch)}, trigger_id="update_json")
     ctx4 = _update_json_zweig(blueprint, h4, zeit(tag, 14, 0))
     assert ctx4["wallbox_slot_kwh"] == pytest.approx(0.5) and ctx4["last_half_hour_kwh"] == pytest.approx(0.4) and ctx4["wallbox_liste"] == [wb, wb2]
+
+
+# --------------------------------------------------------------------------
+# Halbstundenzaehler: gelernt wird nur ein Stand, den der vorige Lauf zurueckgesetzt hat
+# --------------------------------------------------------------------------
+def _halbstundenlauf(blueprint, tag, um=(14, 0), overrides=None, **kw):
+    t = zeit(tag, *um)
+    h = szenario(blueprint, t, zustands_overrides=overrides or {}, trigger_id="update_json", **kw)
+    return h, _update_json_zweig(blueprint, h, t)
+
+
+def _zaehler(name):
+    from conftest import fake_entity
+    return fake_entity(name, "sensor")
+
+
+def _profil(ctx):
+    return ctx["new_array"] if isinstance(ctx["new_array"], list) else json.loads(ctx["new_array"])
+
+
+@pytest.mark.parametrize("fall, minuten, frisch, slot_27", [
+    ("vom vorigen Lauf zurueckgesetzt", 30, True, 0.29),         # 0,19 x 6/7 + 0,9 / 7 = 0,291
+    ("voriger Lauf 11 Min verspaetet", 19, True, 0.29),
+    ("voriger Lauf ausgefallen, 45 Min", 45, False, 0.19),
+    ("zwei Tage nicht zurueckgesetzt", 2 * 1440, False, 0.19),
+    ("nie zurueckgesetzt", None, False, 0.19),
+])
+def test_profil_lernt_nur_einen_frisch_zurueckgesetzten_zaehler(blueprint, tag, fall, minuten, frisch, slot_27):
+    """Zaehler 0,9 kWh, Profil 0,19 kWh je Halbstunde, Lauf 14:00 (Index 27)."""
+    z = _zaehler("hausverbrauch_utility_sensor")
+    attr = _zurueckgesetzt(zeit(tag, 14, 0), minuten) if minuten is not None else {}
+    _, ctx = _halbstundenlauf(blueprint, tag, overrides={z: Zustand(z, "0.9", attr)})
+    assert ctx["haus_zaehler_frisch"] is frisch and ctx["haus_alt"] is (not frisch), fall
+    profil = _profil(ctx)
+    assert profil[27] == pytest.approx(slot_27) and profil[26] == pytest.approx(0.19), fall
+
+
+def test_profil_wallbox_und_ausgefallene_zaehler(blueprint, tag):
+    z, wb = _zaehler("hausverbrauch_utility_sensor"), _zaehler("wallbox_kwh_sensor")
+    frisch, alt = _zurueckgesetzt(zeit(tag, 14, 0)), _zurueckgesetzt(zeit(tag, 14, 0), 3 * 1440)
+    # Alter Wallbox-Stand neben frischem Hauszaehler: der Abzug waere falsch, die Halbstunde zaehlt nicht.
+    _, ctx = _halbstundenlauf(blueprint, tag, overrides={z: Zustand(z, "0.9", frisch), wb: Zustand(wb, "40.0", alt)})
+    assert ctx["haus_zaehler_frisch"] is False and _profil(ctx)[27] == pytest.approx(0.19)
+    # Wallbox ohne Wert: zaehlt 0 und haelt das Lernen nicht auf (wie vorher).
+    _, ctx = _halbstundenlauf(blueprint, tag, overrides={z: Zustand(z, "0.9", frisch), wb: Zustand(wb, "unavailable")})
+    assert ctx["haus_zaehler_frisch"] is True and ctx["wallbox_slot_kwh"] == 0 and _profil(ctx)[27] == pytest.approx(0.29)
+    # Hauszaehler ohne Wert: nichts gelernt (frueher eine 0) und keine Meldung je Halbstunde.
+    _, ctx = _halbstundenlauf(blueprint, tag, overrides={z: Zustand(z, "unavailable")})
+    assert ctx["haus_lesbar"] is False and ctx["haus_alt"] is False and _profil(ctx)[27] == pytest.approx(0.19)
+
+
+def test_kaltstart_um_mitternacht_mit_altem_zaehler(blueprint, tag):
+    """
+    Leerer Profil-Helfer, erster Lauf um Mitternacht, Zaehler seit Tagen nicht zurueckgesetzt (200 kWh):
+    Startwert ist der geklemmte Messwert 0,6 kWh in allen Slots. Vorher lernte Slot 47 obendrein
+    200 / 7 = 28,6 kWh dazu und klang erst nach Wochen ab.
+    """
+    from conftest import fake_entity
+    z, helfer = _zaehler("hausverbrauch_utility_sensor"), fake_entity("hausverbrauch_json_text", "input_text")
+    alt = _zurueckgesetzt(zeit(tag, 0, 0), 4 * 1440)
+    _, ctx = _halbstundenlauf(blueprint, tag, um=(0, 0), overrides={z: Zustand(z, "200.0", alt), helfer: Zustand(helfer, "")})
+    assert ctx["ist_mitternachtslauf"] is True and ctx["json_gueltig"] is False and ctx["h_index"] == 47
+    assert _profil(ctx) == [0.6] * 48
+
+
+def test_haltesumme_und_slot_zeile_ohne_alten_zaehlerstand(blueprint, tag):
+    """Halten mit 2,0 kWh bisher; der alte Zaehlerstand (12 kWh) kommt weder in die Summe noch in die Aufzeichnung."""
+    from conftest import fake_entity
+    z, n = _zaehler("hausverbrauch_utility_sensor"), _zaehler("notstrom_utility_sensor")
+    hb = fake_entity("helper_halten_bezug", "input_number")
+    alt = _zurueckgesetzt(zeit(tag, 3, 0), 600)
+    ov = {**_tou(65), hb: Zustand(hb, "2.0"), z: Zustand(z, "12.0", alt), n: Zustand(n, "1.5", alt)}
+    h, ctx = _halbstundenlauf(blueprint, tag, um=(3, 0), overrides=ov, soc=65.0)
+    assert ctx["hb_haelt"] is True and ctx["hb_neu"] == pytest.approx(2.0)
+    zeile = _slot_zeile(blueprint, h, ctx)
+    assert zeile["slot_kwh"] is None and zeile["notstrom_kwh"] is None and zeile["halten"] is True
+
+
+def test_notstromprofil_lernt_nur_frisch(blueprint, tag):
+    from conftest import fake_entity
+    n, helfer = _zaehler("notstrom_utility_sensor"), fake_entity("notstrom_json_text", "input_text")
+    # Leerer Helfer, Zaehler seit vier Tagen nicht zurueckgesetzt: kein Startwert aus 0,62 kWh (= 620 Wh je Slot).
+    _, ctx = _halbstundenlauf(blueprint, tag, overrides={n: Zustand(n, "0.62", _zurueckgesetzt(zeit(tag, 14, 0), 4 * 1440))})
+    assert ctx["np_kwh"] == pytest.approx(0.62) and ctx["np_zaehler_frisch"] is False and ctx["np_alt_stand"] is True
+    assert "np_neu" not in ctx
+    # Die naechste Halbstunde ist frisch und lernt.
+    _, ctx2 = _halbstundenlauf(blueprint, tag, um=(14, 30), overrides={n: Zustand(n, "0.04", _zurueckgesetzt(zeit(tag, 14, 30)))})
+    neu = ctx2["np_neu"] if isinstance(ctx2["np_neu"], list) else json.loads(ctx2["np_neu"])
+    assert neu == [40] * 48
+    # Zaehler ohne Wert: nichts zurueckgesetzt, nichts gelernt, keine Meldung.
+    _, ctx3 = _halbstundenlauf(blueprint, tag, overrides={n: Zustand(n, "unavailable")})
+    assert ctx3["np_kwh"] is None and ctx3["np_alt_stand"] is False and "np_neu" not in ctx3
+    # Mehrere Zaehler: Summe; einer ohne Wert macht die Summe ungueltig.
+    n2 = "sensor.notstrom_links"
+    frisch = _zurueckgesetzt(zeit(tag, 14, 0))
+    _, ctx4 = _halbstundenlauf(blueprint, tag, overrides={n: Zustand(n, "0.03", frisch), n2: Zustand(n2, "0.02", frisch)},
+                               input_overrides={"notstrom_utility_sensor": [n, n2]})
+    assert ctx4["np_kwh"] == pytest.approx(0.05) and ctx4["np_zaehler_frisch"] is True
+
+
+def test_meldung_beim_verwerfen(blueprint, tag):
+    z, wb, n = _zaehler("hausverbrauch_utility_sensor"), _zaehler("wallbox_kwh_sensor"), _zaehler("notstrom_utility_sensor")
+    t = zeit(tag, 14, 0)
+    ov = {z: Zustand(z, "200.319", _zurueckgesetzt(t, 4 * 1440 + 14 * 60)), wb: Zustand(wb, "11.697", _zurueckgesetzt(t, 600)),
+          n: Zustand(n, "0.623")}
+    h, ctx = _halbstundenlauf(blueprint, tag, overrides=ov)
+    block = next(s_ for s_ in blueprint["action"] if isinstance(s_, dict) and "if" in s_ and "update_json" in str(s_["if"]))
+    schritt = next(st for st in block["then"] if "if" in st and "np_alt_stand" in str(st["if"]))
+    assert h._aufloesen(schritt["if"][0]["value_template"], ctx) is True
+    meldung = h.render(next(a for a in schritt["then"] if a.get("action") == "logbook.log")["data"]["message"], ctx)
+    assert meldung == (f"{ctx['log_kopf']} Verbrauchs- und Notstromprofil: Halbstunde ab 13:30 Uhr nicht gelernt, Zähler zurückgesetzt. "
+                       "Zählerstand verworfen, da letzte Rücksetzung länger als 40 Min her "
+                       "(Hausverbrauch 200.32 kWh, Wallbox 11.70 kWh, zuletzt zurückgesetzt vor 5 Tagen; Notstromlast 0.62 kWh, nie zurückgesetzt).")
+    # Nur der Notstromzaehler alt: der Hausverbrauch wurde gelernt und steht nicht in der Meldung.
+    ov2 = {z: Zustand(z, "0.9", _zurueckgesetzt(t)), n: Zustand(n, "0.623", _zurueckgesetzt(t, 90))}
+    h2, ctx2 = _halbstundenlauf(blueprint, tag, overrides=ov2)
+    meldung2 = h2.render(next(a for a in schritt["then"] if a.get("action") == "logbook.log")["data"]["message"], ctx2)
+    assert meldung2.endswith("Notstromprofil: Halbstunde ab 13:30 Uhr nicht gelernt, Zähler zurückgesetzt. "
+                             "Zählerstand verworfen, da letzte Rücksetzung länger als 40 Min her (Notstromlast 0.62 kWh, zuletzt zurückgesetzt vor 90 Min).")
+
+
+@pytest.mark.parametrize("wert, fehlt", [([], True), ("", True), (["sensor.solcast_ost"], False), (["sensor.solcast_ost", "sensor.solcast_nord"], False)])
+def test_solcast_heute_ist_pflichtfeld(blueprint, tag, wert, fehlt):
+    """Ohne Prognose fuer heute stoppt der Lauf mit Meldung, statt still mit null PV zu planen."""
+    fehlend = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"solcast_heute_sensor": wert}).auswerten(bis="pflicht_liste")["pflicht_liste"]
+    assert ("Solcast: Prognose heute (mit Array)" in fehlend) is fehlt and len(fehlend) == (1 if fehlt else 0)
 
 
 # --------------------------------------------------------------------------
@@ -1402,12 +1534,13 @@ def test_notstromprofil_lernt_in_wattstunden(blueprint, tag):
     """Zaehler 0,075 kWh in der Halbstunde bis 14:00 (Index 27): leerer Helfer -> 75 Wh in allen Slots; Profil 60 Wh -> 60 x 6/7 + 75 / 7 = 62."""
     from conftest import fake_entity
     z = fake_entity("notstrom_utility_sensor", "sensor"); helfer = fake_entity("notstrom_json_text", "input_text")
-    h = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={z: Zustand(z, "0.075")}, trigger_id="update_json")
+    frisch = _zurueckgesetzt(zeit(tag, 14, 0))
+    h = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={z: Zustand(z, "0.075", frisch)}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 14, 0))
     assert ctx["np_kwh"] == pytest.approx(0.075)
     neu = ctx["np_neu"] if isinstance(ctx["np_neu"], list) else json.loads(ctx["np_neu"])
     assert neu == [75] * 48
-    h2 = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={z: Zustand(z, "0.075"), helfer: Zustand(helfer, json.dumps([60] * 48))}, trigger_id="update_json")
+    h2 = szenario(blueprint, zeit(tag, 14, 0), zustands_overrides={z: Zustand(z, "0.075", frisch), helfer: Zustand(helfer, json.dumps([60] * 48))}, trigger_id="update_json")
     ctx2 = _update_json_zweig(blueprint, h2, zeit(tag, 14, 0))
     neu2 = ctx2["np_neu"] if isinstance(ctx2["np_neu"], list) else json.loads(ctx2["np_neu"])
     assert neu2[27] == 62 and neu2[26] == 60

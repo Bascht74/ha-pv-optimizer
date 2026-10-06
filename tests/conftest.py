@@ -174,7 +174,9 @@ def szenario(
           for name, kwh in zip(("solcast_morgen_sensor", "solcast_tag3_sensor", "solcast_tag4_sensor"), prognose_tage_kwh or ())],
         # Hausverbrauch
         z("hausverbrauch_json_text", json.dumps(profil)),
-        z("hausverbrauch_utility_sensor", hausverbrauch_slot_kwh),
+        # Vom vorigen Halbstundenlauf zurueckgesetzt: der Stand gilt als frisch.
+        z("hausverbrauch_utility_sensor", hausverbrauch_slot_kwh,
+          {"last_reset": (jetzt - dt.timedelta(minutes=30)).astimezone(dt.timezone.utc).isoformat()}),
         # Waermepumpe
         z("wp_temp_sensor", 48.0), z("wp_water_heater", "heat", {"temperature": 50}),
         z("wp_kompressor_sensor", "off"), z("wp_ziel_temp_number", 50), z("wp_hysterese_number", 10),
