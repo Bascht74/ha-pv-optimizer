@@ -4,7 +4,10 @@ Brauchen kein Harness, laufen in Millisekunden.
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
+
+import jinja2
 
 import pytest
 
@@ -240,3 +243,15 @@ def test_package_hat_rest_command_fuer_die_zweitmeinung(package):
     """Der Optimizer-Lauf ruft rest_command.pv_optimizer_zweitmeinung; Adresse und Payload kommen aus dem Blueprint."""
     rc = (package.get("rest_command") or {}).get("pv_optimizer_zweitmeinung")
     assert rc and rc["method"] == "post" and "{{ url }}" in rc["url"] and "payload" in rc["payload"]
+
+
+def test_package_legt_die_aufzeichnung_wochenweise_ab(package):
+    """Die Umbenennung trifft genau die Datei, in die die File-Integration schreibt, und benennt die abgelaufene ISO-Woche."""
+    cmd = (package.get("shell_command") or {}).get("pv_optimizer_aufzeichnung_ablegen", "")
+    assert "mv -n /config/pv_optimizer/aufzeichnung.jsonl " in cmd and "aufzeichnung-{{ woche }}.jsonl" in cmd
+    auto = next(a for a in package["automation"] if a["id"] == "pv_optimizer_aufzeichnung_wochenweise")
+    assert auto["conditions"][0]["weekday"] == "mon"
+    aktion = auto["actions"][0]
+    assert aktion["action"] == "shell_command.pv_optimizer_aufzeichnung_ablegen"
+    tpl = jinja2.Environment().from_string(aktion["data"]["woche"].replace("now()", "jetzt"))
+    assert tpl.render(jetzt=dt.datetime(2027, 1, 4, 0, 0, 30), timedelta=dt.timedelta) == "2026-W53"

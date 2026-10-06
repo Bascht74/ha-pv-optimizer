@@ -10,6 +10,26 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.1.1] - 2026-10-06
+
+### Fixed
+- A car's remaining energy counts only when its charge point has both "Autos: offener Ladebedarf"
+  and "Autos: angesteckt" assigned and the car is plugged in. Without the plugged-in sensor the
+  blueprint cannot tell an unplugged car, whose remaining energy evcc reports from 0 %, from a
+  waiting one, so a remaining energy without its partner no longer holds back the battery's surplus.
+
+## [V7.1.0] - 2026-10-06
+
+### Added
+- "Autos: angesteckt" (section 9) takes one plugged-in sensor per charge point, in the order of
+  "Autos: offener Ladebedarf". A car that is not plugged in no longer counts: evcc reports its
+  remaining energy from 0 % up to the charge limit, so an unplugged car held back the whole surplus
+  the battery would have charged from. Left empty, every remaining energy counts as before.
+- The helper template moves the diagnostic recording aside every Monday shortly after midnight, as
+  one file per ISO week, so a single file no longer grows without limit and a finished week can be
+  fetched on its own. A site that already copied the template adds the `shell_command` and the
+  automation at its end; without them the recording keeps growing in one file as before.
+
 ## [V7.0.0] - 2026-10-06
 
 ### Added
@@ -1111,7 +1131,9 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...HEAD
+[V7.1.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.0...V7.1.1
+[V7.1.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...V7.1.0
 [V7.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...V7.0.0
 [V6.18.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.17.0...V6.18.0
 [V6.17.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...V6.17.0
