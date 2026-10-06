@@ -12,6 +12,13 @@ Logbuch-Meldung trägt ihn.
 
 ## [V7.0.0] - 2026-10-06
 
+### Added
+- "PV-Erzeugung heute" and "Hausverbrauch halbstündlich" take several sensors, one per inverter, for
+  plants where inverters run in parallel on one battery. The blueprint sums them, so the trend
+  correction compares the whole plant's production with a forecast that covers all of it, and the
+  consumption profile learns the whole house load; every half-hourly meter is reset after its half
+  hour. An instance with one sensor per field works unchanged.
+
 ### Changed
 - The battery counts as full for the day once the regulating state of charge reaches 99 % by day,
   instead of when a cell voltage reaches the balancing threshold. Peak shaving, the emergency branch,
@@ -31,6 +38,19 @@ Logbuch-Meldung trägt ihn.
   inputs for the highest cell voltage of each pack, the battery voltage, the balancing start voltage,
   its duration and the full-battery voltage. Home Assistant ignores their leftover values; the package
   template no longer creates the timer or the `top_balancing` mode.
+
+### Fixed
+- A half-hourly meter that the previous half-hour run did not reset (first run of a new instance, a
+  missed run, a restart gap) holds hours or days of consumption, which the consumption and backup
+  profiles learned as one half hour; the backup profile's cold start filled every slot with it. The
+  meters are now reset with `utility_meter.reset`, and a reading counts only when that reset lies at
+  most 40 minutes back; otherwise the run resets the meter, leaves the profiles and the grid-import
+  sum of the hold unchanged and logs the discarded reading. Existing instances discard one half hour
+  once after the update, because their meters were zeroed by calibration so far.
+- The half hour that is skipped for an invalid profile helper resets the meters as well, so they no
+  longer run up until the midnight rebuild; an unreadable house meter is no longer learned as zero.
+- "Solcast: Prognose heute" is a required field again: without it the run stops with the notice that
+  names missing fields, instead of planning the charge as if no PV were coming.
 
 ## [V6.18.0] - 2026-10-06
 

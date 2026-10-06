@@ -155,15 +155,15 @@ blueprint:
         pv_erzeugung_heute_sensor:
           name: "PV-Erzeugung heute (kWh)"
           description: >-
-            Tageszähler der tatsächlich erzeugten PV-Energie in kWh. Der Blueprint vergleicht ihn ab der Mittagszeit mit der Prognose für den bereits abgelaufenen Teil des Tages und rechnet die Restprognose entsprechend herunter, wenn die Anlage systematisch unter der Vorhersage bleibt.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
+            Tageszähler der erzeugten PV-Energie in kWh, bei parallelen Wechselrichtern einer je Gerät. Ab Mittag vergleicht der Blueprint die Summe mit der Prognose und rechnet die Restprognose herunter, wenn die Anlage darunter bleibt.
+          default: []
+          selector: {"entity": {"domain": "sensor", "device_class": "energy", "multiple": true}}
         hausverbrauch_utility_sensor:
           name: "Hausverbrauch halbstündlich (kWh)"
           description: >-
-            Ein Utility-Meter-Sensor, der den Hausverbrauch je Halbstunde zählt. Daraus lernt der Blueprint dein typisches Verbrauchsprofil und kann abschätzen, wie viel Energie du bis Tagesende noch brauchst.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
+            Utility-Meter, der den Hausverbrauch je Halbstunde zählt, bei parallelen Wechselrichtern einer je Gerät. Aus der Summe lernt der Blueprint das Verbrauchsprofil und schätzt, wie viel Energie bis Tagesende noch gebraucht wird.
+          default: []
+          selector: {"entity": {"domain": "sensor", "multiple": true}}
         notstrom_utility_sensor:
           name: "Notstromlast halbstündlich (kWh, optional)"
           description: >-
@@ -1128,18 +1128,16 @@ action:
           haus_zaehler_alter_min: >
             {% set ns = namespace(m=0) %}
             {% for e in hausverbrauch_liste + wallbox_liste if states(e) | float(none) is not none %}
-              {% set lr = state_attr(e, 'last_reset') %}
-              {% set t = as_datetime(lr) if lr else none %}
-              {% set ns.m = [ns.m, ((trigger.now - t).total_seconds() / 60) if t is not none else 1000000] | max %}
+              {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
+              {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
             {% endfor %}
             {{ ns.m | round(0) | int }}
           haus_zaehler_frisch: "{{ haus_lesbar and haus_zaehler_alter_min <= 40 }}"
           np_zaehler_alter_min: >
             {% set ns = namespace(m=0) %}
             {% for e in np_liste %}
-              {% set lr = state_attr(e, 'last_reset') %}
-              {% set t = as_datetime(lr) if lr else none %}
-              {% set ns.m = [ns.m, ((trigger.now - t).total_seconds() / 60) if t is not none else 1000000] | max %}
+              {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
+              {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
             {% endfor %}
             {{ ns.m | round(0) | int }}
           np_zaehler_frisch: "{{ np_kwh is not none and np_zaehler_alter_min <= 40 }}"
@@ -1425,6 +1423,9 @@ action:
       wetter_liste: "{{ var_wetter_prognose if (var_wetter_prognose is iterable and var_wetter_prognose is not string) else ([var_wetter_prognose] if var_wetter_prognose else []) }}"
       var_battery_power: !input battery_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
+      # Erzeugung und Hausverbrauch je Wechselrichter, wenn mehrere parallel am Akku haengen.
+      pv_erzeugung_liste: "{{ var_pv_erzeugung_heute if (var_pv_erzeugung_heute is iterable and var_pv_erzeugung_heute is not string) else ([var_pv_erzeugung_heute] if var_pv_erzeugung_heute else []) }}"
+      hausverbrauch_liste: "{{ var_hausverbrauch_kwh if (var_hausverbrauch_kwh is iterable and var_hausverbrauch_kwh is not string) else ([var_hausverbrauch_kwh] if var_hausverbrauch_kwh else []) }}"
       var_solcast_morgen: !input solcast_morgen_sensor
       var_solcast_tag3: !input solcast_tag3_sensor
       var_solcast_tag4: !input solcast_tag4_sensor
@@ -1535,9 +1536,9 @@ action:
              ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
              ('Netz-Leistung (W)', var_grid_export),
              ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
-             ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
+             ('PV-Erzeugung heute (kWh)', pv_erzeugung_liste | join(',')),
              ('Solcast: Prognose heute (mit Array)', solcast_heute_liste | join(',')),
-             ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
+             ('Hausverbrauch halbstündlich (kWh)', hausverbrauch_liste | join(',')),
              ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
              ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
              ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
@@ -1792,7 +1793,12 @@ action:
       haus_live_kwh: >
         {% set m = now().minute % 30 %}
         {% set idx = now().hour * 2 + (1 if now().minute >= 30 else 0) %}
-        {% set roh = states(var_hausverbrauch_kwh) | float(-1) if var_hausverbrauch_kwh != '' else -1 %}
+        {% set nsh = namespace(s=0.0, ok=hausverbrauch_liste | length > 0) %}
+        {% for e in hausverbrauch_liste %}
+          {% set v = states(e) | float(-1) %}
+          {% if v < 0 %}{% set nsh.ok = false %}{% else %}{% set nsh.s = nsh.s + v %}{% endif %}
+        {% endfor %}
+        {% set roh = nsh.s if nsh.ok else -1 %}
         {% set nswb = namespace(s=0.0) %}
         {% for e in wallbox_liste %}{% set nswb.s = nswb.s + (states(e) | float(0)) %}{% endfor %}
         {% set wb = nswb.s %}
@@ -1995,7 +2001,10 @@ action:
   - variables:
       trend_blend_bisher: "{{ trend_dict.blend_bisher | float(0) }}"
       trend_zeit_anteil: "{{ trend_dict.zeit_anteil | float(0) }}"
-      trend_real_bisher: "{{ states(var_pv_erzeugung_heute) | float(0) }}"
+      trend_real_bisher: >
+        {% set ns = namespace(s=0.0) %}
+        {% for e in pv_erzeugung_liste %}{% set ns.s = ns.s + (states(e) | float(0)) %}{% endfor %}
+        {{ ns.s }}
       trend_fenster_von: "{{ trend_dict.von | default('', true) }}"
       trend_fenster_bis: "{{ trend_dict.bis | default('', true) }}"
       tages_netto_pmax: "{{ trend_dict.tages_pmax | float(0) }}"
@@ -2976,6 +2985,11 @@ action:
             {% set fc.folge = fc.folge + [(name, e, {'estimate10': state_attr(e, 'estimate10'), 'detailedForecast': nsd.l})] %}
           {% endfor %}
         {% endfor %}
+        {# Messfelder mit einem Eintrag je Wechselrichter. #}
+        {% set nsm = namespace(l=[]) %}
+        {% for name, liste in [('pv_erzeugung_heute_sensor', pv_erzeugung_liste), ('hausverbrauch_utility_sensor', hausverbrauch_liste)] %}
+          {% for e in liste %}{% set nsm.l = nsm.l + [(name, e, {})] %}{% endfor %}
+        {% endfor %}
         {% set ents = [
              ('battery_soc_sensor', var_battery_soc, {}),
              ('schatten_soc_sensor', var_schatten_soc, {}),
@@ -2990,8 +3004,7 @@ action:
              ('wr_tou_6', var_wr_tou_6, {}),
              ('grid_export_sensor', var_grid_export, {}),
              ('grid_export_kwh_heute', var_grid_export_kwh, {}),
-             ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
-             ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
+           ] + nsm.l + [
              ('aussentemperatur_sensor', var_aussentemperatur, {}),
              ('temperatur_json_text', var_temperatur_json, {}),
              ('notstrom_utility_sensor', var_notstrom_kwh, {}),
