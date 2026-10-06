@@ -135,14 +135,6 @@ def szenario(
     vor_1h = jetzt - dt.timedelta(hours=1)
     profil = [profil_kwh] * 48 if isinstance(profil_kwh, (int, float)) else list(profil_kwh)
     forecast = forecast if forecast is not None else prognose_real(jetzt.date())
-    start = lambda s: s["period_start"] if isinstance(s["period_start"], dt.datetime) else dt.datetime.fromisoformat(s["period_start"])  # noqa: E731
-    aktueller_slot = next((s for s in forecast
-                           if start(s) <= jetzt < start(s) + dt.timedelta(minutes=30)), None)
-    pv_jetzt_w = (aktueller_slot["pv_estimate"] * 1000) if aktueller_slot else 0.0
-    naechste_h_kwh = sum(s["pv_estimate"] * 0.5 for s in forecast
-                         if jetzt <= start(s) < jetzt + dt.timedelta(hours=1))
-    rest_kwh = sum(s["pv_estimate"] * 0.5 for s in forecast
-                   if start(s) >= jetzt)
 
     def z(name: str, state, attributes: dict | None = None, last_changed: dt.datetime | None = None) -> Zustand:
         return Zustand(e(name), str(state), attributes or {}, last_changed or vor_1h)
@@ -161,13 +153,10 @@ def szenario(
         *[z(f"wr_tou_{i}", 20) for i in range(1, 7)],
         # Netz & PV
         z("grid_export_sensor", -500), z("grid_export_kwh_heute", 3.2),
-        z("pv_power_sensor", pv_jetzt_w), z("pv_erzeugung_heute_sensor", 0.0),
+        z("pv_erzeugung_heute_sensor", 0.0),
         # Solcast
         z("solcast_heute_sensor", round(sum(s["pv_estimate"] * 0.5 for s in forecast), 2),
           {"detailedForecast": forecast}),
-        z("solcast_rest_sensor", round(rest_kwh, 2)),
-        z("solcast_current_sensor", pv_jetzt_w),
-        z("solcast_next_hour_sensor", round(naechste_h_kwh, 3), {"estimate10": round(naechste_h_kwh * 0.7, 3)}),
         *[z(name, kwh, {"estimate10": round(kwh * prognose_tage_p10_anteil, 3)})
           for name, kwh in zip(("solcast_morgen_sensor", "solcast_tag3_sensor", "solcast_tag4_sensor"), prognose_tage_kwh or ())],
         # Hausverbrauch

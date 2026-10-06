@@ -10,6 +10,17 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V6.17.0] - 2026-10-06
+
+### Removed
+- The four required fields "PV-Leistung geglättet (W)", "Solcast: aktuelle Leistung (W)",
+  "Solcast: verbleibende Leistung heute (kWh)" and "Solcast: Prognose nächste Stunde (kWh)". No
+  decision read them; the charge planning takes every forecast value from the half-hour array of
+  "Solcast: Prognose heute". Their descriptions promised effects the code did not have, such as
+  calmer control with a smoothed value. Instances keep running; the leftover entries are ignored.
+- The helper template no longer ships the smoothed PV power sensor, which only fed the removed
+  field.
+
 ## [V6.16.1] - 2026-09-25
 
 ### Fixed
@@ -1012,7 +1023,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.17.0...HEAD
+[V6.17.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...V6.17.0
 [V6.16.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.0...V6.16.1
 [V6.16.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.1...V6.16.0
 [V6.15.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.15.0...V6.15.1

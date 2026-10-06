@@ -22,10 +22,6 @@
 #        Leistung am Load-UPS-Ausgang des Deye eintragen ("Load UPS Power", W).
 #        Optionale Bloecke bleiben sonst auskommentiert stehen: ein
 #        stehengebliebener Platzhalter verwirft die ganze Gruppe.
-#   5. sensor "PV Power Geglättet"
-#        -> die PV-Leistung des Wechselrichters in W (Deye "PV Power").
-#           Gleitender Mittelwert ueber 30 Minuten, Eingang des Blueprint-Felds
-#           "PV-Leistung geglättet (W)".
 #
 # Alles andere ist standortunabhaengig. Nach dem Einbinden ueber packages:
 # sind die Entitaeten den Blueprint-Inputs zuzuweisen; die Zuordnung steht
@@ -241,17 +237,6 @@ template:
           {% set limit = states('number.<HIER EINTRAGEN>') | float(maximum) %}  {# Stellgroesse max. Ladestrom #}
           {{ limit < maximum and is_state('sun.sun', 'above_horizon') }}
 sensor:
-  # PV-Leistung: gleitender Mittelwert der Rohleistung. Eingang des
-  # Blueprint-Felds "PV-Leistung geglättet (W)". Ohne Glaettung reagiert die
-  # Steuerung auf einzelne Wolken.
-  - platform: filter
-    name: "PV Power Geglättet"         # -> PV-Leistung geglättet (W)
-    unique_id: "optimizer_sensor_pv_power_geglaettet"
-    entity_id: sensor.<HIER EINTRAGEN>  # Deye "PV Power" (W)
-    filters:
-      - filter: time_simple_moving_average
-        window_size: "00:30:00"
-        precision: 0
   # Hausverbrauch: Riemann-Summe ueber die Gesamtlast (W -> kWh), Quelle des
   # Halbstundenzaehlers. Ueber einen Tag muss sie auf wenige Prozent zum
   # Deye-Zaehler "Today Load Consumption" passen, sonst ist die Quelle falsch.

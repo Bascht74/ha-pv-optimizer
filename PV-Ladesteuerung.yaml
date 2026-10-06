@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.16.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V6.17.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -161,7 +161,7 @@ blueprint:
     sec_net_pv:
       name: "3 – Netz & PV-Leistung (Pflicht)"
       description: >-
-        Messwerte für Netzbezug/-einspeisung und die aktuelle PV-Erzeugung.
+        Messwerte für Netzbezug/-einspeisung, die PV-Erzeugung des Tages und den Hausverbrauch.
         Leer bleiben dürfen: Notstromlast (nur für die Notstromreserve) sowie Außentemperatur und Wetter-Prognose (nur für die Aufzeichnung).
       collapsed: true
       input:
@@ -178,12 +178,6 @@ blueprint:
             beeinflusst die Steuerung nicht.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
-        pv_power_sensor:
-          name: "PV-Leistung geglättet (W)"
-          description: >-
-            Sensor mit der aktuellen PV-Erzeugung. Am besten einen geglätteten Wert nehmen (z. B. gleitender Mittelwert über 5 Minuten) — sonst reagiert die Steuerung zu nervös auf einzelne Wolken.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "power"}}
         pv_erzeugung_heute_sensor:
           name: "PV-Erzeugung heute (kWh)"
           description: >-
@@ -225,24 +219,6 @@ blueprint:
           name: "Solcast: Prognose heute (mit Array)"
           description: >-
             Der Solcast-Sensor für die Tagesprognose. Wichtig: Er muss das Attribut „detailedForecast“ (Halbstunden-Array) mitliefern — daraus baut der Blueprint seinen Vorabscan. Der reine kWh-Zahlenwert reicht nicht.
-          default: ""
-          selector: {"entity": {"domain": "sensor"}}
-        solcast_rest_sensor:
-          name: "Solcast: verbleibende Leistung heute (kWh)"
-          description: >-
-            Sensor mit der noch erwarteten PV-Energie für den Rest des Tages in kWh. Dient als Rückfallebene: Wenn das Halbstunden-Array des Hauptsensors einmal fehlt, rechnet der Blueprint mit diesem Wert weiter.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
-        solcast_current_sensor:
-          name: "Solcast: aktuelle Leistung (W)"
-          description: >-
-            Sensor mit der aktuell prognostizierten PV-Leistung in Watt. Der Blueprint vergleicht ihn mit der tatsächlichen Erzeugung, um zu erkennen, ob die Prognose gerade zuverlässig ist — bei großer Abweichung wird vorsichtiger geplant.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "power"}}
-        solcast_next_hour_sensor:
-          name: "Solcast: Prognose nächste Stunde (kWh)"
-          description: >-
-            Sensor mit der erwarteten PV-Energie der kommenden Stunde in kWh. Fließt in kurzfristige Entscheidungen ein, etwa ob sich das Warten auf mehr Sonne noch lohnt.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
         solcast_morgen_sensor:
@@ -877,7 +853,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V6.16.1]"
+      bp_version: "[V6.17.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1441,7 +1417,6 @@ action:
       var_wp_boost_button: !input wp_boost_button
       var_wp_kompressor: !input wp_kompressor_sensor
       var_solcast_heute: !input solcast_heute_sensor
-      var_solcast_rest_sensor: !input solcast_rest_sensor
       var_hausverbrauch_json: !input hausverbrauch_json_text
       var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
       var_wallbox_kwh: !input wallbox_kwh_sensor
@@ -1458,10 +1433,7 @@ action:
       ev_liste: "{{ var_ev_restbedarf if (var_ev_restbedarf is iterable and var_ev_restbedarf is not string) else ([var_ev_restbedarf] if var_ev_restbedarf else []) }}"
       wetter_liste: "{{ var_wetter_prognose if (var_wetter_prognose is iterable and var_wetter_prognose is not string) else ([var_wetter_prognose] if var_wetter_prognose else []) }}"
       var_battery_power: !input battery_power_sensor
-      var_pv_power: !input pv_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
-      var_pv_forecast: !input solcast_current_sensor
-      var_solcast_next_hour: !input solcast_next_hour_sensor
       var_solcast_morgen: !input solcast_morgen_sensor
       var_solcast_tag3: !input solcast_tag3_sensor
       var_solcast_tag4: !input solcast_tag4_sensor
@@ -1551,13 +1523,9 @@ action:
              ('Stellgröße: max. Ladestrom (A)', var_wr_max_charge),
              ('Netz-Leistung (W)', var_grid_export),
              ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
-             ('PV-Leistung geglättet (W)', var_pv_power),
              ('PV-Erzeugung heute (kWh)', var_pv_erzeugung_heute),
              ('Hausverbrauch halbstündlich (kWh)', var_hausverbrauch_kwh),
              ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
-             ('Solcast: verbleibende Leistung heute (kWh)', var_solcast_rest_sensor),
-             ('Solcast: aktuelle Leistung (W)', var_pv_forecast),
-             ('Solcast: Prognose nächste Stunde (kWh)', var_solcast_next_hour),
              ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
              ('Helfer: verschenkte Speicherkapazität (kWh)', var_speicherverlust),
              ('Helfer: offener Speicherverlust-Kandidat (kWh)', var_offener_verlust),
@@ -1668,7 +1636,6 @@ action:
       # Unbekanntes Register: Maximalstrom annehmen, damit kein Anheben ausgeloest wird.
       aktueller_ladestrom: "{{ states(var_wr_max_charge) | float(max_ampere) }}"
       batterie_leistung: "{{ states(var_battery_power) | float(0) }}"
-      pv_forecast: "{{ states(var_pv_forecast) | float(0) }}"
       vmax1: "{{ states(var_vmax1) | float(0) }}"
       vmax2: "{{ states(var_vmax2) | float(0) }}"
       vmax3: "{{ states(var_vmax3) | float(0) }}"
@@ -1871,30 +1838,6 @@ action:
           {% if pv_w - haus_w > ns.best %}{% set ns.best = pv_w - haus_w %}{% set ns.txt = 'PV-Prognose ' ~ (pv_w | round(0) | int) ~ ' W − Hausverbrauch ' ~ (haus_w | round(0) | int) ~ ' W um ' ~ t.strftime('%H:%M') ~ ' Uhr' %}{% endif %}
         {% endfor %}
         {{ ns.txt }}
-
-      # HINWEIS: Diese Variable wird derzeit nirgends gelesen (reine Diagnose).
-      # Sie traegt die Blend-Formel trotzdem mit, damit bei einer Aenderung der
-      # Gewichtung keine zweite Definition zurueckbleibt.
-      solcast_rest_blended: >
-        {% set ns = namespace(val=0) %}
-        {% if var_solcast_heute != '' and state_attr(var_solcast_heute, 'detailedForecast') is not none %}
-          {% for stunde in state_attr(var_solcast_heute, 'detailedForecast') %}
-            {% set s_start = as_datetime(stunde.period_start) | as_local %}
-            {% set current_period = now().replace(minute=0 if now().minute < 30 else 30, second=0, microsecond=0) %}
-
-            {% if s_start >= current_period and s_start.date() == now().date() %}
-              {# detailedForecast liefert kW (mittlere Leistung), nicht kWh -> * 0.5 h #}
-              {% set blend = (stunde.pv_estimate * (blend_p50_anteil | float(0.5)) + stunde.pv_estimate10 * (1 - (blend_p50_anteil | float(0.5)))) * 0.5 %}
-              {% set h_index = s_start.hour * 2 + (1 if s_start.minute >= 30 else 0) %}
-              {% set haus_kwh = json_profil_live[h_index] | float(0.2) %}
-              {% set netto = blend - haus_kwh %}
-              {% set ns.val = ns.val + netto %}
-            {% endif %}
-          {% endfor %}
-        {% else %}
-          {% set ns.val = states(var_solcast_rest_sensor) | float(0) %}
-        {% endif %}
-        {{ ns.val }}
 
       temp_min_live: >
         {% set vals = [] %}
@@ -2289,11 +2232,6 @@ action:
         {% endif %}
 
   - variables:
-      h_index_now: "{{ now().hour * 2 + (1 if now().minute >= 30 else 0) }}"
-      # Haus-Profil ist kWh/Halbstunde -> für Momentan-Watt * 2000
-      haus_aktuell_w: "{{ (json_profil_live[h_index_now] | float(0.2)) * 2000 }}"
-      prognose_surplus: "{{ [pv_forecast - haus_aktuell_w, 0] | max }}"
-
       # Ziel-Strom Prio 7: Slot-Simulation (kleinster Strom, der den Bedarf real
       # deckt), danach nur noch der manuelle Sicherheitsfaktor. Prognose-
       # Unsicherheit und Realitaets-Check stecken bereits in den Slots.
@@ -3043,7 +2981,6 @@ action:
              ('wr_tou_6', var_wr_tou_6, {}),
              ('grid_export_sensor', var_grid_export, {}),
              ('grid_export_kwh_heute', var_grid_export_kwh, {}),
-             ('pv_power_sensor', var_pv_power, {}),
              ('pv_erzeugung_heute_sensor', var_pv_erzeugung_heute, {}),
              ('hausverbrauch_utility_sensor', var_hausverbrauch_kwh, {}),
              ('aussentemperatur_sensor', var_aussentemperatur, {}),
@@ -3052,9 +2989,6 @@ action:
              ('notstrom_json_text', var_notstrom_json, {}),
              ('wr_shutdown_soc', var_wr_shutdown_soc, {}),
              ('solcast_heute_sensor', var_solcast_heute, {'detailedForecast': fc.liste}),
-             ('solcast_rest_sensor', var_solcast_rest_sensor, {}),
-             ('solcast_current_sensor', var_pv_forecast, {}),
-             ('solcast_next_hour_sensor', var_solcast_next_hour, {'estimate10': state_attr(var_solcast_next_hour, 'estimate10')}),
              ('solcast_morgen_sensor', var_solcast_morgen, {'estimate10': state_attr(var_solcast_morgen, 'estimate10'), 'detailedForecast': fc.morgen}),
              ('solcast_tag3_sensor', var_solcast_tag3, {'estimate10': state_attr(var_solcast_tag3, 'estimate10'), 'detailedForecast': fc.tag3}),
              ('solcast_tag4_sensor', var_solcast_tag4, {'estimate10': state_attr(var_solcast_tag4, 'estimate10'), 'detailedForecast': fc.tag4}),
