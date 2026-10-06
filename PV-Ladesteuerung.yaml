@@ -12,8 +12,7 @@ blueprint:
       name: "1 – Batterie & BMS (Pflicht)"
       description: >-
         Die Kern-Sensoren der Batterie. Ohne diese Angaben kann der Blueprint nicht arbeiten.
-        Pflicht ist ein Pack; Pack 2 und Pack 3 werden nur zugewiesen, wenn es sie gibt — dann
-        aber vollständig, mit beiden Zelltemperaturen (Abschnitt 8). Das Schatten-BMS ist optional.
+        Das Schatten-BMS ist optional.
       collapsed: true
       input:
         battery_soc_sensor:
@@ -40,12 +39,12 @@ blueprint:
             Sensor mit dem aufsummierten Gesamt-Ladezähler in kWh (nur steigend, wird nie zurückgesetzt). Daran erkennt der Blueprint, ob die Verbindung zum Wechselrichter steht: Meldet der Zähler „nicht verfügbar“, bricht er den Lauf ab, statt mit Ersatzwerten zu regeln. Nicht leer lassen.
           default: ""
           selector: {"entity": {"domain": "sensor", "device_class": "energy"}}
-        pack_capacity_ah:
-          name: "Kapazität EINES Packs (Ah)"
+        batterie_kapazitaet_ah:
+          name: "Batteriekapazität gesamt (Ah)"
           description: >-
-            Nennkapazität eines einzelnen Batterie-Packs in Amperestunden (z. B. 314 Ah). Daraus berechnet der Blueprint zusammen mit der C-Rate den maximal erlaubten Ladestrom. Wichtig: nicht die Summe aller Packs eintragen!
-          default: 314
-          selector: {"number": {"min": 50, "max": 500, "step": 1, "unit_of_measurement": "Ah"}}
+            Gesamtkapazität ALLER Batterie-Packs am Wechselrichter zusammengezählt, nicht die eines einzelnen Packs. Beispiel: zwei Packs zu je 314 Ah → 628 Ah eintragen. Die Vorgabe 0 heißt „nicht eingetragen“: Dann bricht der Blueprint den Start ab und nennt das Feld im Logbuch.
+          default: 0
+          selector: {"number": {"min": 0, "max": 5000, "step": 1, "mode": "box", "unit_of_measurement": "Ah"}}
         nominale_spannung:
           name: "Nominale Batteriespannung (V)"
           description: >-
@@ -125,13 +124,6 @@ blueprint:
             Der Wechselrichter regelt systematisch etwas unter dem gesetzten Sollwert ein (typisch 2 A). Der Blueprint schlägt diesen Wert auf, damit real ankommt, was berechnet wurde. Ermitteln: Ladestrom mit dem Sollwert vergleichen, während die Batterie am Limit lädt.
           default: 2.0
           selector: {"number": {"min": 0, "max": 10, "step": 0.1, "unit_of_measurement": "A"}}
-        notfall_ampere:
-          name: "Max. Ladestrom bei BMS-Ausfall (A) — Obergrenze"
-          description: >-
-            Obergrenze für den Ladestrom, solange alle BMS-Packs offline sind — kein Sollwert, die normale Regelung arbeitet darunter weiter. Bewusst
-            niedrig wählen: Ohne BMS lassen sich die Zelltemperaturen nicht überwachen.
-          default: 10
-          selector: {"number": {"min": 2, "max": 50, "step": 1, "unit_of_measurement": "A"}}
     sec_net_pv:
       name: "3 – Netz, PV & Verbrauch (Pflicht)"
       description: >-
@@ -442,98 +434,8 @@ blueprint:
             Zeitdauer (hh:mm:ss), für die die reguläre Ladekaskade nach einem WP-Boost zurückgestellt bleibt. Erst danach übernimmt wieder die normale Ladelogik. Länger = die Wärmepumpe bekommt mehr Zeit, den Speicher durchzuheizen.
           default: "01:00:00"
           selector: {"time": {}}
-    sec_temperature:
-      name: "8 – Temperatur-Limits & C-Raten (Feintuning)"
-      description: >-
-        Lithium-Zellen dürfen bei Kälte nur langsam (oder gar nicht) geladen werden. Der Blueprint begrenzt den Ladestrom deshalb temperaturabhängig. Die Voreinstellungen sind konservativ und passen für die meisten LiFePO4-Systeme. Pro Pack gehören beide Temperatur-Sensoren zusammen.
-      collapsed: true
-      input:
-        bms1_temp_min_sensor:
-          name: "BMS 1: niedrigste Zelltemperatur"
-          description: >-
-            Sensor mit der kältesten Zelle von Pack 1. Der Blueprint rechnet immer mit dem kältesten Wert aller Packs — die schwächste Zelle bestimmt das Limit.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
-        bms2_temp_min_sensor:
-          name: "BMS 2: niedrigste Zelltemperatur — optional"
-          description: >-
-            Sensor mit der kältesten Zelle von Pack 2. Nur ausfüllen, wenn du ein zweites Pack hast; sonst leer lassen — der Blueprint rechnet dann nur mit Pack 1.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
-        bms3_temp_min_sensor:
-          name: "BMS 3: niedrigste Zelltemperatur — optional"
-          description: >-
-            Sensor mit der kältesten Zelle von Pack 3. Nur ausfüllen, wenn du drei Packs hast.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
-        bms1_temp_max_sensor:
-          name: "BMS 1: höchste Zelltemperatur"
-          description: >-
-            Sensor mit der wärmsten Zelle von Pack 1. Begrenzt die Ladung bei Hitze.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
-        bms2_temp_max_sensor:
-          name: "BMS 2: höchste Zelltemperatur — optional"
-          description: >-
-            Sensor mit der wärmsten Zelle von Pack 2. Nur ausfüllen, wenn du ein zweites Pack hast.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
-        bms3_temp_max_sensor:
-          name: "BMS 3: höchste Zelltemperatur — optional"
-          description: >-
-            Sensor mit der wärmsten Zelle von Pack 3. Nur ausfüllen, wenn du drei Packs hast.
-          default: ""
-          selector: {"entity": {"domain": "sensor", "device_class": "temperature"}}
-        crate_2_deg:
-          name: "C-Rate bei 2 °C und darunter"
-          description: >-
-            Ladefaktor bei Frost. Standard 0,00 = gar nicht laden. Laden unter dem Gefrierpunkt schädigt LiFePO4-Zellen dauerhaft (Lithium-Plating) — diesen Wert nur ändern, wenn deine Zellen ausdrücklich dafür freigegeben sind.
-          default: 0.0
-          selector: {"number": {"min": 0.0, "max": 0.1, "step": 0.01, "mode": "slider"}}
-        crate_5_deg:
-          name: "C-Rate bei 5 °C"
-          description: >-
-            Ladefaktor bei knapp über null. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Strom. Beispiel: 0,05 × 314 Ah × 2 Packs = 31 A.
-          default: 0.05
-          selector: {"number": {"min": 0.0, "max": 0.2, "step": 0.01, "mode": "slider"}}
-        crate_10_deg:
-          name: "C-Rate bei 10 °C"
-          description: >-
-            Ladefaktor bei 10 °C. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Ladestrom. Bei kühlen Temperaturen sollte er deutlich unter dem Wert für 20 °C liegen.
-          default: 0.2
-          selector: {"number": {"min": 0.0, "max": 0.5, "step": 0.01, "mode": "slider"}}
-        crate_12_deg:
-          name: "C-Rate bei 12 °C"
-          description: >-
-            Ladefaktor bei 12 °C. Zwischenwert für die Kennlinie zwischen 10 °C und 15 °C — der Blueprint interpoliert zwischen den Stützstellen. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Ladestrom.
-          default: 0.3
-          selector: {"number": {"min": 0.0, "max": 0.8, "step": 0.01, "mode": "slider"}}
-        crate_15_deg:
-          name: "C-Rate bei 15 °C"
-          description: >-
-            Ladefaktor bei 15 °C. Zwischenwert für die Kennlinie zwischen 12 °C und 20 °C. Rechenweg: C-Rate × Pack-Kapazität × Anzahl Packs = erlaubter Ladestrom.
-          default: 0.5
-          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.01, "mode": "slider"}}
-        crate_20_deg:
-          name: "C-Rate bei 20 °C"
-          description: >-
-            Ladefaktor bei 20 °C — dem Wohlfühlbereich der Zellen. Hier ist die volle Rate möglich (Standard 0,70 = 70 % der Kapazität als Ladestrom). Rechenbeispiel: 0,70 × 314 Ah × 2 Packs = 440 A, wird aber durch „Maximaler Ladestrom“ (Abschnitt 1) gedeckelt.
-          default: 0.7
-          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.01, "mode": "slider"}}
-        crate_40_deg:
-          name: "C-Rate bei 40 °C"
-          description: >-
-            Ladefaktor bei 40 °C. Wärme ist für LiFePO4 weniger kritisch als Kälte — meist kann hier noch die volle Rate gefahren werden.
-          default: 0.7
-          selector: {"number": {"min": 0.0, "max": 1.0, "step": 0.01, "mode": "slider"}}
-        crate_45_deg:
-          name: "C-Rate bei 45 °C und darüber"
-          description: >-
-            Ladefaktor bei 45 °C und darüber. Standard 0,00 = Ladung komplett stoppen. Die meisten BMS riegeln bei dieser Temperatur ohnehin selbst ab; dieser Wert sorgt dafür, dass der Blueprint gar nicht erst dagegen anregelt.
-          default: 0.0
-          selector: {"number": {"min": 0.0, "max": 0.5, "step": 0.01, "mode": "slider"}}
     sec_tuning:
-      name: "9 – Lade-Strategie & Zeitsteuerung (Feintuning)"
+      name: "8 – Lade-Strategie & Zeitsteuerung (Feintuning)"
       description: >-
         Hier stellst du ein, wie vorausschauend der Blueprint plant. Die Voreinstellungen sind ein guter Startpunkt — meist muss hier nichts angepasst werden.
       collapsed: true
@@ -621,7 +523,7 @@ blueprint:
           default: 48
           selector: {"number": {"min": 12, "max": 72, "step": 1, "unit_of_measurement": "h"}}
     sec_wallbox:
-      name: "10 – Wallbox / evcc (Optional)"
+      name: "9 – Wallbox / evcc (Optional)"
       description: >-
         Nur mit Wallbox. Die Ladung der Autos wird aus dem Hausverbrauch herausgerechnet, ihr offener Ladebedarf vom PV-Überschuss abgezogen, den der Blueprint für die Batterie einplant — die Autos laden zuerst.
       collapsed: true
@@ -1331,11 +1233,8 @@ action:
           hb_tou_4: !input wr_tou_4
           hb_tou_5: !input wr_tou_5
           hb_tou_6: !input wr_tou_6
-          hb_pack_ah: !input pack_capacity_ah
+          hb_kapazitaet_ah: !input batterie_kapazitaet_ah
           hb_spannung: !input nominale_spannung
-          hb_bms1: !input bms1_temp_min_sensor
-          hb_bms2: !input bms2_temp_min_sensor
-          hb_bms3: !input bms3_temp_min_sensor
           hb_tou_ist: >
             {{ [states(hb_tou_1) | float(20), states(hb_tou_2) | float(20), states(hb_tou_3) | float(20),
                 states(hb_tou_4) | float(20), states(hb_tou_5) | float(20), states(hb_tou_6) | float(20)] | min }}
@@ -1363,8 +1262,7 @@ action:
                and hb_tou_ist - hb_min_register >= 5
                and hb_soc_roh <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
-          hb_packs: "{{ [(1 if hb_bms1 != '' else 0) + (1 if hb_bms2 != '' else 0) + (1 if hb_bms3 != '' else 0), 1] | max }}"
-          hb_zurueck_kwh: "{{ [(hb_tou_ist - hb_min_register) / 100 * (hb_pack_ah | float(314)) * (hb_spannung | float(51.2)) * hb_packs / 1000, 0] | max }}"
+          hb_zurueck_kwh: "{{ [(hb_tou_ist - hb_min_register) / 100 * (hb_kapazitaet_ah | float(0)) * (hb_spannung | float(51.2)) / 1000, 0] | max }}"
       # AUFZEICHNUNG DES SLOTS: Der Halbstunden-Verbrauch ist nur hier lesbar,
       # der Halbstundenlauf sieht den Zaehler schon genullt. Mit dieser Zeile
       # laesst sich die Bezugssumme im Halten ohne den Helfer nachrechnen.
@@ -1466,13 +1364,6 @@ action:
           {{ nl.l }}
         {% else %}{{ none }}{% endif %}
 
-      var_bms1_temp_min: !input bms1_temp_min_sensor
-      var_bms2_temp_min: !input bms2_temp_min_sensor
-      var_bms3_temp_min: !input bms3_temp_min_sensor
-      var_bms1_temp_max: !input bms1_temp_max_sensor
-      var_bms2_temp_max: !input bms2_temp_max_sensor
-      var_bms3_temp_max: !input bms3_temp_max_sensor
-
       var_wr_tou_1: !input wr_tou_1
       var_wr_tou_2: !input wr_tou_2
       var_wr_tou_3: !input wr_tou_3
@@ -1489,15 +1380,7 @@ action:
       var_schwelle_peak_shaving: !input schwelle_peak_shaving
       var_schwelle_wp_boost: !input schwelle_wp_boost
 
-      pack_capacity_ah: !input pack_capacity_ah
-      crate_2_deg: !input crate_2_deg
-      crate_5_deg: !input crate_5_deg
-      crate_10_deg: !input crate_10_deg
-      crate_12_deg: !input crate_12_deg
-      crate_15_deg: !input crate_15_deg
-      crate_20_deg: !input crate_20_deg
-      crate_40_deg: !input crate_40_deg
-      crate_45_deg: !input crate_45_deg
+      batterie_kapazitaet_ah: !input batterie_kapazitaet_ah
 
       var_ladevorlauf: !input ladevorlauf_stunden
       faktor_fallback: !input faktor_fallback
@@ -1507,7 +1390,6 @@ action:
       null_ampere: 0
       min_ampere: !input min_ampere
       regler_offset_a: !input regler_offset_a
-      notfall_ampere: !input notfall_ampere
       peak_ampere: !input peak_ampere
       nominale_spannung: !input nominale_spannung
       default_tou_soc: !input default_tou_soc
@@ -1531,9 +1413,8 @@ action:
   # PFLICHTFELD-PRUEFUNG - direkt hinter den Input-Variablen, vor jedem Zweig,
   # der Messwerte verrechnet. Verlangt sind Entitaets-Felder ohne Leer-Behandlung
   # im Code - states('') wird 'unknown' und per float()-Default still zu einem
-  # Ersatzwert - und die Temperaturen von Pack 1, deren Leer-Behandlung die Anlage
-  # dauerhaft in den Notlauf schickt. Felder mit tragfaehigem Fallback bleiben
-  # aussen vor; 'unavailable' ist ein Anbindungsausfall (Deye-Retry davor).
+  # Ersatzwert - und die Anzahl der Packs. Felder mit tragfaehigem Fallback
+  # bleiben aussen vor; 'unavailable' ist ein Anbindungsausfall (Deye-Retry davor).
   # ====================================================================
   - variables:
       pflichtfelder_fehlend: >
@@ -1557,8 +1438,6 @@ action:
              ('Timer: Peak-Shaving Hold', var_timer_peak),
              ('Timer: Anlaufphase Großverbraucher', var_timer_wp_anlauf),
              ('Timer: WP-Laufzeit', var_timer_wp_boost),
-             ('BMS 1: niedrigste Zelltemperatur', var_bms1_temp_min),
-             ('BMS 1: höchste Zelltemperatur', var_bms1_temp_max),
              ('ToU-Programm 1: Min-SOC (%)', var_wr_tou_1),
              ('ToU-Programm 2: Min-SOC (%)', var_wr_tou_2),
              ('ToU-Programm 3: Min-SOC (%)', var_wr_tou_3),
@@ -1567,21 +1446,11 @@ action:
              ('ToU-Programm 6: Min-SOC (%)', var_wr_tou_6),
              ('Helfer: Logbuch-Anker', var_logbook_dummy)
            ] %}
-        {# Ein weiteres Pack wird ganz oder gar nicht zugewiesen. Halb belegt liefert es
-           stille Falschwerte: ohne höchste Zelltemperatur rechnet der Blueprint mit 99 °C
-           und drosselt auf 0 A, ohne niedrigste zählt das Pack nicht zur Kapazität. #}
-        {% set np = namespace(liste=pflicht) %}
-        {% for nr, t_min, t_max in [
-             ('2', var_bms2_temp_min, var_bms2_temp_max),
-             ('3', var_bms3_temp_min, var_bms3_temp_max)] %}
-          {% if t_min != '' or t_max != '' %}
-            {% set zusatz = ' (Pack ' ~ nr ~ ' nur teilweise zugewiesen)' %}
-            {% set np.liste = np.liste + [
-                 ('BMS ' ~ nr ~ ': niedrigste Zelltemperatur' ~ zusatz, t_min),
-                 ('BMS ' ~ nr ~ ': höchste Zelltemperatur' ~ zusatz, t_max)] %}
-          {% endif %}
-        {% endfor %}
-        {% set pflicht = np.liste %}
+        {# Die Vorgabe 0 heisst "nicht eingetragen": Mit einer zu kleinen Kapazitaet
+           rechnet das Energiemodell still mit einem Bruchteil der Batterie. #}
+        {% if (batterie_kapazitaet_ah | float(0)) <= 0 %}
+          {% set pflicht = pflicht + [('Batteriekapazität gesamt (Ah)', '')] %}
+        {% endif %}
         {# Die Wärmepumpen-Felder sind nur Pflicht, wenn der Boost eingeschaltet ist. #}
         {% if var_wp_boost_aktiv %}
           {% set pflicht = pflicht + [
@@ -1666,15 +1535,7 @@ action:
         {% set p = (var_dauer_wp_laufzeit | string).split(':') %}
         {{ ((p[0] | int(0)) + (p[1] | int(0)) / 60) if p | length >= 2 else 2.0 }}
 
-      pack_capacity_ah: "{{ pack_capacity_ah | float(314) }}"
-      crate_2_deg: "{{ crate_2_deg | float(0.00) }}"
-      crate_5_deg: "{{ crate_5_deg | float(0.05) }}"
-      crate_10_deg: "{{ crate_10_deg | float(0.20) }}"
-      crate_12_deg: "{{ crate_12_deg | float(0.30) }}"
-      crate_15_deg: "{{ crate_15_deg | float(0.50) }}"
-      crate_20_deg: "{{ crate_20_deg | float(0.70) }}"
-      crate_40_deg: "{{ crate_40_deg | float(0.70) }}"
-      crate_45_deg: "{{ crate_45_deg | float(0.00) }}"
+      batterie_kapazitaet_ah: "{{ batterie_kapazitaet_ah | float(0) }}"
 
       puffer_kwh: "{{ puffer_kwh | float(1.0) }}"
       # Dauer-Felder kommen als "HH:MM:SS" aus dem time-Selector; gerechnet
@@ -1724,44 +1585,12 @@ action:
       vor_blockade_ende: >
         {% set t = today_at(var_zeit_blockade | string) %}
         {{ now() < t }}
-      pack1_online: "{{ var_bms1_temp_min != '' and states(var_bms1_temp_min) | float(-999) != -999 }}"
-      pack2_online: "{{ var_bms2_temp_min != '' and states(var_bms2_temp_min) | float(-999) != -999 }}"
-      pack3_online: "{{ var_bms3_temp_min != '' and states(var_bms3_temp_min) | float(-999) != -999 }}"
-      packs_online: "{{ (1 if pack1_online else 0) + (1 if pack2_online else 0) + (1 if pack3_online else 0) }}"
-
-      # ENTPRELLUNG DES BMS-OFFLINE-NOTLAUFS
-      #
-      # Beim Flashen/Reboot des ESP gehen die BMS-Sensoren kurz auf 'unavailable' -
-      # ohne Entprellung loeste das sofort Notlauf-Strom und Warnung aus.
-      # packs_offline_bestaetigt ist nur true, wenn alle vorhandenen BMS-Temp-
-      # Sensoren laenger als offline_debounce_s weg sind (gemessen ueber
-      # last_changed, das HA beim Wechsel auf 'unavailable' neu setzt).
-      #
-      # Trade-off: Waehrend der Entprellzeit wird ohne Temperaturschutz geladen -
-      # unkritisch, da die Ladeleistung hier nie temperaturlimitierend wird.
+      # Ein Aussetzer des Ladestands von Sekunden soll den Strom nicht fuer einen
+      # Lauf aufreissen; die Sperren greifen sofort. Gemessen ueber last_changed,
+      # das HA beim Wechsel auf 'unavailable' neu setzt. Springt der Sensor
+      # schneller zwischen ungueltigen Werten, laeuft die Wartezeit jedes Mal neu,
+      # und der Strom bleibt so lange stehen.
       offline_debounce_s: 300
-      # Hilfsausdruck: ist ein einzelner Sensor laenger als die Schwelle weg?
-      # (leerer Input -> zaehlt NICHT als offline, wird uebersprungen)
-      pack1_lange_offline: >
-        {{ var_bms1_temp_min == '' or
-           (states(var_bms1_temp_min) in ['unavailable','unknown']
-            and (as_timestamp(now()) - as_timestamp(states[var_bms1_temp_min].last_changed | default(now()))) > offline_debounce_s) }}
-      pack2_lange_offline: >
-        {{ var_bms2_temp_min == '' or
-           (states(var_bms2_temp_min) in ['unavailable','unknown']
-            and (as_timestamp(now()) - as_timestamp(states[var_bms2_temp_min].last_changed | default(now()))) > offline_debounce_s) }}
-      pack3_lange_offline: >
-        {{ var_bms3_temp_min == '' or
-           (states(var_bms3_temp_min) in ['unavailable','unknown']
-            and (as_timestamp(now()) - as_timestamp(states[var_bms3_temp_min].last_changed | default(now()))) > offline_debounce_s) }}
-      # Bestaetigt offline nur, wenn KEIN Pack online ist UND alle vorhandenen
-      # Packs die Zeitschwelle ueberschritten haben.
-      packs_offline_bestaetigt: >
-        {{ packs_online == 0 and pack1_lange_offline and pack2_lange_offline and pack3_lange_offline }}
-      # Gleiche Wartezeit fuer den Ladestand: Ein Aussetzer von Sekunden soll den
-      # Strom nicht fuer einen Lauf aufreissen. Die Sperren greifen sofort.
-      # Springt der Sensor schneller zwischen ungueltigen Werten, laeuft die
-      # Wartezeit jedes Mal neu, und der Strom bleibt so lange stehen.
       soc_fehlt_bestaetigt: >
         {{ soc_fehlt and (states[var_battery_soc] is none
            or (as_timestamp(now()) - as_timestamp(states[var_battery_soc].last_changed)) > offline_debounce_s) }}
@@ -1770,14 +1599,7 @@ action:
         {%- if st is none %}der Sensor für den Ladestand (SOC) nicht existiert
         {%- else %}der Ladestand (SOC) des Wechselrichters seit {{ ((as_timestamp(now()) - as_timestamp(st.last_changed)) / 60) | round(0) | int }} Minuten fehlt (Wartezeit {{ (offline_debounce_s / 60) | round(0) | int }} Minuten, Sensor meldet {{ st.state }}){% endif %}
 
-      # Kapazitaet ist eine physische Groesse: ein Pack, dessen BMS gerade nicht
-      # meldet, ist nicht ausgebaut. packs_online ist ungefiltert - ein Aussetzer
-      # von Sekunden halbierte sonst das Energiemodell fuer diesen Lauf, und die
-      # Hysterese von Prio 6 hielt den daraus gesetzten Strom danach fest.
-      packs_konfiguriert: "{{ (1 if var_bms1_temp_min != '' else 0) + (1 if var_bms2_temp_min != '' else 0) + (1 if var_bms3_temp_min != '' else 0) }}"
-      batterie_kapazitaet: >
-        {% set p_count = packs_konfiguriert if packs_konfiguriert > 0 else 1 %}
-        {{ (pack_capacity_ah * nominale_spannung * p_count) / 1000 }}
+      batterie_kapazitaet: "{{ batterie_kapazitaet_ah * nominale_spannung / 1000 }}"
 
       # Haus-Profil ist in kWh/Halbstunde. Fallback (nur bis der erste update_json-Lauf
       # den Helfer gefüllt hat): neutrale 0.2 kWh/Halbstunde (~400 W).
@@ -1859,62 +1681,7 @@ action:
         {% endfor %}
         {{ ns.txt }}
 
-      temp_min_live: >
-        {% set vals = [] %}
-        {% if pack1_online %}{% set vals = vals + [states(var_bms1_temp_min) | float(-99)] %}{% endif %}
-        {% if pack2_online %}{% set vals = vals + [states(var_bms2_temp_min) | float(-99)] %}{% endif %}
-        {% if pack3_online %}{% set vals = vals + [states(var_bms3_temp_min) | float(-99)] %}{% endif %}
-        {{ vals | min if vals | length > 0 else -99 }}
-
-
-      temp_max_live: >
-        {% set vals = [] %}
-        {% if pack1_online %}{% set vals = vals + [states(var_bms1_temp_max) | float(99)] %}{% endif %}
-        {% if pack2_online %}{% set vals = vals + [states(var_bms2_temp_max) | float(99)] %}{% endif %}
-        {% if pack3_online %}{% set vals = vals + [states(var_bms3_temp_max) | float(99)] %}{% endif %}
-        {{ vals | max if vals | length > 0 else 99 }}
-
   - variables:
-      # Auf halbe Grad zur sicheren Seite gerundet: Sonst folgt der Deckel jedem
-      # Messsprung des Fuehlers und schreibt das Register viele Male am Tag.
-      temp_min_stufe: "{{ ((temp_min_live | float(-99)) * 2) | round(0, 'floor') / 2 }}"
-      temp_max_stufe: "{{ ((temp_max_live | float(99)) * 2) | round(0, 'ceil') / 2 }}"
-      limit_cold: >
-        {% set t = temp_min_stufe %}
-        {% if t <= 2 %} {{ crate_2_deg }}
-        {% elif t < 5 %} {{ crate_2_deg + ((t - 2) * (crate_5_deg - crate_2_deg) / (5 - 2)) }}
-        {% elif t < 10 %} {{ crate_5_deg + ((t - 5) * (crate_10_deg - crate_5_deg) / (10 - 5)) }}
-        {% elif t < 12 %} {{ crate_10_deg + ((t - 10) * (crate_12_deg - crate_10_deg) / (12 - 10)) }}
-        {% elif t < 15 %} {{ crate_12_deg + ((t - 12) * (crate_15_deg - crate_12_deg) / (15 - 12)) }}
-        {% elif t < 20 %} {{ crate_15_deg + ((t - 15) * (crate_20_deg - crate_15_deg) / (20 - 15)) }}
-        {% else %} {{ crate_20_deg }}
-        {% endif %}
-
-      limit_hot: >
-        {% set t = temp_max_stufe %}
-        {% if t >= 45 %} {{ crate_45_deg }}
-        {% elif t > 40 %} {{ crate_40_deg + ((t - 40) * (crate_45_deg - crate_40_deg) / (45 - 40)) }}
-        {% else %} {{ crate_40_deg }}
-        {% endif %}
-
-      temp_limit_crate: "{{ [limit_cold | float, limit_hot | float] | min }}"
-
-      temp_limit_ampere_raw: >
-        {% if packs_offline_bestaetigt %}
-          {{ notfall_ampere }}
-        {% elif packs_online == 0 %}
-          {# Kurzer Reboot (noch nicht als offline bestaetigt): NICHT auf 0A #}
-          {# rechnen (packs_online==0 wuerde die Multiplikation zu 0 machen). #}
-          {# Es wird mit dem sanften Notlauf-Strom weitergeladen - Laden #}
-          {# laeuft also durch, aber gebremst, nicht mit voller Leistung. #}
-          {# Damit identisch zum bisherigen Verhalten bei packs_online==0; #}
-          {# nur die WARNUNG ist ueber packs_offline_bestaetigt entprellt. #}
-          {{ notfall_ampere }}
-        {% else %}
-          {{ (temp_limit_crate * pack_capacity_ah * packs_online) | round(0) }}
-        {% endif %}
-
-      temperatur_limit_ampere: "{{ [temp_limit_ampere_raw, max_ampere] | min }}"
       # Unter 0,0001 kWh zaehlt 0: Ein Schatten-Ladestand knapp unter 100 % ergaebe
       # sonst einen Exponent-Text, an dem benoetigt_kwh abbricht. Nicht gerundet,
       # weil die Ampere-Rechnung aufrundet und schon die letzte Stelle den Sollwert
@@ -2274,7 +2041,7 @@ action:
         {{ (amp_basis_13 | float(0)) + (regler_offset_a | float(2.0)) }}
       # Gedeckelt durch min/max. Immer AUFrunden: Der Wechselrichter regelt
       # ohnehin unter dem Sollwert ein, Abrunden vergroesserte die Abweichung.
-      ziel_p5_raw: "{{ [[amp_roh_13 | round(0, 'ceil'), min_ampere] | max, max_ampere] | min }}"
+      target_p5: "{{ [[amp_roh_13 | round(0, 'ceil'), min_ampere] | max, max_ampere] | min }}"
       # Brutto-PV-Ueberschuss Resttag = Summe der Slots mit PV-Ueberschuss (nur
       # positive Netto-Slots aus slot_daten). Gegenstueck zum Nachladebedarf,
       # der bei benoetigt_kwh auf der Batterieseite steht (BRUTTO-Rechnung,
@@ -2357,8 +2124,6 @@ action:
         {{ ('Realitäts-Check kürzt die Prognose auf ' ~ ((pv_abschlag | float(1.0)) * 100) | round(0) | int ~ ' % (bis jetzt '
             ~ trend_real_bisher | round(1) ~ ' kWh erzeugt gegenüber ' ~ trend_blend_bisher | round(1) ~ ' kWh erwartet).')
            if (trend_aktiv and (pv_abschlag | float(1.0)) < 1.0) else '' }}
-      temp_log_addon: "{{ ('(Sicherheits-Begrenzung auf ' ~ (temperatur_limit_ampere | round(0)) ~ ' A: Batterietemperatur nicht verfügbar, BMS offline)' if (temp_min_live | float(-99) <= -99 or temp_max_live | float(99) >= 99) else '(Begrenzung durch Batterietemperatur: max. ' ~ (temperatur_limit_ampere | round(0)) ~ ' A bei Zelltemperatur min ' ~ (temp_min_live | round(1)) ~ ' °C / max ' ~ (temp_max_live | round(1)) ~ ' °C' ~ ((', gerechnet mit ' ~ (temp_min_stufe if (limit_cold | float) <= (limit_hot | float) else temp_max_stufe) ~ ' °C') if (temp_min_stufe if (limit_cold | float) <= (limit_hot | float) else temp_max_stufe) != ((temp_min_live if (limit_cold | float) <= (limit_hot | float) else temp_max_live) | float) else '') ~ ', zulässige Laderate ' ~ (temp_limit_crate | round(2)) ~ ' C)') if temperatur_limit_ampere < max_ampere else '' }}"
-      target_p0: "{{ [max_ampere, temperatur_limit_ampere] | min }}"
       # PEAK-SHAVING-TREPPE
       #
       # Bei jeder Ueberschreitung der Schwelle wird der Ladestrom um eine feste
@@ -2379,15 +2144,13 @@ action:
       # Peak-Shaving hebt den Ladestrom stufenweise an, darf dabei aber nie unter
       # dem liegen, was Prio 6 ohnehin laden wuerde: Beide wollen Ueberschuss in
       # die Batterie bringen, und der hoehere Wert erfuellt beide Zwecke. Ohne
-      # ziel_p5_raw haette Peak-Shaving (Prio 4) einen bereits hoeher geplanten
+      # target_p5 haette Peak-Shaving (Prio 4) einen bereits hoeher geplanten
       # Ladestrom auf seine Stufe heruntergezogen, weil es in der Kaskade vorn steht.
       target_p3: >
         {{ [ [ (aktueller_ladestrom | float(0)) + peak_ampere,
                peak_ampere + (regler_offset_a | float(2.0)),
-               ziel_p5_raw | float(0) ] | max,
-             max_ampere, temperatur_limit_ampere ] | min | round(0, 'ceil') }}
-      # Prio 6 Zielstrom, zusätzlich durch Temperatur gedeckelt
-      target_p5: "{{ [ziel_p5_raw, temperatur_limit_ampere] | min }}"
+               target_p5 | float(0) ] | max,
+             max_ampere ] | min | round(0, 'ceil') }}
 
   - variables:
       heute_schon_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
@@ -2636,8 +2399,7 @@ action:
       # zusammen.
       #
       # 2h-Mindestdauer nur als START-Schwelle; danach haelt die Blockade bis zum
-      # dynamischen Ausstieg durch. Bei komplett offline BMS wird nicht auf 0 A
-      # blockiert, sondern mit dem Notlauf-Strom weitergeladen.
+      # dynamischen Ausstieg durch.
       # Kein Kalender: spitze_erwartet beantwortet standort- und taggenau, ob es
       # etwas zu kappen gibt, und blockade_dyn_t traegt ueber den Realitaets-
       # Check die tatsaechliche Erzeugung nach - bei verschneiten Modulen bleibt
@@ -2645,7 +2407,6 @@ action:
       blockade_aktiv: >
         {{ is_day and not soc_fehlt and aktueller_soc < 99 and vor_blockade_ende
            and spitze_erwartet
-           and not packs_offline_bestaetigt
            and states(var_timer_peak) != 'active'
            and (trigger.id != 'export_peak_schwelle'
                 or wp_sperre_aktiv or wp_boost_startet_gleich)
@@ -3041,12 +2802,6 @@ action:
              ('wp_ziel_temp_number', var_wp_ziel_number, {}),
              ('wp_boost_button', var_wp_boost_button, {}),
              ('wp_kompressor_sensor', var_wp_kompressor, {}),
-             ('bms1_temp_min_sensor', var_bms1_temp_min, {}),
-             ('bms2_temp_min_sensor', var_bms2_temp_min, {}),
-             ('bms3_temp_min_sensor', var_bms3_temp_min, {}),
-             ('bms1_temp_max_sensor', var_bms1_temp_max, {}),
-             ('bms2_temp_max_sensor', var_bms2_temp_max, {}),
-             ('bms3_temp_max_sensor', var_bms3_temp_max, {}),
            ] %}
         {% set nse = namespace(l=ents) %}
         {% for x in wallbox_liste %}{% set nse.l = nse.l + [('wallbox_kwh_sensor', x, {})] %}{% endfor %}
@@ -3061,12 +2816,11 @@ action:
         {% endfor %}
         {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'lauf_start': lauf_start, 'trigger': trigger.id, 'sun': states('sun.sun'),
             'konfiguration': {
-              'pack_capacity_ah': pack_capacity_ah,
+              'batterie_kapazitaet_ah': batterie_kapazitaet_ah,
               'nominale_spannung': nominale_spannung,
               'max_ampere': max_ampere,
               'min_ampere': min_ampere,
               'regler_offset_a': regler_offset_a,
-              'notfall_ampere': notfall_ampere,
               'schwelle_peak_shaving': var_schwelle_peak_shaving,
               'peak_ampere': peak_ampere,
               'duration_peak_hold': aufz_duration_peak_hold,
@@ -3086,14 +2840,6 @@ action:
               'vertrauen_tag4': vertrauen_tag4,
               'nacht_p50_anteil': nacht_p50_anteil,
               'notstrom_zeitraum_h': notstrom_zeitraum_h,
-              'crate_2_deg': crate_2_deg,
-              'crate_5_deg': crate_5_deg,
-              'crate_10_deg': crate_10_deg,
-              'crate_12_deg': crate_12_deg,
-              'crate_15_deg': crate_15_deg,
-              'crate_20_deg': crate_20_deg,
-              'crate_40_deg': crate_40_deg,
-              'crate_45_deg': crate_45_deg,
               'zeit_blockade_ende': var_zeit_blockade,
               'ladevorlauf_stunden': aufz_ladevorlauf_stunden,
               'faktor_fallback': faktor_fallback,
@@ -3104,7 +2850,6 @@ action:
             },
             'rechnung': {
               'is_day': is_day, 'modus': aktueller_modus, 'aktueller_ladestrom': aktueller_ladestrom,
-              'temperatur_limit_ampere': temperatur_limit_ampere, 'target_p0': target_p0,
               'entlade_aktiv': entlade_aktiv, 'verbrauch_tag_kwh': verbrauch_tag_kwh | round(2),
               'prognose_tage': prognose_tage, 'plan_start': plan_start, 'b_stern_pct': b_stern_pct | round(1),
               'ziel_soc_eff': ziel_soc_eff, 'vollladung_faellig': vollladung_faellig, 'tage_seit_voll': tage_seit_voll,
@@ -3365,8 +3110,7 @@ action:
           name: "PV Optimizer"
           message: >-
             {{ log_kopf }} Morgen-Blockade beendet: Laden für heute freigegeben, da
-            {%- if packs_offline_bestaetigt %} alle BMS-Packs offline sind.
-            {%- elif states(var_timer_peak) == 'active' %} die Lastspitzen-Kappung läuft.
+            {%- if states(var_timer_peak) == 'active' %} die Lastspitzen-Kappung läuft.
             {%- elif trigger.id == 'export_peak_schwelle' and not (wp_sperre_aktiv or wp_boost_startet_gleich) %} die Netzeinspeisung seit 2 Minuten über der Peak-Shaving-Schwelle {{ schwelle_peak_shaving | round(0) }} W liegt (jetzt {{ real_export | round(0) }} W).
             {%- elif aktueller_soc >= 99 %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≥ 99 %{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}.
             {%- elif not is_day %} die Sonne untergegangen ist.
@@ -3405,34 +3149,9 @@ action:
           message: "{{ log_kopf }} Batterie voll: für den Rest des Tages als voll markiert, da Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≥ 99 %{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}."
           entity_id: !input helper_logbook_dummy
 
-  - if:
-      - condition: template
-        value_template: "{{ packs_offline_bestaetigt }}"
-    then:
-      - action: persistent_notification.create
-        data:
-          notification_id: "bms_offline_warning"
-          title: "⚠️ PV Optimizer Warnung"
-          message: "{{ log_kopf }} WARNUNG: BMS-Sensoren seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten offline (kein Pack erreichbar). Ladestrom-Obergrenze sicherheitshalber auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, solange die Zelltemperaturen nicht überwacht werden können. {% if (aktueller_ladestrom | float(0)) > temperatur_limit_ampere %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Das ist nur ein Deckel — die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %}"
-      # Logbuch-Eintrag, gedrosselt auf max. eine Meldung je halber Stunde -
-      # gleiches Muster wie die Deye-Ausfallwarnung: exakt an den 5-Minuten-Takt
-      # UND Minute 0/30 gebunden, damit gleichzeitig gequeuete Trigger die
-      # Meldung nicht mehrfach schreiben.
-      - if:
-          - condition: template
-            value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
-        then:
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ log_kopf }} BMS offline: Ladestrom-Obergrenze auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da seit über {{ (offline_debounce_s / 60) | round(0) }} Minuten kein BMS-Pack erreichbar ist und die Zelltemperaturen nicht überwacht werden können. {% if (aktueller_ladestrom | float(0)) > temperatur_limit_ampere %}Der Ladestrom liegt mit {{ aktueller_ladestrom | round(0) }} A darüber und wird auf die Obergrenze zurückgeführt.{% else %}Die Obergrenze ist kein Sollwert: Die Regelung lädt darunter weiter, aktuell {{ aktueller_ladestrom | round(0) }} A.{% endif %} (Informativ: Meldung erscheint bei anhaltendem Ausfall max. alle 30 Minuten)."
-              entity_id: !input helper_logbook_dummy
-    else:
-      - action: persistent_notification.dismiss
-        data:
-          notification_id: "bms_offline_warning"
-
-  # LADESTAND FEHLT: gleiches Muster wie die BMS-Warnung.
+  # LADESTAND FEHLT: Warnung als Benachrichtigung, im Logbuch hoechstens alle
+  # 30 Minuten - an den 5-Minuten-Takt UND Minute 0/30 gebunden, damit
+  # gleichzeitig gequeuete Trigger die Meldung nicht mehrfach schreiben.
   - if:
       - condition: template
         value_template: "{{ soc_fehlt_bestaetigt }}"
@@ -3441,7 +3160,7 @@ action:
         data:
           notification_id: "soc_fehlt_warning"
           title: "⚠️ PV Optimizer Warnung"
-          message: "{{ log_kopf }} WARNUNG: Notbetrieb, da {{ soc_fehlt_text }}. Tagsüber wird mit vollem Strom geladen, begrenzt nur durch die Sicherheits-Obergrenze der Batterietemperatur; Fall B und Morgen-Blockade ruhen, die Entlade-Untergrenze bleibt stehen, bis der Wert zurück ist."
+          message: "{{ log_kopf }} WARNUNG: Notbetrieb, da {{ soc_fehlt_text }}. Tagsüber wird mit vollem Strom geladen; Fall B und Morgen-Blockade ruhen, die Entlade-Untergrenze bleibt stehen, bis der Wert zurück ist."
       - if:
           - condition: template
             value_template: "{{ trigger.id == 'monitoring_5min' and now().minute in [0, 30] }}"
@@ -3449,7 +3168,7 @@ action:
           - action: logbook.log
             data:
               name: "PV Optimizer"
-              message: "{{ log_kopf }} Notbetrieb: Entlade-Untergrenze bleibt auf {{ tou_ist_register | round(0) }} %{% if is_day and not heute_schon_voll %}, tagsüber Laden mit {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %}{% endif %}, da {{ soc_fehlt_text }}. (Informativ: Meldung erscheint höchstens alle 30 Minuten.)"
+              message: "{{ log_kopf }} Notbetrieb: Entlade-Untergrenze bleibt auf {{ tou_ist_register | round(0) }} %{% if is_day and not heute_schon_voll %}, tagsüber Laden mit {{ max_ampere | round(0) }} A (Maximum){% endif %}, da {{ soc_fehlt_text }}. (Informativ: Meldung erscheint höchstens alle 30 Minuten.)"
               entity_id: !input helper_logbook_dummy
     else:
       - action: persistent_notification.dismiss
@@ -3515,21 +3234,21 @@ action:
           - if:
               - condition: template
                 value_template: >
-                  {{ ((aktueller_ladestrom | round(0)) - (target_p0 | round(0))) | abs >= 2 }}
+                  {{ ((aktueller_ladestrom | round(0)) - (max_ampere | round(0))) | abs >= 2 }}
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
                   message: >-
-                    {{ log_kopf }} Mitternachts-Check: Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {{ '(Sicherheits-Obergrenze)' if temperatur_limit_ampere < max_ampere else '(Maximum)' }}
-                    {%- if (target_p0 | round(0)) < (aktueller_ladestrom | round(0)) %} gesenkt, da er darüber lag.
-                    {%- else %} geöffnet, da er nachts nicht auf {{ 'dieser Grenze' if temperatur_limit_ampere < max_ampere else 'Maximum' }} stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{% endif %}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}
+                    {{ log_kopf }} Mitternachts-Check: Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum)
+                    {%- if (max_ampere | round(0)) < (aktueller_ladestrom | round(0)) %} gesenkt, da er darüber lag.
+                    {%- else %} geöffnet, da er nachts nicht darauf stand – vermutlich hat der 'Feierabend' am Sonnenuntergang nicht gegriffen (z.B. Neustart/Reload).{% endif %}
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
-                  value: "{{ target_p0 }}"
+                  value: "{{ max_ampere }}"
 
   - choose:
       - alias: "Aktionen bei Sonnenuntergang ausführen"
@@ -3674,18 +3393,18 @@ action:
 
           - if:
               - condition: template
-                value_template: "{{ ((aktueller_ladestrom | round(0)) - (target_p0 | round(0))) | abs >= 2 }}"
+                value_template: "{{ ((aktueller_ladestrom | round(0)) - (max_ampere | round(0))) | abs >= 2 }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {{ '(Sicherheits-Obergrenze)' if temperatur_limit_ampere < max_ampere else '(Maximum)' }} {{ 'gesenkt' if (target_p0 | round(0)) < (aktueller_ladestrom | round(0)) else 'geöffnet' }}.{{ (' ' ~ untergrenze_text) if untergrenze_text else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  message: "{{ log_kopf }} Feierabend: Sonne untergegangen, Ladestrom für die Nacht von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) {{ 'gesenkt' if (max_ampere | round(0)) < (aktueller_ladestrom | round(0)) else 'geöffnet' }}.{{ (' ' ~ untergrenze_text) if untergrenze_text else '' }}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
-                  value: "{{ target_p0 }}"
+                  value: "{{ max_ampere }}"
               - if:
                   - condition: template
                     value_template: "{{ var_lade_modus != '' }}"
@@ -4134,42 +3853,6 @@ action:
   # DIE MASTER KASKADE FÜR DEN BATTERIESTROM
   # ====================================================================
   - choose:
-      # Sicherheits-Obergrenze durchsetzen: temperatur_limit_ampere deckelt zwar
-      # jeden Zielwert, geschrieben wird er aber nur, wenn ein Zweig ohnehin
-      # regelt. Oberhalb von kein_absenken_ab_soc regelt Prio 6 nicht mehr, und
-      # die Absenk-Hysterese verlangt 20 A Differenz - ein kleiner Ueberhang
-      # bliebe sonst dauerhaft stehen, ohne Temperaturschutz.
-      # Nur bei Tag: Nachts steht der Sollwert bewusst auf Maximum und es
-      # fliesst kein Ladestrom - ein Deckel schuetzt dort nichts, wuerde aber
-      # den Nachtwert ueberschreiben und das Log fuellen. Zum Sonnenaufgang
-      # greift er lange vor dem ersten nennenswerten Ertrag.
-      #
-      # ENTPRELLT: temperatur_limit_ampere faellt schon beim ersten fehlenden
-      # Messwert auf den Notlauf-Strom, denn packs_online kennt keine Wartezeit.
-      # Ein Sensor-Aussetzer von Sekunden wuerde den Ladestrom sonst fuer
-      # Stunden drosseln. Eingegriffen wird deshalb nur, wenn die Begrenzung
-      # aus einer GEMESSENEN Temperatur stammt (packs_online > 0) oder der
-      # Ausfall ueber offline_debounce_s bestaetigt ist.
-      - alias: "PRIO 0: SICHERHEITS-OBERGRENZE DURCHSETZEN"
-        conditions:
-          - condition: template
-            value_template: >
-              {{ is_day
-                 and (packs_online | int(0) > 0 or packs_offline_bestaetigt)
-                 and temperatur_limit_ampere < max_ampere
-                 and ((aktueller_ladestrom | float(0)) - temperatur_limit_ampere) > 1 }}
-        sequence:
-          - action: number.set_value
-            target:
-              entity_id: "{{ var_wr_max_charge }}"
-            data:
-              value: "{{ temperatur_limit_ampere | round(0) }}"
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ log_kopf }} Sicherheits-Obergrenze: Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ temperatur_limit_ampere | round(0) }} A gesenkt, da er über der Obergrenze lag.{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
-              entity_id: !input helper_logbook_dummy
-
       - alias: "PRIO 1: FALL (B) - ZEIT REICHT NICHT (MAX)"
         conditions:
           - condition: template
@@ -4185,23 +3868,21 @@ action:
                 data:
                   name: "PV Optimizer"
                   message: >
-                    {{ log_kopf }} Prio 1 (Fall B / Schleuse auf): {% if (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} angehoben, wird{% else %}Ladestrom steht bereits auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% elif ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
+                    {{ log_kopf }} Prio 1 (Fall B / Schleuse auf): {% if (max_ampere | round(0)) != (aktueller_ladestrom | round(0)) %}Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) angehoben, wird{% else %}Ladestrom steht bereits auf {{ max_ampere | round(0) }} A (Maximum) und wird{% endif %} bis Sonnenuntergang nicht mehr abgesenkt, da {% if prognose_deckt_bedarf_nicht %}Verfügbar {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh < Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh und damit auch bei vollem Ladestrom nicht mehr deckbar{% elif ladefenster_reicht_nicht %}Bedarf {{ benoetigt_kwh | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ energie_bis_vorlauf | float(0) | round(fallb_nk | int(1)) }} kWh {{ fallb_vorlauf_satz }} — bis Tagesende wären es {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh, aber {{ fallb_vorlauf_grund }}{% else %}Bedarf {{ (benoetigt_kwh * (faktor_fallback | float(1.2))) | round(fallb_nk | int(1)) }} kWh > Verfügbar {{ (brutto_ueberschuss_rest - puffer_fall_b) | round(fallb_nk | int(1)) }} kWh{% endif %}
                     (Bedarf = freie Ladekapazität {{ freie_kwh | round(fallb_nk | int(1)) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh + Nachladebedarf {{ defizit_kwh | round(fallb_nk | int(1)) }} kWh für Stunden mit Hausverbrauch über PV{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} × Faktor {{ faktor_fallback }}{% endif %}; Verfügbar = Restüberschuss {{ brutto_ueberschuss_rest | round(fallb_nk | int(1)) }} kWh{% if ev_bedarf_kwh > 0 %} nach Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh{% endif %}{% if not (prognose_deckt_bedarf_nicht or ladefenster_reicht_nicht) %} − Puffer {{ puffer_fall_b | round(fallb_nk | int(1)) }} kWh{% endif %}.) Voraussichtlich voll {{ fallb_voll_um }}.{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}
                   entity_id: !input helper_logbook_dummy
-              # Gedeckelt schreiben: Fall B haelt den Wert bis Sonnenuntergang,
-              # ein ungedeckeltes Maximum bliebe bei BMS-Ausfall den Resttag stehen.
               # Nur schreiben, wenn sich der Wert aendert - nach der Nacht steht
               # der Sollwert bereits auf Maximum. Die Meldung selbst kommt trotzdem:
               # Sie ist die eigentliche Information, denn der Modus wechselt.
               - if:
                   - condition: template
-                    value_template: "{{ (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) }}"
+                    value_template: "{{ (max_ampere | round(0)) != (aktueller_ladestrom | round(0)) }}"
                 then:
                   - action: number.set_value
                     target:
                       entity_id: "{{ var_wr_max_charge }}"
                     data:
-                      value: "{{ target_p0 }}"
+                      value: "{{ max_ampere }}"
               - if:
                   - condition: template
                     value_template: "{{ var_lade_modus != '' }}"
@@ -4211,28 +3892,26 @@ action:
                       entity_id: "{{ var_lade_modus }}"
                     data:
                       option: "fall_b_max"
-          # WIEDERAUFNAHME: Faellt der Ladestrom waehrend Fall B unter das Ziel -
-          # etwa weil Prio 0 bei einem BMS-Ausfall gedrosselt hat -, hebt ihn
-          # sonst niemand wieder an: Prio 6 ist im Modus fall_b_max stillgelegt,
-          # und der Block oben schreibt nur beim Moduswechsel. Gegen Ping-Pong
-          # mit Prio 0 schuetzt target_p0 selbst, denn es traegt den Deckel:
-          # solange die Begrenzung gilt, ist target_p0 gleich dem Ist-Wert.
+          # WIEDERAUFNAHME: Faellt der Ladestrom waehrend Fall B unter das Maximum,
+          # etwa nach einem Eingriff von Hand, hebt ihn sonst niemand wieder an:
+          # Prio 6 ist im Modus fall_b_max stillgelegt, und der Block oben schreibt
+          # nur beim Moduswechsel.
           - if:
               - condition: template
                 value_template: >
                   {{ aktueller_modus == 'fall_b_max'
-                     and ((target_p0 | float(0)) - (aktueller_ladestrom | float(0))) > 1 }}
+                     and (max_ampere - (aktueller_ladestrom | float(0))) > 1 }}
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 1 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält.{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  message: "{{ log_kopf }} Prio 1 (Fall B / Schleuse auf): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) zurückgeholt, da er zwischenzeitlich gedrosselt wurde und Fall B bis Sonnenuntergang auf vollem Ladestrom hält."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
-                  value: "{{ target_p0 }}"
+                  value: "{{ max_ampere }}"
 
       # Der Zweig haelt nur den zuletzt gesetzten Wert und bleibt in der Kaskade,
       # damit Prio 4/7 nicht dazwischenregeln. Ein Absenken auf 0 A braucht es
@@ -4321,7 +4000,7 @@ action:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 4 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W.{% if temperatur_limit_ampere < max_ampere and (target_p3 | float(0)) >= temperatur_limit_ampere %} Durch die Batterietemperatur auf {{ temperatur_limit_ampere | round(0) }} A begrenzt.{% endif %} Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da keine Einspeisespitze zu erwarten war (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
+                  message: "{{ log_kopf }} Prio 4 (Lastspitzen-Kappung / Peak-Shaving): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p3 }} A angehoben (+{{ (target_p3 | float(0) - (aktueller_ladestrom | float(0))) | round(0) }} A), da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_peak_shaving | round(0) }} W. Bei vollem Strom voraussichtlich voll {{ fallb_voll_um }}.{% if not spitze_erwartet and not blockade_heute_beendet and aktueller_modus != 'blockade' %} Informativ: Keine Morgen-Blockade heute, da keine Einspeisespitze zu erwarten war (höchste erwartete Netzeinspeisung {{ spitze_erwartet_w | round(0) }} W < {{ (schwelle_peak_shaving * peak_erwartung_anteil) | round(0) }} W = {{ (peak_erwartung_anteil * 100) | round(0) | int }} % der Schwelle).{% endif %}"
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
@@ -4450,7 +4129,7 @@ action:
                         {%- if (sim_a_vorlauf | int(0)) > 0 %}{% if ohne_vorlauf %} bis Ende des Ladefensters gedeckt wird{% elif vorlauf_passt %} bis {{ ladevorlauf_text }} vor Ende des Ladefensters gedeckt wird{% else %} in der nächsten halben Stunde gedeckt wird, da vom restlichen Ladefenster {{ nsf.h | round(2) }} h nach Abzug des Ladevorlaufs {{ ladevorlauf_text }} keine halbe Stunde bleibt{% endif %}
                         {%- elif fenster_gewinnt %} bis Ende des Ladefensters gedeckt wird{% if vorlauf_passt %}; bis {{ ladevorlauf_text }} davor reicht der Überschuss nicht mehr{% endif %}
                         {%- else %} gleichmäßig über {{ verf_stunden | round(1) }} h mit PV-Überschuss verteilt wird{% if sim_slots_fenster | length > 0 and benoetigt_kwh > 0 %}; der Überschuss im Ladefenster deckt ihn auch mit {{ max_ampere | int(140) }} A nicht{% endif %}{% endif %}
-                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if (sim_a_vorlauf | int(0)) > 0 %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}{{ (' ' ~ temp_log_addon) if temp_log_addon and temperatur_limit_ampere < ziel_p5_raw else '' }}
+                        (freie Ladekapazität {{ freie_kwh | round(1) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh, Nachladebedarf {{ defizit_kwh | round(1) }} kWh für Stunden mit Hausverbrauch über PV{% if ev_bedarf_kwh > 0 %}, Ladebedarf der Autos {{ ev_bedarf_kwh | round(1) }} kWh vorab abgezogen{% endif %}).{% if (sim_a_vorlauf | int(0)) > 0 %} Voraussichtlich voll {{ plan_voll_um }}.{% endif %}{{ (' ' ~ trend_log_addon) if trend_log_addon else '' }}
                       entity_id: !input helper_logbook_dummy
                   - action: number.set_value
                     target:
@@ -4480,18 +4159,18 @@ action:
         sequence:
           - if:
               - condition: template
-                value_template: "{{ (target_p0 | round(0)) != (aktueller_ladestrom | round(0)) }}"
+                value_template: "{{ (max_ampere | round(0)) != (aktueller_ladestrom | round(0)) }}"
             then:
               - action: logbook.log
                 data:
                   name: "PV Optimizer"
-                  message: "{{ log_kopf }} Prio 7 (Notbetrieb ohne Ladestand): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ target_p0 | round(0) }} A {% if temperatur_limit_ampere < max_ampere %}(Sicherheits-Obergrenze){% else %}(Maximum){% endif %} {{ 'angehoben' if target_p0 > (aktueller_ladestrom | float(0)) else 'gesenkt' }}, da {{ soc_fehlt_text }}.{{ (' ' ~ temp_log_addon) if temp_log_addon else '' }}"
+                  message: "{{ log_kopf }} Prio 7 (Notbetrieb ohne Ladestand): Ladestrom von {{ aktueller_ladestrom | round(0) }} A auf {{ max_ampere | round(0) }} A (Maximum) {{ 'angehoben' if max_ampere > (aktueller_ladestrom | float(0)) else 'gesenkt' }}, da {{ soc_fehlt_text }}."
                   entity_id: !input helper_logbook_dummy
               - action: number.set_value
                 target:
                   entity_id: "{{ var_wr_max_charge }}"
                 data:
-                  value: "{{ target_p0 }}"
+                  value: "{{ max_ampere }}"
 
   # ENTSCHEIDUNGSZEILE: Hat dieser Lauf ein Register, einen Modus oder einen
   # Timer veraendert, bekommt die Aufzeichnung die Werte, mit denen entschieden

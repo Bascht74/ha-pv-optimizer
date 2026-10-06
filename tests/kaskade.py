@@ -52,7 +52,7 @@ def gruppe(blueprint: dict, alias_anfang: str) -> list[dict]:
 
 def kaskade(blueprint: dict) -> list[dict]:
     """Die Zweige der Master-Kaskade."""
-    return gruppe(blueprint, "PRIO 0")
+    return gruppe(blueprint, "PRIO 1")
 
 
 def template_wahr(h: Harness, quelle: str, ctx: dict) -> bool:

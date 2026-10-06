@@ -38,8 +38,8 @@ keine Zusatz-Software.
    (`https://raw.githubusercontent.com/Bascht74/ha-pv-optimizer/main/PV-Ladesteuerung.yaml`).
    Updates: Blueprint erneut importieren, GitHub liefert die Datei bis zu 5 Minuten aus dem Cache.
 3. **Automation anlegen** und die Felder zuweisen. Pflichtfelder prüft der Blueprint beim Start
-   selbst und nennt fehlende im Logbuch. Optionale Felder (Wärmepumpe, zweiter und dritter
-   Akku-Pack, Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
+   selbst und nennt fehlende im Logbuch; dazu zählt „Batteriekapazität gesamt“, solange sie auf 0 steht. Optionale
+   Felder (Wärmepumpe, Solcast-Folgetage, Diagnose-Helfer, Wallbox) bleiben leer, wenn nicht gebraucht.
 
 **Ladestand (Sektion 1):** Der Blueprint nimmt den Ladestand als Messwert und rechnet ihn nicht
 selbst aus. In „Ladezustand SOC (%)" gehört der Wert, den der Wechselrichter selbst sieht — er prüft
@@ -56,7 +56,7 @@ eigene Solcast-Instanz führt, trägt in „Prognose heute“, „morgen“, „
 Sensoren aller Flächen ein; der Blueprint addiert sie Halbstunde für Halbstunde. Liegen alle Flächen
 in einer Instanz, addiert Solcast sie selbst, dann genügt ein Sensor je Feld.
 
-**Wallbox / evcc (Sektion 10):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
+**Wallbox / evcc (Sektion 9):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
 Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
 Utility-Meter über dessen Ladeenergie (bleibt aus dem Verbrauchsprofil heraus, Vorlage im Package)
 und je Ladepunkt der offene Ladebedarf „Charge Remaining Energy“ (geht vom heutigen PV-Überschuss
@@ -96,7 +96,7 @@ ein Teil des Hauses am Notstromausgang, zählt nur dieser Teil. Mit zugewiesenem
 Entlade-Planung eine **Notstromreserve**: Ohne Netz gelten die ToU-Programme nicht, der Deye entlädt im
 Inselbetrieb bis zu seinem „Battery Shutdown SOC“ (Sektion 2, optional; leer: 10 %). Die Untergrenze
 liegt deshalb nie unter diesem Ladestand plus dem größten Defizit der Notstromlast (samt Eigenverbrauch
-des Wechselrichters) gegen die P10-Prognose über den eingestellten Zeitraum (Sektion 9, Vorgabe 48 Stunden),
+des Wechselrichters) gegen die P10-Prognose über den eingestellten Zeitraum (Sektion 8, Vorgabe 48 Stunden),
 auf volle 5 % aufgerundet. Die
 Meldung der Untergrenze nennt Reserve und Defizit, die Aufzeichnung trägt `reserve_kwh`, `reserve_pct`
 und `reserve_bis`.

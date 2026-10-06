@@ -66,7 +66,7 @@ def test_aufzeichnung_erfasst_jeden_input(blueprint, tag):
     entity_inputs = {n for n, d in definitionen.items() if "entity" in (d.get("selector") or {})}
     konfig_inputs = set(definitionen) - entity_inputs
 
-    # Jeder belegte Entity-Input steht drin, leere (Pack 3) nicht.
+    # Jeder belegte Entity-Input steht drin, leere (Schatten-BMS) nicht.
     belegt = {n for n in entity_inputs if h.inputs[n] not in ("", [])}
     assert {e["input"] for e in aufz["entitaeten"]} == belegt
     # Mehrfachauswahl: ein Eintrag je gewaehlter Entitaet
@@ -85,8 +85,8 @@ def test_aufzeichnung_erfasst_jeden_input(blueprint, tag):
     assert aufz["trigger"] == "monitoring_5min"
 
 
-VERGLEICH = ["aktueller_soc", "grid_export", "ww_temp", "aktueller_ladestrom", "packs_online",
-             "batterie_kapazitaet", "freie_kwh", "temperatur_limit_ampere", "pv_abschlag", "trend_faktor",
+VERGLEICH = ["aktueller_soc", "grid_export", "ww_temp", "aktueller_ladestrom",
+             "batterie_kapazitaet", "freie_kwh", "pv_abschlag", "trend_faktor",
              "blockade_dyn_json", "blockade_dyn", "fall_b_aktiv", "sim_a_fenster", "target_p5",
              "wp_boost_karenz_ok", "wp_boost_startet_gleich", "ladefenster_reicht_nicht"]
 

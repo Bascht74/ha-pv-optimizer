@@ -160,7 +160,7 @@ def test_ampere_ersatzwerte_sind_einheitlich():
     der konfigurierte Maximalstrom, damit er kein Anheben ausloest.
     """
     text = BLUEPRINT_PFAD.read_text(encoding="utf-8")
-    treffer = re.findall(r"(max_ampere|peak_ampere|temperatur_limit_ampere|states\(var_wr_max_charge\))\s*\|\s*(?:float|int)\(([^)]*)\)", text)
+    treffer = re.findall(r"(max_ampere|peak_ampere|states\(var_wr_max_charge\))\s*\|\s*(?:float|int)\(([^)]*)\)", text)
     erlaubt = {("max_ampere", "140"), ("peak_ampere", "48"), ("states(var_wr_max_charge)", "max_ampere")}
     falsch = sorted({t for t in treffer if t not in erlaubt})
     assert falsch == [], falsch
@@ -193,7 +193,7 @@ def test_direkte_entity_inputs_sind_pflichtfelder(blueprint):
                     for k, v in s["variables"].items() if isinstance(v, InputTag)}
     pflicht_tpl = next(s["variables"]["pflichtfelder_fehlend"] for s in blueprint["action"]
                        if isinstance(s, dict) and "pflichtfelder_fehlend" in s.get("variables", {}))
-    # Nur die unbedingte Basisliste zaehlt. Die Bloecke dahinter (Pack 2/3, Waermepumpe)
+    # Nur die unbedingte Basisliste zaehlt. Die Bloecke dahinter (Kapazitaet, Waermepumpe)
     # verlangen ihre Felder nur unter einer Bedingung - direkt eingesetzt wuerden sie die
     # Automation schon beim Laden zerlegen, lange bevor die Bedingung greift.
     basis = pflicht_tpl[pflicht_tpl.index("{% set pflicht = ["):].split("] %}")[0]

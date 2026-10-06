@@ -181,7 +181,7 @@ utility_meter:
     name: "Hausverbrauch Halbstündlich"
     net_consumption: false
     delta_values: false
-  # Nur mit Wallbox (Sektion 10): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
+  # Nur mit Wallbox (Sektion 9): je Ladepunkt ein Zaehler ueber dessen Ladeenergie,
   # vom Blueprint zusammen mit dem Hausverbrauch-Zaehler genullt. Beide im Feld
   # "Wallbox-Ladung halbstuendlich" auswaehlen. Zum Nutzen einkommentieren und
   # die Quelle eintragen - ein stehengebliebener Platzhalter laesst Home

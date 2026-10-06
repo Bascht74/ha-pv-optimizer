@@ -18,6 +18,12 @@ Logbuch-Meldung trägt ihn.
   correction compares the whole plant's production with a forecast that covers all of it, and the
   consumption profile learns the whole house load; every half-hourly meter is reset after its half
   hour. An instance with one sensor per field works unchanged.
+- "Batteriekapazität gesamt (Ah)" (section 1) replaces "Kapazität EINES Packs (Ah)": the sum over
+  all packs, which demand, Fall B and discharge planning compute with. Until now the blueprint
+  multiplied the pack capacity by the number of assigned cell-temperature fields, which are gone; one
+  total also covers packs of different sizes. The default 0 means "not entered": the startup check
+  then stops the run and names the field, so an instance cannot silently plan with a fraction of its
+  battery.
 
 ### Changed
 - The battery counts as full for the day once the regulating state of charge reaches 99 % by day,
@@ -29,14 +35,19 @@ Logbuch-Meldung trägt ihn.
   23:58, so the evening after a full charge no longer plans for 100 %. Log, notice and recording call
   it a full charge (`vollladung_faellig` replaces `zellausgleich_faellig`), since no balancing follows
   it any more.
-- The priorities after Prio 0 move up by one: Fall B is Prio 1, the timed top-up Prio 6, the
-  emergency branch Prio 7. The input sections after section 7 move up by one as well, and the general
-  ToU minimum moves to the charging-strategy section.
+- Fall B, the sunset and midnight runs and the emergency branch without state of charge always write
+  the configured maximum charge current, and Prio 6 and peak shaving are capped by it alone.
+- The priorities are renumbered without the two removed branches: Fall B is Prio 1, the timed top-up
+  Prio 6, the emergency branch Prio 7. The input sections after section 7 move up by two, and the
+  general ToU minimum moves to the charging-strategy section.
 - With "Schatten-BMS: Ladezustand SOC (%)" assigned, the backup reserve takes the inverter's shutdown
   charge level as a level on the shadow scale instead of raising it by the gap between the two
   readings. A BMS that holds its reported charge level near empty until the cell voltage drops lets
   the inverter run down close to really empty in an outage, so the shift kept the night floor too
   high by the whole gap on days without a full charge. Instances without the field are unaffected.
+- The diagnostic recording carries `batterie_kapazitaet_ah` in `konfiguration` instead of
+  `pack_capacity_ah`; the cell temperatures, the charge rates, `notfall_ampere`,
+  `temperatur_limit_ampere` and `target_p0` are no longer recorded.
 
 ### Removed
 - Cell balancing (former Prio 1): the blueprint no longer throttles the charge current to the minimum
@@ -45,6 +56,13 @@ Logbuch-Meldung trägt ihn.
   inputs for the highest cell voltage of each pack, the battery voltage, the balancing start voltage,
   its duration and the full-battery voltage. Home Assistant ignores their leftover values; the package
   template no longer creates the timer or the `top_balancing` mode.
+- The charge-current limit by cell temperature (former Prio 0): the blueprint no longer derives a
+  charge rate from the coldest and warmest cell, so protection at low and high cell temperatures is
+  left to the BMS. With it go the six cell-temperature fields and the eight charge-rate fields, the
+  cap, notice and log line for BMS sensors that are offline, its input "Max. Ladestrom bei
+  BMS-Ausfall", and the morning blockade's exception for that case. Home Assistant ignores the
+  leftover values.
+- "Kapazität EINES Packs (Ah)", replaced by the total capacity above.
 
 ### Fixed
 - A half-hourly meter that the previous half-hour run did not reset (first run of a new instance, a

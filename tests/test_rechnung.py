@@ -231,104 +231,30 @@ def test_kippstelle_von_fall_b(blueprint, tag, kw, soc, erwartet, grund):
 
 
 # --------------------------------------------------------------------------
-# Kapazitaet haengt an den konfigurierten Packs, nicht an den meldenden
+# Kapazitaet = Batteriekapazitaet gesamt (Ah) x Nennspannung
 # --------------------------------------------------------------------------
-def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
+@pytest.mark.parametrize("ah", [314, 628.0, 990])
+def test_kapazitaet_folgt_der_gesamtkapazitaet(blueprint, tag, ah):
     """
-    Pack 2 meldet seit 15 s nicht. Der Temperaturschutz darf das sehen
-    (packs_online = 1), das Energiemodell nicht: die Batterie hat weiterhin
-    zwei Packs, und freie_kwh geht in Blockade, Fall B und Prio 6 ein.
+    51,2 V; freie_kwh geht mit derselben Kapazitaet in Blockade, Fall B und Prio 6 ein
+    (Ladestand 84 % -> 16 % frei). 628.0 ist der Wert, den das Zahlenfeld der Oberflaeche
+    liefern kann.
     """
-    from ha_jinja import Zustand
-    h = szenario(blueprint, zeit(tag, 10, 5), soc=84.0)
-    e = h.inputs["bms2_temp_min_sensor"]
-    h.states.tabelle[e] = Zustand(e, "unavailable", last_changed=h.jetzt - dt.timedelta(seconds=15))
-    ctx = h.auswerten(bis="freie_kwh")
-    kapazitaet_2_packs = 2 * 314 * 51.2 / 1000
-    assert ctx["packs_online"] == 1
-    assert ctx["batterie_kapazitaet"] == pytest.approx(kapazitaet_2_packs, abs=0.05), \
-        f"Kapazitaet {ctx['batterie_kapazitaet']} - halbiert durch einen Sensor-Aussetzer"
-    assert ctx["freie_kwh"] == pytest.approx(kapazitaet_2_packs * 0.16, abs=0.05)
-
-
-# --------------------------------------------------------------------------
-# Ein Pack ist Pflicht, jedes weitere optional
-# --------------------------------------------------------------------------
-EIN_PACK = {"bms2_temp_min_sensor": "", "bms2_temp_max_sensor": ""}
-
-
-def test_ein_pack_laeuft_ohne_zugewiesenes_bms_2(blueprint, tag):
-    """
-    Ein Standort mit einem Pack laesst die beiden BMS-2-Felder leer. Die
-    Startpruefung darf nicht abbrechen, und keine Groesse darf auf ihren
-    Ersatzwert fallen - besonders temp_max_live nicht auf 99 Grad, was ueber
-    crate_45_deg den Ladestrom auf 0 A druecken wuerde.
-    """
-    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=EIN_PACK).auswerten(bis="freie_kwh")
+    ctx = szenario(blueprint, zeit(tag, 10, 5), soc=84.0, input_overrides={"batterie_kapazitaet_ah": ah}).auswerten(bis="freie_kwh")
     assert ctx["pflicht_liste"] == []
-    assert ctx["packs_konfiguriert"] == 1 and ctx["packs_online"] == 1
-    assert ctx["packs_offline_bestaetigt"] is False
-    assert ctx["batterie_kapazitaet"] == pytest.approx(314 * 51.2 / 1000, abs=0.05)
-    # Temperaturen von Pack 1 (22.0 / 24.0 Grad), nicht die Ersatzwerte -99 / 99
-    assert ctx["temp_min_live"] == pytest.approx(22.0) and ctx["temp_max_live"] == pytest.approx(24.0)
-    # C-Rate 0.70 x 314 Ah x 1 Pack = 220 A (mit zwei Packs deckelt max_ampere bei 350 A)
-    assert ctx["temperatur_limit_ampere"] == pytest.approx(220, abs=0.5)
+    assert ctx["batterie_kapazitaet"] == pytest.approx(ah * 51.2 / 1000, abs=0.05)
+    assert ctx["freie_kwh"] == pytest.approx(ah * 51.2 / 1000 * 0.16, abs=0.05)
 
 
-@pytest.mark.parametrize("gemessen, stufe, ampere", [(7.4, 7.0, 69), (7.0, 7.0, 69), (6.9, 6.5, 60)])
-def test_temperaturdeckel_rechnet_mit_halben_grad(blueprint, tag, gemessen, stufe, ampere):
+def test_ohne_gesamtkapazitaet_bricht_der_start_ab(blueprint, tag):
     """
-    Zwei Packs zu 314 Ah, kaelteste Zelle 7,4 Grad: gerechnet wird mit 7,0 Grad, C-Rate 0,05 + 2 x 0,03 = 0,11,
-    x 628 Ah = 69 A (ungerundet 0,122 x 628 = 76,6 -> 77 A). 6,9 -> 6,5 Grad: 0,095 x 628 = 59,7 -> 60 A.
-    Die Meldung nennt den Rechenwert nur, wenn er vom Messwert abweicht.
+    Die Vorgabe 0 heisst "nicht eingetragen": Nach dem Reimport bricht der Start ab und
+    nennt das Feld, statt still mit einer leeren Batterie zu rechnen.
     """
     from conftest import standard_inputs
-    zs = {}
-    for name in ("bms1_temp_min_sensor", "bms2_temp_min_sensor"):
-        eid = standard_inputs(blueprint)[name]
-        zs[eid] = Zustand(eid, str(gemessen))
-    ctx = szenario(blueprint, zeit(tag, 10, 5), zustands_overrides=zs).auswerten(bis="temp_log_addon")
-    assert ctx["temp_min_live"] == pytest.approx(gemessen) and ctx["temp_min_stufe"] == stufe
-    assert ctx["temperatur_limit_ampere"] == ampere
-    assert f"Zelltemperatur min {gemessen} °C" in ctx["temp_log_addon"], ctx["temp_log_addon"]
-    assert ("gerechnet mit 7.0 °C" in ctx["temp_log_addon"]) is (gemessen == 7.4), ctx["temp_log_addon"]
-
-
-@pytest.mark.parametrize("leer, erwartet", [
-    ("bms2_temp_min_sensor", "BMS 2: niedrigste Zelltemperatur"),
-    ("bms2_temp_max_sensor", "BMS 2: höchste Zelltemperatur"),
-])
-def test_halb_zugewiesenes_pack_bricht_den_start_ab(blueprint, tag, leer, erwartet):
-    """
-    Ein Pack wird ganz oder gar nicht zugewiesen. Halb belegt rechnete der
-    Blueprint still falsch weiter, statt das fehlende Feld zu nennen.
-    """
-    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={leer: ""})
-    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == [
-        erwartet + " (Pack 2 nur teilweise zugewiesen)"]
-
-
-def test_pack_1_braucht_auch_seine_niedrigste_zelltemperatur(blueprint, tag):
-    """
-    Pack 1 ist Pflicht. Ohne seine niedrigste Zelltemperatur gilt es als nicht
-    vorhanden: bei einem Pack zaehlt dann kein Pack mehr als online, die Anlage
-    laeuft dauerhaft auf dem Notlauf-Strom und meldet "BMS-Sensoren offline",
-    statt beim Start das fehlende Feld zu nennen.
-    """
-    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"bms1_temp_min_sensor": ""})
-    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == ["BMS 1: niedrigste Zelltemperatur"]
-    # Der Zustand, den die Pflicht verhindert: mit einem Pack bleibt kein Sensor uebrig
-    ohne = {**EIN_PACK, "bms1_temp_min_sensor": ""}
-    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=ohne).auswerten(bis="freie_kwh")
-    assert ctx["packs_online"] == 0 and ctx["packs_offline_bestaetigt"] is True
-    assert ctx["temperatur_limit_ampere"] == pytest.approx(float(ctx["notfall_ampere"]))
-
-
-def test_halb_zugewiesenes_pack_3_bricht_den_start_ab(blueprint, tag):
-    """Dieselbe Regel fuer das dritte Pack: nur die niedrigste Zelltemperatur zugewiesen."""
-    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"bms3_temp_min_sensor": "sensor.bms3_temp_min"})
-    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == [
-        "BMS 3: höchste Zelltemperatur (Pack 3 nur teilweise zugewiesen)"]
+    assert standard_inputs(blueprint)["batterie_kapazitaet_ah"] == 0
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"batterie_kapazitaet_ah": 0})
+    assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == ["Batteriekapazität gesamt (Ah)"]
 
 
 # --------------------------------------------------------------------------
@@ -1144,11 +1070,11 @@ def test_halten_mit_schatten_bms_in_der_skala_des_registers(blueprint, tag, deye
     e = fake_entity("helper_halten_bezug", "input_number")
     zs = {**_tou(tou), e: Zustand(e, "1.0")}
     h = szenario(blueprint, zeit(tag, 3, 0), soc=deye, schatten_soc=schatten, hausverbrauch_slot_kwh=0.3,
-                 zustands_overrides=zs, input_overrides={"pack_capacity_ah": 200}, trigger_id="update_json")
+                 zustands_overrides=zs, input_overrides={"batterie_kapazitaet_ah": 400}, trigger_id="update_json")
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
     assert ctx["hb_lage"] is (zurueck is not None), grund
     kette = szenario(blueprint, zeit(tag, 3, 0), soc=deye, schatten_soc=schatten, zustands_overrides=zs,
-                     input_overrides={"pack_capacity_ah": 200}).auswerten(bis="halten_aktiv")
+                     input_overrides={"batterie_kapazitaet_ah": 400}).auswerten(bis="halten_aktiv")
     assert kette["halten_aktiv"] is ctx["hb_lage"], "Kette und Halbstundenlauf pruefen dasselbe"
     if zurueck is not None:
         assert ctx["hb_min_register"] == 12 and ctx["hb_zurueck_kwh"] == pytest.approx(zurueck, abs=0.001), grund
@@ -1189,12 +1115,12 @@ def test_slot_zeile_mit_schatten_bms_in_der_skala_der_kette(blueprint, tag):
     """
     zs = _tou(42)
     h = szenario(blueprint, zeit(tag, 3, 0), soc=42.0, schatten_soc=50.36, zustands_overrides=zs,
-                 input_overrides={"pack_capacity_ah": 200}, trigger_id="update_json")
+                 input_overrides={"batterie_kapazitaet_ah": 400}, trigger_id="update_json")
     zeile = _slot_zeile(blueprint, h, _update_json_zweig(blueprint, h, zeit(tag, 3, 0)))
     assert zeile["soc_versatz"] == pytest.approx(-8.36) and zeile["tou_ist"] == pytest.approx(50.36)
     assert zeile["zurueckgehalten_kwh"] == pytest.approx(6.144, abs=0.001) and zeile["halten"] is True
     kette = szenario(blueprint, zeit(tag, 3, 0), soc=42.0, schatten_soc=50.36, zustands_overrides=zs,
-                     input_overrides={"pack_capacity_ah": 200}).auswerten(bis="zurueckgehalten_kwh")
+                     input_overrides={"batterie_kapazitaet_ah": 400}).auswerten(bis="zurueckgehalten_kwh")
     assert kette["soc_versatz"] == pytest.approx(zeile["soc_versatz"])
     assert kette["tou_ist"] == pytest.approx(zeile["tou_ist"])
     assert kette["zurueckgehalten_kwh"] == pytest.approx(zeile["zurueckgehalten_kwh"], abs=0.001)
