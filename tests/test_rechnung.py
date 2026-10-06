@@ -143,7 +143,7 @@ def test_json_profil_fallback_bei_leerem_helfer(blueprint, tag):
 
 
 # --------------------------------------------------------------------------
-# Hausverbrauchs-Hinweis in Prio 7 und Fall B
+# Hausverbrauchs-Hinweis in Prio 6 und Fall B
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
 # Fall B
@@ -237,7 +237,7 @@ def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
     """
     Pack 2 meldet seit 15 s nicht. Der Temperaturschutz darf das sehen
     (packs_online = 1), das Energiemodell nicht: die Batterie hat weiterhin
-    zwei Packs, und freie_kwh geht in Blockade, Fall B und Prio 7 ein.
+    zwei Packs, und freie_kwh geht in Blockade, Fall B und Prio 6 ein.
     """
     from ha_jinja import Zustand
     h = szenario(blueprint, zeit(tag, 10, 5), soc=84.0)
@@ -254,12 +254,12 @@ def test_kapazitaet_bleibt_bei_bms_aussetzer(blueprint, tag):
 # --------------------------------------------------------------------------
 # Ein Pack ist Pflicht, jedes weitere optional
 # --------------------------------------------------------------------------
-EIN_PACK = {"vmax2_sensor": "", "bms2_temp_min_sensor": "", "bms2_temp_max_sensor": ""}
+EIN_PACK = {"bms2_temp_min_sensor": "", "bms2_temp_max_sensor": ""}
 
 
 def test_ein_pack_laeuft_ohne_zugewiesenes_bms_2(blueprint, tag):
     """
-    Ein Standort mit einem Pack laesst die drei BMS-2-Felder leer. Die
+    Ein Standort mit einem Pack laesst die beiden BMS-2-Felder leer. Die
     Startpruefung darf nicht abbrechen, und keine Groesse darf auf ihren
     Ersatzwert fallen - besonders temp_max_live nicht auf 99 Grad, was ueber
     crate_45_deg den Ladestrom auf 0 A druecken wuerde.
@@ -295,7 +295,6 @@ def test_temperaturdeckel_rechnet_mit_halben_grad(blueprint, tag, gemessen, stuf
 
 
 @pytest.mark.parametrize("leer, erwartet", [
-    ("vmax2_sensor", "BMS 2: höchste Zellspannung (V)"),
     ("bms2_temp_min_sensor", "BMS 2: niedrigste Zelltemperatur"),
     ("bms2_temp_max_sensor", "BMS 2: höchste Zelltemperatur"),
 ])
@@ -326,32 +325,10 @@ def test_pack_1_braucht_auch_seine_niedrigste_zelltemperatur(blueprint, tag):
 
 
 def test_halb_zugewiesenes_pack_3_bricht_den_start_ab(blueprint, tag):
-    """Dieselbe Regel fuer das dritte Pack: nur die Zellspannung zugewiesen."""
-    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"vmax3_sensor": "sensor.vmax3"})
+    """Dieselbe Regel fuer das dritte Pack: nur die niedrigste Zelltemperatur zugewiesen."""
+    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides={"bms3_temp_min_sensor": "sensor.bms3_temp_min"})
     assert h.auswerten(bis="pflicht_liste")["pflicht_liste"] == [
-        "BMS 3: niedrigste Zelltemperatur (Pack 3 nur teilweise zugewiesen)",
         "BMS 3: höchste Zelltemperatur (Pack 3 nur teilweise zugewiesen)"]
-
-
-def test_zellausgleich_startet_ohne_zweites_bms_und_nennt_pack_1(blueprint, tag):
-    """
-    Ohne Pack 2 ist vmax2 der Ersatzwert 0.0 V. Er darf den Zellausgleich weder
-    ausloesen noch verhindern, und die Meldung muss die Zellspannung von Pack 1
-    nennen statt der 0.0 V.
-    """
-    h = szenario(blueprint, zeit(tag, 10, 5), input_overrides=EIN_PACK)
-    e = h.inputs["vmax1_sensor"]
-    h.states.tabelle[e] = Zustand(e, "3.46")
-    ctx = h.auswerten(bis="top_balancing_noetig")
-    assert ctx["vmax2"] == 0.0
-    assert ctx["top_balancing_noetig"] is True
-    assert "3.46 V" in ctx["balancing_grund"] and "0.0 V" not in ctx["balancing_grund"]
-
-
-def test_kein_zellausgleich_wenn_pack_1_unter_der_schwelle_bleibt(blueprint, tag):
-    """Gegenprobe: der Ersatzwert 0.0 V loest fuer sich genommen nichts aus."""
-    ctx = szenario(blueprint, zeit(tag, 10, 5), input_overrides=EIN_PACK).auswerten(bis="top_balancing_noetig")
-    assert ctx["top_balancing_noetig"] is False
 
 
 # --------------------------------------------------------------------------
@@ -391,7 +368,7 @@ def test_slot_index_folgt_dem_trigger_nicht_der_uhr(blueprint, tag, trigger_hh, 
     mode: queued kann den Halbstundenlauf hinter andere Laeufe schieben. Der Slot,
     dessen Verbrauch verbucht wird, ist der vor der Trigger-Zeit - egal, wann der
     Lauf tatsaechlich rechnet. Sonst landet der Wert ab 15 Minuten Verzug im
-    falschen Slot des EMA-Profils, an dem Blockade und Prio 7 haengen.
+    falschen Slot des EMA-Profils, an dem Blockade und Prio 6 haengen.
     """
     trigger_zeit = zeit(tag, trigger_hh, trigger_mm)
     h = szenario(blueprint, trigger_zeit + dt.timedelta(minutes=verzug_min), trigger_id="update_json")
@@ -666,7 +643,7 @@ def test_ohne_prognose_morgen_bleibt_die_planung_aus(blueprint, tag):
     assert ctx["tou_schreiben"] is False
 
 
-def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
+def test_vollladung_faellig_hebt_das_ziel_auf_100(blueprint, tag):
     """Herbst-Lage, Batterie seit 12 Tagen nicht voll: Ziel 100 % -> Untergrenze 100 - 31,4 = 68,6 -> 65."""
     from conftest import fake_entity
     eid = fake_entity("json_tracking_sensor", "input_text")
@@ -674,9 +651,26 @@ def test_zellausgleich_faellig_hebt_das_ziel_auf_100(blueprint, tag):
     ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(15, 5, 5),
                    zustands_overrides={eid: Zustand(eid, liste)}).auswerten(bis="tou_schreiben")
     assert ctx["tage_seit_voll"] == 12
-    assert ctx["zellausgleich_faellig"] is True
+    assert ctx["vollladung_faellig"] is True
     assert ctx["ziel_soc_eff"] == 100
     assert ctx["f_soc"] == 65
+
+
+def test_vollladung_zaehlt_den_heutigen_volltag_sofort(blueprint, tag):
+    """
+    Dieselbe Lage, die Batterie war heute aber schon voll: Die Liste bekommt den Tag erst um 23:58,
+    der Abend plant trotzdem wieder auf 90 % -> Untergrenze 90 - 31,4 = 58,6 -> 55.
+    """
+    from conftest import fake_entity, standard_inputs
+    eid = fake_entity("json_tracking_sensor", "input_text")
+    voll = standard_inputs(blueprint)["helper_batterie_heute_voll"]
+    liste = json.dumps([(tag - dt.timedelta(days=d)).isoformat() for d in (12, 13, 14)])
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(15, 5, 5),
+                   zustands_overrides={eid: Zustand(eid, liste), voll: Zustand(voll, "on")}).auswerten(bis="tou_schreiben")
+    assert ctx["tage_seit_voll"] == 12
+    assert ctx["vollladung_faellig"] is False
+    assert ctx["ziel_soc_eff"] == 90
+    assert ctx["f_soc"] == 55
 
 
 # --------------------------------------------------------------------------
@@ -779,7 +773,7 @@ def test_schatten_unter_halbem_wechselrichterwert_bricht_warmwasser_nicht_ab(blu
 @pytest.mark.parametrize("export_w, soc, heute_voll, erwartet", [
     (7000, 99.0, "off", True),    # ueber der Schwelle und voll -> der Wechselrichter regelt ab
     (7000, 95.0, "off", False),   # ueber der Schwelle, aber Peak-Shaving kann noch aufnehmen
-    (7000, 95.0, "on", True),     # Tagesmarker gesetzt: Prio 5 laeuft nicht mehr an
+    (7000, 95.0, "on", True),     # Tagesmarker gesetzt: Prio 4 laeuft nicht mehr an
     (6000, 99.0, "off", False),   # voll, aber unter der Schwelle -> nichts zu verlieren
 ])
 def test_abregelung_nur_wenn_peak_shaving_nichts_mehr_auffangen_kann(blueprint, tag, export_w, soc, heute_voll, erwartet):

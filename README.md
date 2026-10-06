@@ -1,7 +1,7 @@
 # ha-pv-optimizer
 
 Home-Assistant-Blueprint für PV-Speicher mit Deye-Wechselrichter: Ladestrom nach Solcast-Prognose,
-Lastspitzen-Kappung, Zellausgleich, Wärmepumpen-Warmwasser-Boost und eine Entlade-Planung, die
+Lastspitzen-Kappung, Wärmepumpen-Warmwasser-Boost und eine Entlade-Planung, die
 nachts nur so tief entlädt, wie die nächsten Tage wieder auffüllen. Eine Automation je Standort,
 keine Zusatz-Software.
 
@@ -13,9 +13,9 @@ keine Zusatz-Software.
   hält eine Morgen-Blockade Platz dafür frei.
 - **Lastspitzen kappen.** Überschreitet die Netzeinspeisung die Schwelle, nimmt die Batterie den
   Überschuss auf; wahlweise heizt zuerst die Wärmepumpe Warmwasser.
-- **Zellausgleich über PV.** Bei erreichter Zellspannung wird der Ladestrom auf die Ausgleichs-Rate
-  gedrosselt, damit die Zellen oben genug Zeit zum Ausgleichen bekommen; nie aus dem Netz.
-  Die Erhaltungsspannung stellt der Wechselrichter selbst, der Blueprint schreibt keine Spannung.
+- **Voll ab 99 %.** Ab 99 % Ladestand gilt die Batterie für den Rest des Tages als voll. Den
+  Ladestrom am oberen Ende nimmt das BMS selbst zurück; der Blueprint lädt nie aus dem Netz und
+  schreibt keine Spannung.
 - **Entlade-Planung.** Die sechs ToU-Register des Wechselrichters bekommen nachts eine Untergrenze aus
   der Halbstunden-Bilanz der nächsten 72 Stunden: so tief, dass das Ziel (90 %) am Ende des besten
   Sonnentags wieder erreicht wird, aber nie so hoch, dass eingespeist würde, was das Haus nachts
@@ -56,7 +56,7 @@ eigene Solcast-Instanz führt, trägt in „Prognose heute“, „morgen“, „
 Sensoren aller Flächen ein; der Blueprint addiert sie Halbstunde für Halbstunde. Liegen alle Flächen
 in einer Instanz, addiert Solcast sie selbst, dann genügt ein Sensor je Feld.
 
-**Wallbox / evcc (Sektion 11):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
+**Wallbox / evcc (Sektion 10):** Die Autos laden zuerst, der Blueprint plant die Batterie mit dem
 Rest. Zwei optionale Felder mit Mehrfachauswahl aus der evcc-Integration: je Ladepunkt ein
 Utility-Meter über dessen Ladeenergie (bleibt aus dem Verbrauchsprofil heraus, Vorlage im Package)
 und je Ladepunkt der offene Ladebedarf „Charge Remaining Energy“ (geht vom heutigen PV-Überschuss
@@ -96,7 +96,7 @@ ein Teil des Hauses am Notstromausgang, zählt nur dieser Teil. Mit zugewiesenem
 Entlade-Planung eine **Notstromreserve**: Ohne Netz gelten die ToU-Programme nicht, der Deye entlädt im
 Inselbetrieb bis zu seinem „Battery Shutdown SOC“ (Sektion 2, optional; leer: 10 %). Die Untergrenze
 liegt deshalb nie unter diesem Ladestand plus dem größten Defizit der Notstromlast (samt Eigenverbrauch
-des Wechselrichters) gegen die P10-Prognose über den eingestellten Zeitraum (Sektion 10, Vorgabe 48 Stunden),
+des Wechselrichters) gegen die P10-Prognose über den eingestellten Zeitraum (Sektion 9, Vorgabe 48 Stunden),
 auf volle 5 % aufgerundet. Die
 Meldung der Untergrenze nennt Reserve und Defizit, die Aufzeichnung trägt `reserve_kwh`, `reserve_pct`
 und `reserve_bis`.
@@ -106,7 +106,7 @@ und `reserve_bis`.
 Jede Entscheidung schreibt eine Logbuch-Meldung nach dem Muster
 
 ```
-[V6.16.0 · 08:30:02] Prio 7 (Dynamische Ladung): Ladestrom von 200 A auf 36 A gesetzt (−164 A),
+[V7.0.0 · 08:30:02] Prio 6 (Dynamische Ladung): Ladestrom von 200 A auf 36 A gesetzt (−164 A),
 da Bedarf 12.6 kWh mit 33 A + 3 A Regelabweichung bis 1 h vor Ende des Ladefensters gedeckt
 wird (freie Ladekapazität 12.1 kWh von 20.5 kWh, Nachladebedarf 0.5 kWh für Stunden mit
 Hausverbrauch über PV).

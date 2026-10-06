@@ -159,7 +159,7 @@ def zweig_und_aktionen(h: Harness, blueprint: dict, ctx: dict | None = None,
 
 
 def zweig(h: Harness, blueprint: dict, ctx: dict | None = None) -> str | None:
-    """Nur die Prioritaet des gewinnenden Zweigs, z. B. 'PRIO 5'."""
+    """Nur die Prioritaet des gewinnenden Zweigs, z. B. 'PRIO 4'."""
     alias = zweig_und_aktionen(h, blueprint, ctx)[0]
     return alias.split(":")[0] if alias else None
 
