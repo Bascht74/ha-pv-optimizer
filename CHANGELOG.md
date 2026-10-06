@@ -17,6 +17,10 @@ Logbuch-Meldung trägt ihn.
   "Autos: offener Ladebedarf". A car that is not plugged in no longer counts: evcc reports its
   remaining energy from 0 % up to the charge limit, so an unplugged car held back the whole surplus
   the battery would have charged from. Left empty, every remaining energy counts as before.
+- The helper template moves the diagnostic recording aside every Monday shortly after midnight, as
+  one file per ISO week, so a single file no longer grows without limit and a finished week can be
+  fetched on its own. A site that already copied the template adds the `shell_command` and the
+  automation at its end; without them the recording keeps growing in one file as before.
 
 ## [V7.0.0] - 2026-10-06
 
