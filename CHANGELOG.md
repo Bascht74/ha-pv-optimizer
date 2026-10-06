@@ -30,6 +30,11 @@ Logbuch-Meldung trägt ihn.
 - The priorities after Prio 0 move up by one: Fall B is Prio 1, the timed top-up Prio 6, the
   emergency branch Prio 7. The input sections after section 7 move up by one as well, and the general
   ToU minimum moves to the charging-strategy section.
+- With "Schatten-BMS: Ladezustand SOC (%)" assigned, the backup reserve takes the inverter's shutdown
+  charge level as a level on the shadow scale instead of raising it by the gap between the two
+  readings. A BMS that holds its reported charge level near empty until the cell voltage drops lets
+  the inverter run down close to really empty in an outage, so the shift kept the night floor too
+  high by the whole gap on days without a full charge. Instances without the field are unaffected.
 
 ### Removed
 - Cell balancing (former Prio 1): the blueprint no longer throttles the charge current to the minimum
