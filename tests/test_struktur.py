@@ -136,6 +136,21 @@ def test_boost_start_verlangt_gueltigen_warmwasser_sensor(blueprint):
     raise AssertionError("WP-BOOST: START nicht gefunden")
 
 
+def test_halbstundenzaehler_werden_zurueckgesetzt_nie_kalibriert(blueprint):
+    """
+    Nur utility_meter.reset setzt last_reset, an dem der naechste Lauf einen frischen Stand
+    erkennt; calibrate laesst es stehen. Auch der Lauf, der bei ungueltigem Profil-Helfer
+    stoppt, setzt vorher zurueck, sonst laeuft der Zaehler bis Mitternacht auf.
+    """
+    assert "utility_meter.calibrate" not in str(blueprint["action"])
+    block = blueprint["action"][_schritt(blueprint, lambda s: "if" in s and "update_json" in str(s["if"]), "update_json-Zweig")]
+    ueberspringen = next(st for st in block["then"] if "if" in st and "not json_gueltig" in str(st["if"]))
+    aktionen = [str(a) for a in ueberspringen["then"]]
+    reset = next(i for i, a in enumerate(aktionen) if "utility_meter.reset" in a)
+    stop = next(i for i, a in enumerate(aktionen) if "'stop'" in a)
+    assert reset < stop
+
+
 def test_ampere_ersatzwerte_sind_einheitlich():
     """
     float()-Defaults auf Stromgroessen greifen nie, weil die Inputs Zahlenfelder

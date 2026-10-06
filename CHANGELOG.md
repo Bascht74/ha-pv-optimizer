@@ -44,6 +44,19 @@ Logbuch-Meldung trägt ihn.
   its duration and the full-battery voltage. Home Assistant ignores their leftover values; the package
   template no longer creates the timer or the `top_balancing` mode.
 
+### Fixed
+- A half-hourly meter that the previous half-hour run did not reset (first run of a new instance, a
+  missed run, a restart gap) holds hours or days of consumption, which the consumption and backup
+  profiles learned as one half hour; the backup profile's cold start filled every slot with it. The
+  meters are now reset with `utility_meter.reset`, and a reading counts only when that reset lies at
+  most 40 minutes back; otherwise the run resets the meter, learns the reading into neither profile
+  nor the grid-import sum of the hold and logs it. Existing instances discard one half hour once after
+  the update, because their meters were zeroed by calibration so far.
+- The half hour that is skipped for an invalid profile helper resets the meters as well, so they no
+  longer run up until the midnight rebuild; an unreadable house meter is no longer learned as zero.
+- "Solcast: Prognose heute" is a required field again: without it the run stops with the notice that
+  names missing fields, instead of planning the charge as if no PV were coming.
+
 ## [V6.18.0] - 2026-10-06
 
 ### Added

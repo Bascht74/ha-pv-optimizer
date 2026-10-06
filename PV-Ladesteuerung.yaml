@@ -1044,6 +1044,8 @@ action:
           hausverbrauch_liste: "{{ var_hausverbrauch_kwh if (var_hausverbrauch_kwh is iterable and var_hausverbrauch_kwh is not string) else ([var_hausverbrauch_kwh] if var_hausverbrauch_kwh else []) }}"
           var_wallbox_kwh: !input wallbox_kwh_sensor
           wallbox_liste: "{{ var_wallbox_kwh if (var_wallbox_kwh is iterable and var_wallbox_kwh is not string) else ([var_wallbox_kwh] if var_wallbox_kwh else []) }}"
+          np_sensor: !input notstrom_utility_sensor
+          np_liste: "{{ np_sensor if (np_sensor is iterable and np_sensor is not string) else ([np_sensor] if np_sensor else []) }}"
           # Die Halbstunde, die mit dem Trigger geendet hat: Trigger 14:00 -> Slot
           # 13:30-14:00, Index aus (Trigger - 15 Min). Basis ist trigger.now, nicht
           # now(): mode: queued kann den Lauf minutenlang verzoegern, der Zaehler
@@ -1078,11 +1080,20 @@ action:
           - condition: template
             value_template: "{{ not json_gueltig and not ist_mitternachtslauf }}"
         then:
+          # Zuruecksetzen auch hier: Sonst laeuft der Zaehler bis Mitternacht auf,
+          # und der Neuaufbau begaenne mit einem Stand ueber viele Halbstunden.
+          - if:
+              - condition: template
+                value_template: "{{ (hausverbrauch_liste + wallbox_liste + np_liste) | length > 0 }}"
+            then:
+              - action: utility_meter.reset
+                target:
+                  entity_id: "{{ hausverbrauch_liste + wallbox_liste + np_liste }}"
           - action: logbook.log
             data:
               name: "PV Optimizer"
               # json_str | string erzwingt String vor truncate (json_str kann Liste sein).
-              message: "{{ log_kopf }} Verbrauchsprofil: Aktuelle halbe Stunde übersprungen, da der gespeicherte Profilwert ungültig ist ('{{ json_str | string | truncate(30) }}'). Neuaufbau um Mitternacht."
+              message: "{{ log_kopf }} Verbrauchsprofil: Aktuelle halbe Stunde übersprungen und Zähler zurückgesetzt, da der gespeicherte Profilwert ungültig ist ('{{ json_str | string | truncate(30) }}'). Neuaufbau um Mitternacht."
               entity_id: !input helper_logbook_dummy
           - stop: "JSON-Slot übersprungen: Helfer ungültig, warte auf Wiederherstellung oder Mitternacht."
       - variables:
@@ -1092,18 +1103,64 @@ action:
             {% set ns = namespace(s=0.0) %}
             {% for e in wallbox_liste %}{% set ns.s = ns.s + (states(e) | float(0)) %}{% endfor %}
             {{ ns.s | round(4) }}
-          last_half_hour_kwh: >
+          haus_roh_kwh: >
             {% set ns = namespace(s=0.0) %}
             {% for e in hausverbrauch_liste %}{% set ns.s = ns.s + (states(e) | float(0)) %}{% endfor %}
-            {{ [ns.s - wallbox_slot_kwh, 0] | max }}
+            {{ ns.s | round(4) }}
+          last_half_hour_kwh: "{{ [haus_roh_kwh - wallbox_slot_kwh, 0] | max }}"
+          # Notstromlast hier gelesen, vor jedem Zuruecksetzen; none, wenn ein Zaehler
+          # keine Zahl liefert.
+          np_kwh: >
+            {% set ns = namespace(s=0.0, ok=np_liste | length > 0) %}
+            {% for e in np_liste %}
+              {% set v = states(e) | float(none) %}
+              {% if v is none %}{% set ns.ok = false %}{% else %}{% set ns.s = ns.s + v %}{% endif %}
+            {% endfor %}
+            {{ (ns.s | round(4)) if ns.ok else none }}
+          # Ein Zaehlerstand zaehlt nur, wenn der vorige Halbstundenlauf den Zaehler
+          # zurueckgesetzt hat: dann liegt last_reset hoechstens 30 Minuten zurueck, 40
+          # lassen Spielraum. Vor dem ersten Lauf oder nach einem ausgefallenen Lauf traegt
+          # er Stunden bis Tage, die sonst als eine Halbstunde gelernt wuerden.
+          haus_lesbar: >
+            {% set ns = namespace(ok=hausverbrauch_liste | length > 0) %}
+            {% for e in hausverbrauch_liste %}{% if states(e) | float(none) is none %}{% set ns.ok = false %}{% endif %}{% endfor %}
+            {{ ns.ok }}
+          haus_zaehler_alter_min: >
+            {% set ns = namespace(m=0) %}
+            {% for e in hausverbrauch_liste if states(e) | float(none) is not none %}
+              {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
+              {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
+            {% endfor %}
+            {{ ns.m | round(0) | int }}
+          # Ein Wallbox-Zaehler ohne Wert zaehlt 0 und haelt das Lernen nicht auf.
+          wallbox_zaehler_alter_min: >
+            {% set ns = namespace(m=0) %}
+            {% for e in wallbox_liste if states(e) | float(none) is not none %}
+              {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
+              {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
+            {% endfor %}
+            {{ ns.m | round(0) | int }}
+          haus_zaehler_frisch: "{{ haus_lesbar and haus_zaehler_alter_min <= 40 and wallbox_zaehler_alter_min <= 40 }}"
+          np_zaehler_alter_min: >
+            {% set ns = namespace(m=0) %}
+            {% for e in np_liste %}
+              {% set t = as_timestamp(state_attr(e, 'last_reset'), none) %}
+              {% set ns.m = [ns.m, ((as_timestamp(trigger.now) - t) / 60) if t is not none else 1000000] | max %}
+            {% endfor %}
+            {{ ns.m | round(0) | int }}
+          np_zaehler_frisch: "{{ np_kwh is not none and np_zaehler_alter_min <= 40 }}"
           # KALTSTART-WERT: geclampter Messwert (0.05-0.6 kWh), schützt vor Ausreißer-Vergiftung.
-          # Greift nur noch beim Mitternachts-Lauf mit ungültigem Helfer (siehe Gate oben).
+          # Greift nur noch beim Mitternachts-Lauf mit ungültigem Helfer (siehe Gate oben);
+          # ein alter Zaehlerstand fliesst darueber hinaus nicht ein.
           kaltstart_kwh: "{{ [[last_half_hour_kwh, 0.05] | max, 0.6] | min }}"
+          # Nur ein lesbarer Stand gilt als verworfen; ein ausgefallener Zaehler bleibt still.
+          haus_alt: "{{ haus_lesbar and not haus_zaehler_frisch }}"
+          np_alt_stand: "{{ np_kwh is not none and not np_zaehler_frisch }}"
           default_arr: "{{ [kaltstart_kwh] * 48 }}"
           current_array: >
             {{ json_str if json_ist_liste else (json_str | from_json if json_gueltig else default_arr) }}
           # Der 7-Tage Exponential Moving Average (EMA) auf kWh-Basis
-          new_val: "{{ (current_array[h_index] * (6/7)) + (last_half_hour_kwh * (1/7)) }}"
+          new_val: "{{ ((current_array[h_index] * (6/7)) + (last_half_hour_kwh * (1/7))) if haus_zaehler_frisch else current_array[h_index] }}"
           new_array: >
             {% set ns = namespace(arr=[]) %}
             {% for i in range(48) %}
@@ -1122,24 +1179,34 @@ action:
           entity_id: !input hausverbrauch_json_text
         data:
           value: "{{ new_array }}"
+      # reset statt calibrate: Nur reset setzt last_reset, und daran erkennt der
+      # naechste Lauf, dass der Stand genau eine Halbstunde umfasst.
       - if:
           - condition: template
-            value_template: "{{ hausverbrauch_liste | length > 0 }}"
+            value_template: "{{ (hausverbrauch_liste + wallbox_liste) | length > 0 }}"
         then:
-          - action: utility_meter.calibrate
+          - action: utility_meter.reset
             target:
-              entity_id: "{{ hausverbrauch_liste }}"
-            data:
-              value: "0"
+              entity_id: "{{ hausverbrauch_liste + wallbox_liste }}"
       - if:
           - condition: template
-            value_template: "{{ wallbox_liste | length > 0 }}"
+            value_template: "{{ haus_alt or np_alt_stand }}"
         then:
-          - action: utility_meter.calibrate
-            target:
-              entity_id: "{{ wallbox_liste }}"
+          - variables:
+              verworfen_details: >-
+                {%- macro alter(m) -%}
+                  {%- if m >= 1000000 -%}nie zurückgesetzt{%- elif m >= 2880 -%}zuletzt zurückgesetzt vor {{ (m / 1440) | round(0) | int }} Tagen{%- elif m >= 120 -%}zuletzt zurückgesetzt vor {{ (m / 60) | round(0) | int }} Std{%- else -%}zuletzt zurückgesetzt vor {{ m }} Min{%- endif -%}
+                {%- endmacro -%}
+                {%- set teile = [] -%}
+                {%- if haus_alt and haus_zaehler_alter_min > 40 -%}{%- set teile = teile + ['Hausverbrauch ' ~ '%.2f' | format(haus_roh_kwh) ~ ' kWh, ' ~ alter(haus_zaehler_alter_min)] -%}{%- endif -%}
+                {%- if haus_alt and wallbox_zaehler_alter_min > 40 -%}{%- set teile = teile + ['Wallbox ' ~ '%.2f' | format(wallbox_slot_kwh) ~ ' kWh, ' ~ alter(wallbox_zaehler_alter_min)] -%}{%- endif -%}
+                {%- if np_alt_stand -%}{%- set teile = teile + ['Notstromlast ' ~ '%.2f' | format(np_kwh) ~ ' kWh, ' ~ alter(np_zaehler_alter_min)] -%}{%- endif -%}
+                {{ teile | join('; ') }}
+          - action: logbook.log
             data:
-              value: "0"
+              name: "PV Optimizer"
+              message: "{{ log_kopf }} {{ 'Verbrauchs- und Notstromprofil' if (haus_alt and np_alt_stand) else ('Verbrauchsprofil' if haus_alt else 'Notstromprofil') }}: Halbstunde ab {{ '%02d:%02d' | format(h_index // 2, (h_index % 2) * 30) }} Uhr nicht gelernt, Zähler zurückgesetzt. Zählerstand verworfen, da letzte Rücksetzung länger als 40 Min her ({{ verworfen_details }})."
+              entity_id: !input helper_logbook_dummy
       # TEMPERATURPROFIL (nur Aufzeichnung): gleitender Mittelwert der Aussentemperatur
       # je Halbstunde, gespeichert in ganzen Zehntelgrad, damit 48 Werte samt
       # Minuszeichen in die 255 Zeichen des input_text passen.
@@ -1172,11 +1239,9 @@ action:
               value: "{{ tp_neu }}"
       # NOTSTROMPROFIL: Energie am Notstromausgang je Halbstunde, gleitender Mittelwert
       # in ganzen Wattstunden (48 Werte passen so in die 255 Zeichen). Der Zaehler wird
-      # wie der Hausverbrauch je Halbstunde genullt. Grundlage der Notstromreserve.
+      # wie der Hausverbrauch je Halbstunde zurueckgesetzt. Grundlage der Notstromreserve.
       - variables:
-          np_sensor: !input notstrom_utility_sensor
           np_helfer: !input notstrom_json_text
-          np_kwh: "{{ (states(np_sensor) | float(none)) if np_sensor != '' else none }}"
           np_alt: >
             {% set j = states(np_helfer) if np_helfer != '' else '' %}
             {% if j is not string and j is iterable and j | length == 48 %}{{ j | list }}
@@ -1184,16 +1249,14 @@ action:
             {% else %}[]{% endif %}
       - if:
           - condition: template
-            value_template: "{{ np_sensor != '' and np_kwh is not none }}"
+            value_template: "{{ np_kwh is not none }}"
         then:
-          - action: utility_meter.calibrate
+          - action: utility_meter.reset
             target:
-              entity_id: "{{ np_sensor }}"
-            data:
-              value: "0"
+              entity_id: "{{ np_liste }}"
       - if:
           - condition: template
-            value_template: "{{ np_helfer != '' and np_kwh is not none }}"
+            value_template: "{{ np_helfer != '' and np_kwh is not none and np_zaehler_frisch }}"
         then:
           - variables:
               np_neu: >
@@ -1315,7 +1378,8 @@ action:
             data:
               message: >-
                 {{ {'zeit': now().isoformat(), 'version': bp_version, 'kennung': lauf_kennung, 'art': 'slot', 'h_index': h_index,
-                    'slot_kwh': last_half_hour_kwh | round(3), 'wallbox_kwh': wallbox_slot_kwh | round(3), 'notstrom_kwh': np_kwh, 'halten': hb_lage,
+                    'slot_kwh': (last_half_hour_kwh | round(3)) if haus_zaehler_frisch else none, 'wallbox_kwh': (wallbox_slot_kwh | round(3)) if haus_zaehler_frisch else none,
+                    'notstrom_kwh': np_kwh if np_zaehler_frisch else none, 'halten': hb_lage,
                     'aussen_temp': tp_mess, 'aussen_temp_mittel': tp_mittel, 'soc': hb_soc_roh if hb_soc_gueltig else none,
                     'soc_versatz': hb_versatz | round(2),
                     'tou_ist': hb_tou_soll | round(2), 'zurueckgehalten_kwh': hb_zurueck_kwh | round(3),
@@ -1325,13 +1389,13 @@ action:
             value_template: "{{ hb_haelt }}"
         then:
           - variables:
-              hb_neu: "{{ [((states(hb_helfer) | float(0)) + last_half_hour_kwh), hb_zurueck_kwh] | min | round(3) }}"
+              hb_neu: "{{ [((states(hb_helfer) | float(0)) + (last_half_hour_kwh if haus_zaehler_frisch else 0)), hb_zurueck_kwh] | min | round(3) }}"
           - action: input_number.set_value
             target:
               entity_id: "{{ hb_helfer }}"
             data:
               value: "{{ hb_neu }}"
-      - stop: "JSON-Hausverbrauchsprofil (kWh) aktualisiert und Zähler genullt."
+      - stop: "JSON-Hausverbrauchsprofil (kWh) aktualisiert und Zähler zurückgesetzt."
 
   # ====================================================================
   # KASKADIERTE VARIABLEN FÜR DIE HAUPTSTEUERUNG
@@ -1473,6 +1537,8 @@ action:
   # ====================================================================
   - variables:
       pflichtfelder_fehlend: >
+        {# Ohne Prognose fuer heute rechnet die Ladeplanung still mit null PV. Die
+           Mehrfachauswahl kommt als Liste und zaehlt erst leer als fehlend. #}
         {% set pflicht = [
              ('Ladezustand SOC (%)', var_battery_soc),
              ('Batterie-Leistung (W)', var_battery_power),
@@ -1480,6 +1546,7 @@ action:
              ('Netz-Leistung (W)', var_grid_export),
              ('Netz-Einspeisung heute (kWh)', var_grid_export_kwh),
              ('PV-Erzeugung heute (kWh)', pv_erzeugung_liste | join(',')),
+             ('Solcast: Prognose heute (mit Array)', solcast_heute_liste | join(',')),
              ('Hausverbrauch halbstündlich (kWh)', hausverbrauch_liste | join(',')),
              ('Helfer: Verbrauchsprofil (JSON)', var_hausverbrauch_json),
              ('Helfer: höchster SOC heute (%)', var_max_soc_heute),
