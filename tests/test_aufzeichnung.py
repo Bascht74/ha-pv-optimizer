@@ -79,7 +79,7 @@ def test_aufzeichnung_erfasst_jeden_input(blueprint, tag):
     # Die Attribute, die der Blueprint liest, sind dabei.
     je_input = {e["input"]: e for e in aufz["entitaeten"]}
     assert len(je_input["solcast_heute_sensor"]["attributes"]["detailedForecast"]) == 48
-    assert "estimate10" in je_input["solcast_next_hour_sensor"]["attributes"]
+    assert "estimate10" in je_input["solcast_morgen_sensor"]["attributes"]
     assert "temperature" in je_input["wp_water_heater"]["attributes"]
     assert aufz["sun"] == "above_horizon"
     assert aufz["trigger"] == "monitoring_5min"
