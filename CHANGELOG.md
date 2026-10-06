@@ -13,13 +13,18 @@ Logbuch-Meldung trägt ihn.
 ## [V6.17.0] - 2026-10-06
 
 ### Removed
-- The four required fields "PV-Leistung geglättet (W)", "Solcast: aktuelle Leistung (W)",
-  "Solcast: verbleibende Leistung heute (kWh)" and "Solcast: Prognose nächste Stunde (kWh)". No
-  decision read them; the charge planning takes every forecast value from the half-hour array of
-  "Solcast: Prognose heute". Their descriptions promised effects the code did not have, such as
-  calmer control with a smoothed value. Instances keep running; the leftover entries are ignored.
-- The helper template no longer ships the smoothed PV power sensor, which only fed the removed
-  field.
+- The four required fields "PV-Leistung geglättet (W)", "Solcast: aktuelle Leistung (W)", "Solcast:
+  verbleibende Leistung heute (kWh)" and "Solcast: Prognose nächste Stunde (kWh)". No decision read
+  them; the charge planning takes its forecast from "Solcast: Prognose heute (mit Array)". Leftover
+  entries are ignored, and an instance that left one empty no longer stops at the startup check.
+- The helper template no longer offers the smoothed PV power sensor "PV Power Geglättet", which only
+  fed the removed field. A site that copied it from the template can delete it.
+
+### Fixed
+- The helper template counts the half-hourly house consumption from a Riemann sum of the total load
+  power instead of the inverter's daily counter, which refreshes only every ten minutes in 0.1 kWh
+  steps and so read stale or 0 late in a half hour. A site that copied the template adds the sensor
+  over "Load Power" and points the meter's `source:` at it.
 
 ## [V6.16.1] - 2026-09-25
 

@@ -159,7 +159,7 @@ blueprint:
           default: 10
           selector: {"number": {"min": 2, "max": 50, "step": 1, "unit_of_measurement": "A"}}
     sec_net_pv:
-      name: "3 – Netz & PV-Leistung (Pflicht)"
+      name: "3 – Netz, PV & Verbrauch (Pflicht)"
       description: >-
         Messwerte für Netzbezug/-einspeisung, die PV-Erzeugung des Tages und den Hausverbrauch.
         Leer bleiben dürfen: Notstromlast (nur für die Notstromreserve) sowie Außentemperatur und Wetter-Prognose (nur für die Aufzeichnung).
