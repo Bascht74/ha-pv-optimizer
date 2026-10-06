@@ -52,7 +52,9 @@
 #   1. Verzeichnis /config/pv_optimizer anlegen (Samba, Datei-Editor, SSH) und
 #      erst dann in configuration.yaml freigeben, weil die Pruefung auf ein
 #      vorhandenes Verzeichnis testet und sonst den ganzen homeassistant:-Block
-#      abweist. Danach neu starten:
+#      abweist. Direkt in configuration.yaml, nicht in einem Package: aus dem
+#      homeassistant:-Abschnitt eines Package uebernimmt Home Assistant nur
+#      customize und ignoriert den Rest stillschweigend. Danach neu starten:
 #        homeassistant:
 #          allowlist_external_dirs:
 #            - /config/pv_optimizer
