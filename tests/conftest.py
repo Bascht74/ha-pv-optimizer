@@ -179,6 +179,8 @@ def szenario(
         z("wp_temp_sensor", 48.0), z("wp_water_heater", "heat", {"temperature": 50}),
         z("wp_kompressor_sensor", "off"), z("wp_ziel_temp_number", 50), z("wp_hysterese_number", 10),
         z("wp_boost_button", "unknown"),
+        # Wallbox: Auto angesteckt, damit ein gesetzter Restbedarf zaehlt
+        z("ev_verbunden_sensor", "on"),
         # Helfer
         z("helper_lade_modus", "normal"), z("helper_logbook_dummy", ""),
         z("helper_batterie_heute_voll", "off"), z("helper_blockade_beendet", "off"),

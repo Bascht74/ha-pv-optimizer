@@ -1229,6 +1229,20 @@ def test_auto_bedarf_geht_vom_ueberschuss_der_ersten_slots_ab(blueprint, tag):
     zwei = szenario(blueprint, zeit(tag, 10, 0), input_overrides={"ev_restbedarf_sensor": [e, e2, "sensor.gibt_es_nicht"]},
                     zustands_overrides={e: Zustand(e, "5.0"), e2: Zustand(e2, "2.5")}).auswerten(bis="ev_bedarf_kwh")
     assert zwei["ev_bedarf_kwh"] == 7.5
+    # Mit "angesteckt" zaehlt nur der Bedarf verbundener Autos; ohne Partner an
+    # dieser Stelle der Liste zaehlt der Bedarf wie bisher.
+    v1, v2 = "binary_sensor.ladepunkt_1_verbunden", "binary_sensor.ladepunkt_2_verbunden"
+    basis = {e: Zustand(e, "5.0"), e2: Zustand(e2, "2.5")}
+    for verbunden, zustaende, erwartet in [
+        ([v1, v2], {v1: "on", v2: "off"}, 5.0),
+        ([v1, v2], {v1: "off", v2: "off"}, 0.0),
+        ([v1, v2], {v1: "unavailable", v2: "on"}, 2.5),
+        ([v1], {v1: "off"}, 2.5),
+    ]:
+        r = szenario(blueprint, zeit(tag, 10, 0),
+                     input_overrides={"ev_restbedarf_sensor": [e, e2], "ev_verbunden_sensor": verbunden},
+                     zustands_overrides={**basis, **{k: Zustand(k, z) for k, z in zustaende.items()}}).auswerten(bis="ev_bedarf_kwh")
+        assert r["ev_bedarf_kwh"] == erwartet, (verbunden, zustaende)
 
 
 def test_wallbox_ladung_bleibt_aus_profil_und_live_anschluss(blueprint, tag):

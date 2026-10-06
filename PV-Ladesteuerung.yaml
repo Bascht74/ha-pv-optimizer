@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.0.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.1.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -546,6 +546,12 @@ blueprint:
             Je Ladepunkt die Energie, die das angesteckte Auto bis zu seinem Ladeziel noch aufnimmt (evcc: „Charge Remaining Energy“). Mehrere auswählbar, die Werte werden addiert und gehen vom heutigen PV-Überschuss ab, bevor die Batterie eingeplant wird.
           default: []
           selector: {"entity": {"domain": "sensor", "multiple": true}}
+        ev_verbunden_sensor:
+          name: "Autos: angesteckt"
+          description: >-
+            Je Ladepunkt der Sensor, ob ein Auto angesteckt ist (evcc: „Connected“), in derselben Reihenfolge wie der offene Ladebedarf. Ein abgestecktes Auto zählt dann nicht, denn evcc meldet für es einen Bedarf ab 0 %. Leer: jeder Bedarf zählt.
+          default: []
+          selector: {"entity": {"domain": "binary_sensor", "multiple": true}}
         optimizer_url:
           name: "evcc-Optimizer: Adresse (optional)"
           description: >-
@@ -690,7 +696,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.0.0]"
+      bp_version: "[V7.1.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1321,6 +1327,7 @@ action:
       var_hausverbrauch_kwh: !input hausverbrauch_utility_sensor
       var_wallbox_kwh: !input wallbox_kwh_sensor
       var_ev_restbedarf: !input ev_restbedarf_sensor
+      var_ev_verbunden: !input ev_verbunden_sensor
       var_aussentemperatur: !input aussentemperatur_sensor
       var_temperatur_json: !input temperatur_json_text
       var_notstrom_kwh: !input notstrom_utility_sensor
@@ -1331,6 +1338,7 @@ action:
       # Mehrfachauswahl liefert eine Liste, ein leeres Feld je nach HA-Version "" oder [].
       wallbox_liste: "{{ var_wallbox_kwh if (var_wallbox_kwh is iterable and var_wallbox_kwh is not string) else ([var_wallbox_kwh] if var_wallbox_kwh else []) }}"
       ev_liste: "{{ var_ev_restbedarf if (var_ev_restbedarf is iterable and var_ev_restbedarf is not string) else ([var_ev_restbedarf] if var_ev_restbedarf else []) }}"
+      ev_verbunden_liste: "{{ var_ev_verbunden if (var_ev_verbunden is iterable and var_ev_verbunden is not string) else ([var_ev_verbunden] if var_ev_verbunden else []) }}"
       wetter_liste: "{{ var_wetter_prognose if (var_wetter_prognose is iterable and var_wetter_prognose is not string) else ([var_wetter_prognose] if var_wetter_prognose else []) }}"
       var_battery_power: !input battery_power_sensor
       var_pv_erzeugung_heute: !input pv_erzeugung_heute_sensor
@@ -1824,9 +1832,13 @@ action:
   - variables:
       # Offener Ladebedarf der Autos (kWh). Sie laden zuerst: der Ueberschuss der
       # naechsten Slots geht an sie, bis er gedeckt ist, erst der Rest an die Batterie.
+      # Ein abgestecktes Auto zaehlt nicht: evcc rechnet dessen Bedarf ab 0 %.
       ev_bedarf_kwh: >
         {% set ns = namespace(s=0.0) %}
-        {% for e in ev_liste %}{% set ns.s = ns.s + ([states(e) | float(0), 0] | max) %}{% endfor %}
+        {% for e in ev_liste %}
+          {% set v = ev_verbunden_liste[loop.index0] if loop.index0 < ev_verbunden_liste | length else '' %}
+          {% if v == '' or is_state(v, 'on') %}{% set ns.s = ns.s + ([states(e) | float(0), 0] | max) %}{% endif %}
+        {% endfor %}
         {{ ns.s | round(3) }}
       slot_daten: >
         {% set ns = namespace(alle=[], ev=ev_bedarf_kwh | float(0)) %}
@@ -2812,6 +2824,7 @@ action:
         {% set nse = namespace(l=ents) %}
         {% for x in wallbox_liste %}{% set nse.l = nse.l + [('wallbox_kwh_sensor', x, {})] %}{% endfor %}
         {% for x in ev_liste %}{% set nse.l = nse.l + [('ev_restbedarf_sensor', x, {})] %}{% endfor %}
+        {% for x in ev_verbunden_liste %}{% set nse.l = nse.l + [('ev_verbunden_sensor', x, {})] %}{% endfor %}
         {% for x in wetter_liste %}{% set nse.l = nse.l + [('wetter_prognose_entities', x, {})] %}{% endfor %}
         {% set ns = namespace(liste=[]) %}
         {% for name, e, attrs in nse.l if e != '' %}
