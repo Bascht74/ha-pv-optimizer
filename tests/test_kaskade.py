@@ -40,12 +40,6 @@ def _z(blueprint: dict, name: str, wert: str, **kw) -> dict:
 # Je Zweig ein Szenario. Der Kommentar nennt die Bedingung, die ihn gewinnen
 # laesst - nicht die Zahlen, die dabei herauskommen.
 # --------------------------------------------------------------------------
-def p0_temperaturdeckel(blueprint, tag):
-    """Kalte Zellen senken die zulaessige Laderate unter den Sollwert."""
-    ov = {**_z(blueprint, "bms1_temp_min_sensor", "12.0"), **_z(blueprint, "bms2_temp_min_sensor", "12.0")}
-    return szenario(blueprint, zeit(tag, 12, 0), ladestrom=200.0, zustands_overrides=ov)
-
-
 def p1_fall_b(blueprint, tag):
     """Niedriger Ladestand: die Restzeit reicht nicht, der Strom wird aufgerissen."""
     return szenario(blueprint, zeit(tag, 12, 0), soc=40.0)
@@ -85,7 +79,6 @@ def p7_notbetrieb(blueprint, tag):
 
 
 ZWEIGE = [
-    ("PRIO 0", p0_temperaturdeckel),
     ("PRIO 1", p1_fall_b),
     ("PRIO 2", p2_wp_anlaufsperre),
     ("PRIO 3", p3_wp_kompressor),
@@ -227,16 +220,6 @@ def test_jeder_zweig_ist_abgedeckt(blueprint, tag):
 # --------------------------------------------------------------------------
 # Was der gewinnende Zweig an den Wechselrichter schreibt
 # --------------------------------------------------------------------------
-def test_temperaturdeckel_schreibt_die_laderate(blueprint, tag):
-    """Prio 0 setzt genau den Temperaturdeckel, nicht den Sollwert des Zweigs darunter."""
-    h = p0_temperaturdeckel(blueprint, tag)
-    ctx = h.auswerten()
-    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 0")
-    assert schreibt(aktionen) == [ctx["temperatur_limit_ampere"]]
-    assert ctx["temperatur_limit_ampere"] < ctx["max_ampere"]
-
-
 def test_fall_b_reisst_auf_das_maximum_auf(blueprint, tag):
     h = p1_fall_b(blueprint, tag)
     ctx = h.auswerten()
@@ -390,7 +373,7 @@ def test_prio6_schwellen_fuer_anheben_und_absenken(blueprint, tag, soc, ist, min
 def test_kippstelle_von_fall_b_in_der_kaskade(blueprint, tag, soc, prio, strom, text):
     """
     Die Lage aus test_kippstelle_von_fall_b: knapp darueber reisst Prio 1 auf das Maximum
-    350 A auf (bei 22 Grad kein Temperaturdeckel), knapp darunter regelt Prio 6. Deren
+    350 A auf, knapp darunter regelt Prio 6. Deren
     Zielstrom: bis 1 h vor Fensterende kommen hoechstens 4 x 0,8 = 3,2 kWh an, zu wenig fuer
     3,57 kWh; im vollen Fenster 3,57 / (6 x 0,0256) = 23,2 -> 24 A, + 2 A.
     """
@@ -502,35 +485,6 @@ def test_blockade_ende_schiebt_es_nicht_auf_die_prognose(blueprint, tag):
     meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
     assert "da keine Einspeisespitze mehr zu erwarten ist: höchste erwartete Netzeinspeisung" in meldung, meldung
     _spitze_im_text(meldung, ctx)
-
-
-@pytest.mark.parametrize("temp, strom, genannt", [
-    ("22.0", 14, False),   # kein Deckel
-    ("12.0", 14, False),   # Deckel 188 A liegt unter dem Maximum, aber weit ueber dem Sollwert
-    ("3.0", 10, True),     # Deckel 10 A unter dem Sollwert 14 A: er begrenzt
-])
-def test_temperaturdeckel_nur_genannt_wenn_er_begrenzt(blueprint, tag, temp, strom, genannt):
-    """
-    Die Szene aus test_prio6_meldung_ohne_ladevorlauf (Sollwert 14 A) und Prio 4 mit 25 A: Der
-    Deckel steht nur in der Meldung, wenn er den geschriebenen Wert kleiner macht - ein Deckel
-    unter dem Maximum allein erklaert keinen Sollwert, der weit darunter liegt.
-    """
-    from conftest import prognose
-    kalt = {**_z(blueprint, "bms1_temp_min_sensor", temp), **_z(blueprint, "bms2_temp_min_sensor", temp)}
-    e = fake_entity("pv_erzeugung_heute_sensor", "sensor")  # Realitaets-Check kuerzt nicht
-    h = szenario(blueprint, zeit(tag, 10, 0), soc=85.0, ladestrom=0, forecast=prognose(tag, [3.0] * 20, dt.time(8, 0), p10_anteil=1.0),
-                 profil_kwh=0.2, zustands_overrides={e: Zustand(e, "999"), **kalt}, input_overrides={"ladevorlauf_stunden": "00:00:00"})
-    alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 6") and schreibt(aktionen) == [strom]
-    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
-    assert ("Begrenzung durch Batterietemperatur" in meldung) is genannt, meldung
-
-    ov = {**_z(blueprint, "helper_timer_peak", "active"), **_z(blueprint, "grid_export_sensor", "-8000"), **kalt}
-    h = szenario(blueprint, zeit(tag, 12, 0), soc=84.0, ladestrom=0, zustands_overrides=ov)
-    alias, aktionen = zweig_und_aktionen(h, blueprint)
-    assert alias.startswith("PRIO 4") and schreibt(aktionen) == [10 if genannt else 25]
-    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
-    assert ("Durch die Batterietemperatur auf" in meldung) is genannt, meldung
 
 
 # --------------------------------------------------------------------------
@@ -681,7 +635,7 @@ def test_nicht_voll_hinweis_nennt_die_ueberfaellige_vollladung(blueprint, tag):
     ohne = szenario(blueprint, zeit(tag, 18, 30), soc=60.0, trigger_id="sunset_check", prognose_tage_kwh=None, zustands_overrides=zs)
     _, aktionen = zweig_und_aktionen(ohne, blueprint, zweige=zweige)
     assert "98 % < 99 %. Bitte die Auslegung prüfen." in schreibt(aktionen, "persistent_notification.create")[0]
-    angelegt = [i for i in _benachrichtigungs_ids(blueprint["action"], "persistent_notification.create") if i not in ("bms_offline_warning", "soc_fehlt_warning")]
+    angelegt = [i for i in _benachrichtigungs_ids(blueprint["action"], "persistent_notification.create") if i != "soc_fehlt_warning"]
     assert angelegt == ["batterie_nicht_voll"]
     assert _benachrichtigungs_ids(_voll_marker(blueprint), "persistent_notification.dismiss") == ["batterie_nicht_voll"]
 
@@ -920,18 +874,6 @@ def test_notbetrieb_wartet_einen_aussetzer_ab(blueprint, tag):
     ctx = h.auswerten()
     assert ctx["soc_fehlt"] is True and ctx["soc_fehlt_bestaetigt"] is False
     assert zweig_und_aktionen(h, blueprint, ctx) == (None, [])
-
-
-def test_notbetrieb_bleibt_unter_der_temperaturgrenze(blueprint, tag):
-    """Kalte Zellen: Prio 7 laedt nur bis zum Temperaturdeckel, nicht bis zum Maximum."""
-    ov = {**_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=zeit(tag, 11, 0)),
-          **_z(blueprint, "bms1_temp_min_sensor", "12.0"), **_z(blueprint, "bms2_temp_min_sensor", "12.0")}
-    h = szenario(blueprint, zeit(tag, 12, 0), ladestrom=10.0, zustands_overrides=ov)
-    ctx = h.auswerten()
-    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx)
-    assert alias.startswith("PRIO 7")
-    assert schreibt(aktionen) == [ctx["temperatur_limit_ampere"]]
-    assert 10 < ctx["temperatur_limit_ampere"] < ctx["max_ampere"]
 
 
 def test_notbetrieb_endet_mit_voller_batterie(blueprint, tag):

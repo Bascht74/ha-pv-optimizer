@@ -10,6 +10,30 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V8.0.0] - 2026-10-06
+
+### Added
+- "Anzahl Packs" (section 1): the number of packs of the configured pack capacity. The battery
+  capacity behind demand, Fall B and discharge planning is pack capacity times this number; until now
+  the blueprint counted the packs from the assigned cell-temperature fields, which are gone. The
+  default 0 means "not entered": the startup check then stops the run and names the field, so an
+  instance cannot silently plan with a fraction of its battery.
+
+### Changed
+- Fall B, the sunset and midnight runs and the emergency branch without state of charge always write
+  the configured maximum charge current, and Prio 6 and peak shaving are capped by it alone. The input
+  sections after section 7 move up by one.
+- The diagnostic recording carries `anzahl_packs` in `konfiguration`; the cell temperatures, the
+  charge rates, `notfall_ampere`, `temperatur_limit_ampere` and `target_p0` are no longer recorded.
+
+### Removed
+- The charge-current limit by cell temperature (former Prio 0): the blueprint no longer derives a
+  charge rate from the coldest and warmest cell, so protection at low and high cell temperatures is
+  left to the BMS. With it go the six cell-temperature fields and the eight charge-rate fields, the
+  cap, notice and log line for BMS sensors that are offline, its input "Max. Ladestrom bei
+  BMS-Ausfall", and the morning blockade's exception for that case. Home Assistant ignores the
+  leftover values.
+
 ## [V7.0.0] - 2026-10-06
 
 ### Added
@@ -1088,7 +1112,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V8.0.0...HEAD
+[V8.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...V8.0.0
 [V7.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...V7.0.0
 [V6.18.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.17.0...V6.18.0
 [V6.17.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.16.1...V6.17.0

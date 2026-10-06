@@ -160,7 +160,7 @@ def test_ampere_ersatzwerte_sind_einheitlich():
     der konfigurierte Maximalstrom, damit er kein Anheben ausloest.
     """
     text = BLUEPRINT_PFAD.read_text(encoding="utf-8")
-    treffer = re.findall(r"(max_ampere|peak_ampere|temperatur_limit_ampere|states\(var_wr_max_charge\))\s*\|\s*(?:float|int)\(([^)]*)\)", text)
+    treffer = re.findall(r"(max_ampere|peak_ampere|states\(var_wr_max_charge\))\s*\|\s*(?:float|int)\(([^)]*)\)", text)
     erlaubt = {("max_ampere", "140"), ("peak_ampere", "48"), ("states(var_wr_max_charge)", "max_ampere")}
     falsch = sorted({t for t in treffer if t not in erlaubt})
     assert falsch == [], falsch
