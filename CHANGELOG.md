@@ -10,6 +10,14 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.1.1] - 2026-10-06
+
+### Fixed
+- A car's remaining energy counts only when its charge point has both "Autos: offener Ladebedarf"
+  and "Autos: angesteckt" assigned and the car is plugged in. Without the plugged-in sensor the
+  blueprint cannot tell an unplugged car, whose remaining energy evcc reports from 0 %, from a
+  waiting one, so a remaining energy without its partner no longer holds back the battery's surplus.
+
 ## [V7.1.0] - 2026-10-06
 
 ### Added
@@ -1123,7 +1131,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...HEAD
+[V7.1.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.0...V7.1.1
 [V7.1.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...V7.1.0
 [V7.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...V7.0.0
 [V6.18.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.17.0...V6.18.0
