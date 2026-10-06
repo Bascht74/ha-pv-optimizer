@@ -591,18 +591,18 @@ def test_registerwert_wird_dem_wandernden_versatz_nachgezogen(blueprint, tag):
     assert naeher["tou_schreiben"] is True and naeher["tou_schreibwert"] == 53
 
 
-def test_notstromreserve_rechnet_den_abschaltwert_zurueck(blueprint, tag):
+def test_notstromreserve_nimmt_den_abschaltwert_ohne_versatz(blueprint, tag):
     """
-    Der Abschalt-Ladestand gilt am BMS des Wechselrichters. In der Schatten-Skala
-    liegt er um den Versatz hoeher, sonst hat das Sicherheitsnetz ein Loch.
-    Gleiche Lage wie test_notstromreserve_hebt_die_untergrenze: Reserve dort 27,6 %.
+    Das BMS haelt seinen Ladestand unten, bis die Zellspannung faellt; der Wechselrichter
+    schaltet also nahe echt leer ab, auch wenn er darueber zu tief anzeigt. Gleiche Lage wie
+    test_notstromreserve_hebt_die_untergrenze: Reserve 27,6 % mit und ohne Versatz.
     """
     basis = dict(forecast=prognose_gleichmaessig(tag, 2.0), prognose_tage_kwh=(40, 40, 40),
                  zustands_overrides=_notstrom_zustaende([200] * 48))
-    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, schatten_soc=89.0, **basis).auswerten(bis="f_soc")
-    assert ctx["soc_versatz"] == -4.0 and ctx["shutdown_soc"] == 10
-    assert ctx["reserve_pct"] == pytest.approx(31.648, abs=0.01)
-    assert ctx["reserve_5"] == 35 and ctx["f_soc"] == 35
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=65.0, schatten_soc=89.0, **basis).auswerten(bis="f_soc")
+    assert ctx["soc_versatz"] == -24.0 and ctx["shutdown_soc"] == 10
+    assert ctx["reserve_pct"] == pytest.approx(27.648, abs=0.01)
+    assert ctx["reserve_5"] == 30 and ctx["f_soc"] == 30
 
 
 def test_tou_minimum_wird_ebenfalls_umgerechnet(blueprint, tag):

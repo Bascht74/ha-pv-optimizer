@@ -2769,9 +2769,9 @@ action:
         {% endif %}
         {{ {'kwh': ns.best | round(3), 'bis': ns.bis} }}
       shutdown_soc: "{{ (states(var_wr_shutdown_soc) | float(10)) if var_wr_shutdown_soc != '' else 10 }}"
-      # Der Abschalt-Ladestand steht in der Skala des Wechselrichters und wird
-      # zurueckgerechnet, bevor das Defizit in Prozentpunkten dazukommt.
-      reserve_pct: "{{ ((shutdown_soc - soc_versatz + reserve_plan.kwh / batterie_kapazitaet * 100) | round(3)) if (notstrom_profil is not none and batterie_kapazitaet > 0) else 0 }}"
+      # Der Abschalt-Ladestand gilt ohne Versatz: Das BMS haelt seinen Ladestand unten,
+      # bis die Zellspannung faellt, der Wechselrichter schaltet also nahe echt leer ab.
+      reserve_pct: "{{ ((shutdown_soc + reserve_plan.kwh / batterie_kapazitaet * 100) | round(3)) if (notstrom_profil is not none and batterie_kapazitaet > 0) else 0 }}"
       # Auf volle 5 % aufgerundet: ein Sicherheitsnetz rundet nicht nach unten.
       reserve_5: "{{ ((reserve_pct / 5) | round(0, 'ceil')) * 5 }}"
       # Mindest-Ladestand gilt, ausser er erzwaenge Einspeisung; nie tiefer als das Ziel
@@ -3263,7 +3263,7 @@ action:
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if soc_versatz %} Am Wechselrichter steht dafür {{ tou_schreibwert }} %, da sein eigener Ladestand (SOC) {{ soc_deye | round(0) }} % beträgt, {{ '%+.1f' | format(soc_versatz) }} % gegenüber dem Schatten-BMS.{% endif %}
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
-            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {% if soc_versatz %}{{ (shutdown_soc - soc_versatz) | round(1) }} % (am Wechselrichter {{ shutdown_soc | round(0) }} %){% else %}{{ shutdown_soc | round(0) }} %{% endif %} + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
+            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
             {% if plan_start and prognose_tage %}Auffüllung ab {{ (plan_start | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %}{% else %}Kein Überschuss in den nächsten 72 Stunden{% endif %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
             {%- if vollladung_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
           entity_id: !input helper_logbook_dummy
