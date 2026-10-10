@@ -63,8 +63,8 @@
 #      /config/pv_optimizer/aufzeichnung.jsonl, Zeitstempel AUS.
 #   3. Einstellungen -> Entitaeten -> die neue notify-Entitaet -> Zahnrad ->
 #      Entitaets-ID auf notify.pv_optimizer_aufzeichnung aendern.
-# Jeden Montag legt die Automation am Ende dieser Datei die abgelaufene Woche
-# als aufzeichnung-JJJJ-Wnn.jsonl ab.
+# Jeden Montag legt der Blueprint mit dem shell_command am Ende dieser Datei
+# die abgelaufene Woche als aufzeichnung-JJJJ-Wnn.jsonl ab.
 # NICHT nach /config/www: Alles darunter liefert Home Assistant unter /local/
 # ohne Anmeldung aus, und die Datei beschreibt den Standort im Detail (ca.
 # 0,7 MB je Tag). Holen per Samba, Datei-Editor oder scp; lokal nach
@@ -337,27 +337,12 @@ rest_command:
     payload: "{{ payload if payload is string else (payload | to_json) }}"
     timeout: 20
 
-# Diagnose-Aufzeichnung wochenweise ablegen: Montag kurz nach Mitternacht wird
-# die laufende Datei in aufzeichnung-JJJJ-Wnn.jsonl (ISO-Woche der abgelaufenen
-# Woche) umbenannt; die naechste Zeile legt die Datei neu an. -n ueberschreibt
-# nie eine schon abgelegte Woche. Ohne Aufzeichnung meldet der Befehl nur einen
-# Fehler im Log.
+# Diagnose-Aufzeichnung wochenweise ablegen: Der Blueprint ruft diesen Befehl
+# Montag kurz nach Mitternacht mit der ISO-Woche der abgelaufenen Woche auf und
+# benennt die laufende Datei in aufzeichnung-JJJJ-Wnn.jsonl um; die naechste
+# Zeile legt sie neu an. -n ueberschreibt nie eine schon abgelegte Woche.
+# Name nicht aendern, der Blueprint ruft genau diesen auf.
 shell_command:
   pv_optimizer_aufzeichnung_ablegen: >-
     mv -n /config/pv_optimizer/aufzeichnung.jsonl
     /config/pv_optimizer/aufzeichnung-{{ woche }}.jsonl
-
-automation:
-  - id: pv_optimizer_aufzeichnung_wochenweise
-    alias: "PV-Optimizer: Aufzeichnung wochenweise ablegen"
-    mode: single
-    triggers:
-      - trigger: time
-        at: "00:00:30"
-    conditions:
-      - condition: time
-        weekday: mon
-    actions:
-      - action: shell_command.pv_optimizer_aufzeichnung_ablegen
-        data:
-          woche: "{{ (now() - timedelta(days=1)).strftime('%G-W%V') }}"
