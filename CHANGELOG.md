@@ -10,6 +10,19 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.2.0] - 2026-10-10
+
+### Changed
+- An empty "100-%-Tage" list now gets the day of its first midnight run as its start. An empty
+  list counted as "full today", so an instance started at a time of year when the battery never
+  reaches full would never reach the forced full charge after nine days.
+- The helper template's optional dashboard block adds inverter efficiency today and overall,
+  battery efficiency (under `template:`) and a smoothed PV power. The blueprint reads none of
+  them.
+- The helper template states that the allowlist for the diagnostic recording belongs in
+  `configuration.yaml`: from a package's `homeassistant:` section Home Assistant takes only
+  `customize` and silently ignores the rest.
+
 ## [V7.1.1] - 2026-10-06
 
 ### Fixed
@@ -1131,7 +1144,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.0...HEAD
+[V7.2.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...V7.2.0
 [V7.1.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.0...V7.1.1
 [V7.1.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...V7.1.0
 [V7.0.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V6.18.0...V7.0.0
