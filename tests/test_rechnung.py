@@ -1859,7 +1859,13 @@ def test_aufzeichnung_wochenweise_ablegen(blueprint, tag, wochentag, aufzeichnun
     innen = block["then"][0]
     assert block["then"][-1].get("stop")
     assert h.render(innen["if"][0]["value_template"], ctx) is ruft
-    aufruf = innen["then"][0]
-    assert aufruf["action"] == "shell_command.pv_optimizer_aufzeichnung_ablegen"
+    ctx["ablage_woche"] = h.render(innen["then"][0]["variables"]["ablage_woche"], ctx)
     vorwoche = (lauftag - dt.timedelta(days=1)).isocalendar()
-    assert h.render(aufruf["data"]["woche"], ctx) == f"{vorwoche[0]}-W{vorwoche[1]:02d}"
+    assert ctx["ablage_woche"] == f"{vorwoche[0]}-W{vorwoche[1]:02d}"
+    aufruf = next(st for st in innen["then"] if st.get("action") == "shell_command.pv_optimizer_aufzeichnung_ablegen")
+    assert h.render(aufruf["data"]["woche"], ctx) == ctx["ablage_woche"] and aufruf["response_variable"] == "ablage_ergebnis"
+    meldung = next(st for st in innen["then"] if st.get("action") == "logbook.log")["data"]["message"]
+    ctx["ablage_ergebnis"] = {"returncode": 0, "stdout": "", "stderr": ""}
+    assert h.render(meldung, ctx).endswith(f"Diagnose-Aufzeichnung: Woche {ctx['ablage_woche']} als aufzeichnung-{ctx['ablage_woche']}.jsonl abgelegt.")
+    ctx["ablage_ergebnis"] = {"returncode": 1, "stdout": "", "stderr": "mv: cannot stat 'x': No such file or directory"}
+    assert h.render(meldung, ctx).endswith("nicht abgelegt, da das Umbenennen scheiterte. (Rückgabewert 1: mv: cannot stat 'x': No such file or directory).")

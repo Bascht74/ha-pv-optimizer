@@ -924,3 +924,6 @@ def test_leere_100_prozent_liste_startet_mit_dem_ersten_tag(blueprint, tag, list
     _, aktionen = zweig_und_aktionen(h, blueprint, zweige=gruppe(blueprint, "100%-Tage-Tracking"))
     geschrieben = [json.loads(w) if isinstance(w, str) else w for w in schreibt(aktionen, "input_text.set_value")]
     assert geschrieben == [[tage[t] for t in erwartet]]
+    meldungen = schreibt(aktionen, "logbook.log")
+    assert len(meldungen) == (1 if not liste else 0)
+    assert all(f"Liste mit {tage['heute']} begonnen" in str(m) for m in meldungen)

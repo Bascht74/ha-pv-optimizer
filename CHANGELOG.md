@@ -10,6 +10,14 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.2.1] - 2026-10-10
+
+### Changed
+- The logbook names the start of an empty "100-%-Tage" list once, with the day it starts from
+  and the number of days after which the discharge planning aims for full.
+- The weekly archiving of the diagnostic recording logs whether the file was renamed, and when
+  the rename fails, the command's return code and error text.
+
 ## [V7.2.0] - 2026-10-10
 
 ### Changed
@@ -1148,7 +1156,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.1...HEAD
+[V7.2.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.0...V7.2.1
 [V7.2.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...V7.2.0
 [V7.1.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.0...V7.1.1
 [V7.1.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.0.0...V7.1.0
