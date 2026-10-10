@@ -16,6 +16,10 @@ Logbuch-Meldung trägt ihn.
 - An empty "100-%-Tage" list now gets the day of its first midnight run as its start. An empty
   list counted as "full today", so an instance started at a time of year when the battery never
   reaches full would never reach the forced full charge after nine days.
+- The blueprint itself now archives the diagnostic recording each Monday shortly after midnight,
+  calling the template's `shell_command` with the ISO week just ended. The template no longer
+  carries its own automation for it; remove that automation from existing packages, the
+  `shell_command` stays.
 - The helper template's optional dashboard block adds inverter efficiency today and overall,
   battery efficiency (under `template:`) and a smoothed PV power. The blueprint reads none of
   them.

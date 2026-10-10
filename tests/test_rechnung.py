@@ -1842,3 +1842,24 @@ def test_slot_zeile_ohne_ladestand(blueprint, tag, soc):
     ctx = _update_json_zweig(blueprint, h, zeit(tag, 3, 0))
     zeile = _slot_zeile(blueprint, h, ctx)
     assert zeile["soc"] is None and zeile["soc_versatz"] == 0 and zeile["halten"] is False
+
+
+# --------------------------------------------------------------------------
+# Wochenablage der Diagnose-Aufzeichnung
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("wochentag, aufzeichnung, ruft", [(0, True, True), (1, True, False), (0, False, False)])
+def test_aufzeichnung_wochenweise_ablegen(blueprint, tag, wochentag, aufzeichnung, ruft):
+    """Montags mit eingerichteter Aufzeichnung ruft der Lauf den shell_command mit der Vorwoche auf, sonst nichts."""
+    montag = tag - dt.timedelta(days=tag.weekday())
+    zs = {"notify.pv_optimizer_aufzeichnung": Zustand("notify.pv_optimizer_aufzeichnung", "unknown")} if aufzeichnung else {}
+    lauftag = montag + dt.timedelta(days=wochentag)
+    h = szenario(blueprint, zeit(lauftag, 0, 0), zustands_overrides=zs)
+    ctx = h.auswerten(bis="bp_version")
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "aufzeichnung_ablegen" in str(st["if"]))
+    innen = block["then"][0]
+    assert block["then"][-1].get("stop")
+    assert h.render(innen["if"][0]["value_template"], ctx) is ruft
+    aufruf = innen["then"][0]
+    assert aufruf["action"] == "shell_command.pv_optimizer_aufzeichnung_ablegen"
+    vorwoche = (lauftag - dt.timedelta(days=1)).isocalendar()
+    assert h.render(aufruf["data"]["woche"], ctx) == f"{vorwoche[0]}-W{vorwoche[1]:02d}"

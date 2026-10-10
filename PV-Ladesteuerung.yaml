@@ -638,6 +638,11 @@ trigger:
     platform: homeassistant
     event: start
     id: ha_start
+  # Wochenablage der Diagnose-Aufzeichnung; der Lauf prueft den Montag selbst.
+  - alias: "Trigger: Aufzeichnung wochenweise ablegen"
+    platform: time
+    at: "00:00:30"
+    id: aufzeichnung_ablegen
   - alias: "Trigger: Tägliche Maintenance (100-%-Tage & Reset)"
     platform: time
     at: "23:58:00"
@@ -691,6 +696,23 @@ action:
     then:
       - delay: "00:00:20"
       - stop: "Neustart-Einlesepause beendet - Regelung übernimmt der nächste reguläre Lauf."
+
+  # AUFZEICHNUNG WOCHENWEISE ABLEGEN: Montags benennt shell_command aus dem
+  # Package die laufende Datei nach der abgelaufenen ISO-Woche um; die naechste
+  # Zeile legt sie neu an. Ein fehlender shell_command liesse den Lauf scheitern
+  # (continue_on_error faengt das nicht), darum nur mit eingerichteter Aufzeichnung.
+  - if:
+      - condition: trigger
+        id: aufzeichnung_ablegen
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ now().weekday() == 0 and states.notify.pv_optimizer_aufzeichnung is not none }}"
+        then:
+          - action: shell_command.pv_optimizer_aufzeichnung_ablegen
+            data:
+              woche: "{{ (now() - timedelta(days=1)).strftime('%G-W%V') }}"
+      - stop: "Wochenablage der Aufzeichnung geprüft."
 
   # ====================================================================
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
