@@ -254,7 +254,8 @@ def test_aufzeichnung_wochenweise_ablegen(blueprint, package):
     trig = next(t for t in blueprint["trigger"] if t.get("id") == "aufzeichnung_ablegen")
     assert trig["platform"] == "time" and trig["at"] == "00:00:30"
     block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st and "aufzeichnung_ablegen" in str(st["if"]))
-    aktion = block["then"][0]["then"][0]
-    assert aktion["action"] == "shell_command.pv_optimizer_aufzeichnung_ablegen"
-    tpl = jinja2.Environment().from_string(aktion["data"]["woche"].replace("now()", "jetzt"))
+    aktion = next(st for st in block["then"][0]["then"] if st.get("action") == "shell_command.pv_optimizer_aufzeichnung_ablegen")
+    assert aktion["data"]["woche"] == "{{ ablage_woche }}"
+    woche = block["then"][0]["then"][0]["variables"]["ablage_woche"]
+    tpl = jinja2.Environment().from_string(woche.replace("now()", "jetzt"))
     assert tpl.render(jetzt=dt.datetime(2027, 1, 4, 0, 0, 30), timedelta=dt.timedelta) == "2026-W53"

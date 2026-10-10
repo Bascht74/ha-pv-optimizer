@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.2.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.2.1]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -697,28 +697,11 @@ action:
       - delay: "00:00:20"
       - stop: "Neustart-Einlesepause beendet - Regelung übernimmt der nächste reguläre Lauf."
 
-  # AUFZEICHNUNG WOCHENWEISE ABLEGEN: Montags benennt shell_command aus dem
-  # Package die laufende Datei nach der abgelaufenen ISO-Woche um; die naechste
-  # Zeile legt sie neu an. Ein fehlender shell_command liesse den Lauf scheitern
-  # (continue_on_error faengt das nicht), darum nur mit eingerichteter Aufzeichnung.
-  - if:
-      - condition: trigger
-        id: aufzeichnung_ablegen
-    then:
-      - if:
-          - condition: template
-            value_template: "{{ now().weekday() == 0 and states.notify.pv_optimizer_aufzeichnung is not none }}"
-        then:
-          - action: shell_command.pv_optimizer_aufzeichnung_ablegen
-            data:
-              woche: "{{ (now() - timedelta(days=1)).strftime('%G-W%V') }}"
-      - stop: "Wochenablage der Aufzeichnung geprüft."
-
   # ====================================================================
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.2.0]"
+      bp_version: "[V7.2.1]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -811,6 +794,34 @@ action:
       var_batterie_heute_voll: !input helper_batterie_heute_voll
       var_max_soc_heute: !input helper_max_soc_heute
 
+  # AUFZEICHNUNG WOCHENWEISE ABLEGEN: Montags benennt shell_command aus dem
+  # Package die laufende Datei nach der abgelaufenen ISO-Woche um; die naechste
+  # Zeile legt sie neu an. Ein fehlender shell_command liesse den Lauf scheitern
+  # (continue_on_error faengt das nicht), darum nur mit eingerichteter Aufzeichnung.
+  - if:
+      - condition: trigger
+        id: aufzeichnung_ablegen
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ now().weekday() == 0 and states.notify.pv_optimizer_aufzeichnung is not none }}"
+        then:
+          - variables:
+              ablage_woche: "{{ (now() - timedelta(days=1)).strftime('%G-W%V') }}"
+          - action: shell_command.pv_optimizer_aufzeichnung_ablegen
+            data:
+              woche: "{{ ablage_woche }}"
+            response_variable: ablage_ergebnis
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >-
+                {{ log_kopf }} Diagnose-Aufzeichnung: Woche {{ ablage_woche }}
+                {%- if ablage_ergebnis.returncode | default(1) == 0 %} als aufzeichnung-{{ ablage_woche }}.jsonl abgelegt.
+                {%- else %} nicht abgelegt, da das Umbenennen scheiterte. (Rückgabewert {{ ablage_ergebnis.returncode | default('unbekannt') }}{% if ablage_ergebnis.stderr | default('') %}: {{ ablage_ergebnis.stderr }}{% endif %}).{% endif %}
+              entity_id: !input helper_logbook_dummy
+      - stop: "Wochenablage der Aufzeichnung geprüft."
+
   # TAGESPFLEGE - bewusst VOR dem Deye-Retry: Bleibt die Anbindung um Mitternacht
   # weg, beendet der Retry den Lauf, und 'heute voll' sowie der Blockade-Marker
   # sperrten Prio 4, Prio 7 und die Morgen-Blockade einen ganzen Tag. Nichts hier
@@ -869,6 +880,15 @@ action:
                 # to_json erzeugt korrektes JSON mit DOPPELTEN Quotes.
                 # Da input_text immer als String speichert, bleibt es dabei.
                 value: "{{ tracking_neu | to_json }}"
+            - if:
+                - condition: template
+                  value_template: "{{ tracking_liste | length == 0 }}"
+              then:
+                - action: logbook.log
+                  data:
+                    name: "PV Optimizer"
+                    message: "{{ log_kopf }} 100-%-Tage: Liste mit {{ tracking_heute }} begonnen, da sie leer war. Ab heute zählen die Tage ohne vollen Ladestand (SOC); nach {{ vollladung_nach_tagen }} Tagen plant die Entladung auf 100 %."
+                    entity_id: !input helper_logbook_dummy
 
   - choose:
       - alias: "Tageshelfer zurücksetzen"
