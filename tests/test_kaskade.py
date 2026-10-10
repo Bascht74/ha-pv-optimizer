@@ -906,3 +906,21 @@ def test_ohne_ladestand_ruhen_verbuchung_register_und_timer(blueprint, tag, alia
     h = bauen(blueprint, tag)
     h.states.tabelle.update(_z(blueprint, "battery_soc_sensor", "unavailable", last_changed=h.jetzt - dt.timedelta(hours=1)))
     assert gewinner(h, gruppe(blueprint, alias_anfang)) is None
+
+
+@pytest.mark.parametrize("liste, voll, erwartet", [
+    ([], "off", ["heute"]),                 # Winterstart: der erste Tag ist der Startpunkt
+    ([], "on", ["heute"]),
+    (["vor20"], "off", ["vor20"]),         # eine gefuellte Liste bleibt ohne Volltag unveraendert
+    (["vor20"], "on", ["vor20", "heute"]),
+])
+def test_leere_100_prozent_liste_startet_mit_dem_ersten_tag(blueprint, tag, liste, voll, erwartet):
+    """Eine leere Liste zaehlte als 'heute voll'; eine im Winter gestartete Anlage kaeme nie zur Vollladung."""
+    import json
+    tage = {"heute": tag.isoformat(), "vor20": (tag - dt.timedelta(days=20)).isoformat()}
+    zs = {**_z(blueprint, "json_tracking_sensor", json.dumps([tage[t] for t in liste])),
+          **_z(blueprint, "helper_batterie_heute_voll", voll)}
+    h = szenario(blueprint, zeit(tag, 23, 58), trigger_id="maintenance", zustands_overrides=zs)
+    _, aktionen = zweig_und_aktionen(h, blueprint, zweige=gruppe(blueprint, "100%-Tage-Tracking"))
+    geschrieben = [json.loads(w) if isinstance(w, str) else w for w in schreibt(aktionen, "input_text.set_value")]
+    assert geschrieben == [[tage[t] for t in erwartet]]

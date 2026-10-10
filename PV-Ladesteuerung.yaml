@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.1.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.2.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -234,7 +234,7 @@ blueprint:
         json_tracking_sensor:
           name: "Helfer: 100-%-Tage-Liste"
           description: >-
-            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage). War sie länger als 9 Tage nicht voll, hebt die
+            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage; leer startet sie mit dem ersten Tag). War sie länger als 9 Tage nicht voll, hebt die
             Entlade-Planung ihren Ziel-Ladestand auf 100 %. Muss ein input_text sein — ein Sensor würde die Liste umformatieren.
           default: ""
           selector: {"entity": {"domain": "input_text"}}
@@ -696,7 +696,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.1.1]"
+      bp_version: "[V7.2.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -829,12 +829,13 @@ action:
                   {% endif %}
                 tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
                 tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
-                # Heutigen Tag anhaengen, wenn die Batterie voll war und er
-                # noch nicht drin steht. Immer auf die letzten 14 Tage
-                # begrenzen (input_text-Limit: 255 Zeichen, 14 Eintraege
-                # im JSON-Format = ~196 Zeichen).
+                # Heutigen Tag anhaengen, wenn die Batterie voll war, auf 14 Eintraege
+                # begrenzt (input_text-Limit 255 Zeichen). Eine leere Liste bekommt ihn
+                # als Startpunkt, sonst zaehlt sie als "heute voll" und eine im Winter
+                # gestartete Anlage kaeme nie zur Vollladung (last_changed setzt jeder
+                # Neustart neu, taugt also nicht als Startdatum).
                 tracking_neu: >
-                  {% if tracking_war_voll and tracking_heute not in tracking_liste %}
+                  {% if (tracking_war_voll or tracking_liste | length == 0) and tracking_heute not in tracking_liste %}
                     {{ ((tracking_liste + [tracking_heute]) | sort)[-14:] }}
                   {% else %}
                     {{ tracking_liste[-14:] }}
