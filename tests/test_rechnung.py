@@ -569,17 +569,145 @@ def test_ohne_prognose_morgen_bleibt_die_planung_aus(blueprint, tag):
     assert ctx["tou_schreiben"] is False
 
 
-def test_vollladung_faellig_hebt_das_ziel_auf_100(blueprint, tag):
-    """Herbst-Lage, Batterie seit 12 Tagen nicht voll: Ziel 100 % -> Untergrenze 100 - 31,4 = 68,6 -> 65."""
+def _liste_voll_vor(tag, tage):
+    """Die 100-%-Tage-Liste, zuletzt voll vor so vielen Tagen."""
+    from conftest import fake_entity
+    eid = fake_entity("json_tracking_sensor", "input_text")
+    return {eid: Zustand(eid, json.dumps([(tag - dt.timedelta(days=d)).isoformat() for d in (tage, tage + 1, tage + 2)]))}
+
+
+@pytest.mark.parametrize("soc, f_soc", [
+    (85.0, 75),   # entlaedt bis 75 %, morgen fuellt 31,4 % auf: 106 % erwartet
+    (74.0, 74),   # Planwert 75 % ueber dem Ladestand: halten
+])
+def test_vollladung_faellig_hebt_das_ziel_auf_100(blueprint, tag, soc, f_soc):
+    """
+    Herbst-Lage, der Abend vor dem ersten faelligen Tag (zuletzt voll vor 9 Tagen, nach
+    Sonnenuntergang zaehlt schon morgen): Ziel 100 % plus Puffer 5 % -> 105 - 31,4 = 73,6
+    -> aufgerundet 75. Ohne Puffer und abgerundet (65) bliebe sie schon bei einem Tag
+    4 Punkte unter der Prognose unter 99 %.
+    """
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(15, 5, 5),
+                   zustands_overrides=_liste_voll_vor(tag, 9)).auswerten(bis="tou_schreiben")
+    assert ctx["tage_seit_voll"] == 9 and ctx["plan_tage_seit_voll"] == 10
+    assert ctx["vollladung_heute"] is False
+    assert ctx["vollladung_faellig"] is True and ctx["vollladung_plan"] is True
+    assert ctx["vollladung_versuch"] == 1 and ctx["vollladung_puffer"] == 5
+    assert ctx["ziel_soc_eff"] == 100
+    assert ctx["b_stern_pct"] == pytest.approx(31.4, abs=0.1)
+    assert ctx["f_ziel"] == 75
+    assert ctx["f_soc"] == f_soc
+    assert ctx["halten_fall"] is (soc < 75)
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (15, 5, 5)), [0.19] * 48,
+                        kap_kwh=ctx["batterie_kapazitaet"], soc=soc, vollladung=True, puffer=5)
+    assert ctx["f_soc"] == ref["f_soc"]
+
+
+@pytest.mark.parametrize("voll_vor, versuch, puffer, f_ziel", [
+    (9, 1, 5, 75),     # 105 - 31,4 = 73,6 -> 75
+    (10, 2, 10, 80),   # am ersten faelligen Tag nicht voll geworden: 110 - 31,4 = 78,6 -> 80
+    (11, 3, 15, 85),
+    (12, 4, 20, 90),
+    (14, 6, 20, 90),   # hoechstens 20 Punkte
+])
+def test_vollladung_puffer_waechst_je_versuch(blueprint, tag, voll_vor, versuch, puffer, f_ziel):
+    """Bleibt die Batterie am faelligen Tag unter voll, plant der naechste Abend mit 5 Punkten mehr Puffer."""
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=95.0, prognose_tage_kwh=(15, 5, 5),
+                   zustands_overrides=_liste_voll_vor(tag, voll_vor)).auswerten(bis="tou_schreiben")
+    assert ctx["vollladung_versuch"] == versuch and ctx["vollladung_puffer"] == puffer
+    assert ctx["f_ziel"] == f_ziel and ctx["f_soc"] == f_ziel
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (15, 5, 5)), [0.19] * 48,
+                        kap_kwh=ctx["batterie_kapazitaet"], soc=95.0, vollladung=True, puffer=puffer)
+    assert ctx["f_soc"] == ref["f_soc"]
+
+
+def test_vollladung_rundet_auf_nicht_zum_naechsten(blueprint, tag):
+    """
+    Morgen 16 kWh: B* 34,2 % -> 105 - 34,2 = 70,8. Aufgerundet 75; zum naechsten Schritt
+    gerundet stuende 70 da, und ein Tag knapp unter der Prognose verfehlte voll.
+    """
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=95.0, prognose_tage_kwh=(16, 5, 5),
+                   zustands_overrides=_liste_voll_vor(tag, 9)).auswerten(bis="tou_schreiben")
+    assert ctx["b_stern_pct"] == pytest.approx(34.2, abs=0.1)
+    assert ctx["f_ziel"] == 75 and ctx["f_soc"] == 75
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (16, 5, 5)), [0.19] * 48,
+                        kap_kwh=ctx["batterie_kapazitaet"], soc=95.0, vollladung=True, puffer=5)
+    assert ref["f_soc"] == 75
+
+
+def test_vollladung_rundet_den_angezeigten_wert(blueprint, tag):
+    """
+    Morgen 14,48 kWh: B* 29,966 % -> 105 - 29,966 = 75,034. Gerundet wird, was das Logbuch
+    zeigt (75,0), sonst stuende "= 75.0 %, aufgerundet 80 %" da.
+    """
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=95.0, prognose_tage_kwh=(14.48, 5, 5),
+                   zustands_overrides=_liste_voll_vor(tag, 9)).auswerten(bis="tou_schreiben")
+    assert ctx["b_stern_pct"] == pytest.approx(29.966, abs=0.01)
+    assert ctx["f_ziel"] == 75
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (14.48, 5, 5)), [0.19] * 48,
+                        kap_kwh=ctx["batterie_kapazitaet"], soc=95.0, vollladung=True, puffer=5)
+    assert ref["f_soc"] == 75
+
+
+@pytest.mark.parametrize("stunde, minute, tag_versatz, faellig, versuch", [
+    (18, 0, 0, False, 0),   # vor Sonnenuntergang zaehlt noch heute: 9 Tage, nicht faellig
+    (21, 0, 0, True, 1),    # nach Sonnenuntergang plant sie fuer morgen
+    (23, 30, 0, True, 1),
+    (0, 30, 1, True, 1),    # Mitternacht aendert nichts
+    (12, 0, 1, True, 1),    # am faelligen Tag selbst
+])
+def test_vollladung_faellig_ab_sonnenuntergang_nicht_ab_mitternacht(blueprint, tag, stunde, minute, tag_versatz, faellig, versuch):
+    """
+    Zuletzt voll vor 9 Tagen: Die Nacht vor dem ersten faelligen Tag plant schon ab dem Abend
+    auf 100 %. Spraenge die Faelligkeit erst um Mitternacht, haette die Batterie bis dahin
+    unter die neue Untergrenze entladen, und vom Puffer bliebe nur der Rest.
+    """
+    jetzt = zeit(tag + dt.timedelta(days=tag_versatz), stunde, minute)
+    ctx = szenario(blueprint, jetzt, soc=95.0, prognose_tage_kwh=(15, 5, 5),
+                   zustands_overrides=_liste_voll_vor(tag, 9)).auswerten(bis="tou_schreiben")
+    assert ctx["vollladung_faellig"] is faellig and ctx["vollladung_versuch"] == versuch
+
+
+@pytest.mark.parametrize("voll_vor, text", [
+    (9, "31.4 % + Puffer 5 % = 73.6 %, auf volle 5 % aufgerundet 75 %,"),
+    (10, "31.4 % + Puffer 10 % im 2. Versuch = 78.6 %, auf volle 5 % aufgerundet 80 %,"),
+])
+def test_vollladung_nennt_den_puffer_im_logbuch(blueprint, tag, voll_vor, text):
+    """Die Meldung beim Schreiben der Untergrenze fuehrt Puffer und Versuch als Teil des Ziel-Kandidaten."""
+    soc = 76.0 if voll_vor == 9 else 81.0
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(15, 5, 5),
+                 zustands_overrides={**_liste_voll_vor(tag, voll_vor), **_tou(20)})
+    ctx = h.auswerten()
+    assert ctx["tou_schreiben"] is True
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                 and str(st["if"]) == str([{"condition": "template", "value_template": "{{ tou_schreiben }}"}]))
+    log = next(a for a in block["then"] if a.get("action") == "logbook.log")
+    meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
+    assert f"von 20 % auf {ctx['f_soc']} % gesetzt" in meldung, meldung
+    assert "Ziel-Kandidat = Ziel-Ladestand 100 % − beste Auffüllung " + text in meldung, meldung
+    assert f"Ziel 100 %, da Tage ohne Vollladung {voll_vor + 1} (bis morgen gezählt) > 9.)" in meldung, meldung
+
+
+def test_vollladung_ohne_auffuellung_plant_auf_das_normale_ziel(blueprint, tag):
+    """Faellig, aber keine Sonne in Sicht (B* = 0): kein Puffer, das Logbuch nennt kein Ziel 100 %."""
     from conftest import fake_entity
     eid = fake_entity("json_tracking_sensor", "input_text")
     liste = json.dumps([(tag - dt.timedelta(days=d)).isoformat() for d in (12, 13, 14)])
-    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(15, 5, 5),
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=83.0, prognose_tage_kwh=(1, 1, 1),
                    zustands_overrides={eid: Zustand(eid, liste)}).auswerten(bis="tou_schreiben")
-    assert ctx["tage_seit_voll"] == 12
-    assert ctx["vollladung_faellig"] is True
-    assert ctx["ziel_soc_eff"] == 100
-    assert ctx["f_soc"] == 65
+    assert ctx["vollladung_faellig"] is True and ctx["vollladung_plan"] is False
+    assert ctx["b_stern_pct"] == 0 and ctx["ziel_soc_eff"] == 90 and ctx["f_ziel"] == 90
+    assert ctx["f_soc"] == 83
+    # Am Register vorbei schreibt der Lauf, sobald der Ladestand an die Untergrenze kommt
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=91.0, prognose_tage_kwh=(1, 1, 1),
+                 zustands_overrides={eid: Zustand(eid, liste), **_tou(20)})
+    ctx = h.auswerten()
+    assert ctx["vollladung_plan"] is False and ctx["tou_schreiben"] is True
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                 and str(st["if"]) == str([{"condition": "template", "value_template": "{{ tou_schreiben }}"}]))
+    log = next(a for a in block["then"] if a.get("action") == "logbook.log")
+    meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
+    assert "Ziel-Ladestand 90 %" in meldung and "Ziel 100 %" not in meldung and "Puffer" not in meldung, meldung
 
 
 def test_vollladung_zaehlt_den_heutigen_volltag_sofort(blueprint, tag):
@@ -1026,6 +1154,26 @@ def test_netzbezug_im_halten_laeuft_im_update_json_zweig_auf(blueprint, tag, bis
     assert ctx["hb_lage"] is (erwartet is not None) and ctx["hb_haelt"] is (erwartet is not None)
     if erwartet is not None:
         assert ctx["hb_neu"] == pytest.approx(erwartet, abs=0.001)
+
+
+@pytest.mark.parametrize("untergang_min, haelt", [
+    (-40, True),    # Sonne schon vor dem Ausloesen unten: der Slot gehoert zur Nacht
+    (2, False),     # Lauf von der Warteschlange ueber den Sonnenuntergang geschoben: noch Tag
+])
+def test_halten_zaehlt_nur_was_beim_ausloesen_schon_nacht_war(blueprint, tag, untergang_min, haelt):
+    """
+    Die Abrechnung laeuft genau bei Sonnenuntergang. Ein Halbstundenlauf, der vorher ausgeloest
+    wurde und erst danach rechnet, darf den Slot nicht mehr der alten Nacht zuschlagen.
+    """
+    from conftest import fake_entity
+    t = zeit(tag, 21, 30)
+    tous = {fake_entity(f"wr_tou_{i}", "number"): Zustand(fake_entity(f"wr_tou_{i}", "number"), "65") for i in range(1, 7)}
+    e = fake_entity("helper_halten_bezug", "input_number"); tous[e] = Zustand(e, "2.0")
+    tous["sun.sun"] = Zustand("sun.sun", "below_horizon", {}, t + dt.timedelta(minutes=untergang_min))
+    h = szenario(blueprint, t + dt.timedelta(minutes=3), soc=65.0, hausverbrauch_slot_kwh=0.6,
+                 zustands_overrides=tous, trigger_id="update_json")
+    ctx = _update_json_zweig(blueprint, h, t)
+    assert ctx["hb_lage"] is haelt
 
 
 @pytest.mark.parametrize("planung, erwartet", [

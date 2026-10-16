@@ -10,6 +10,32 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.3.0] - 2026-10-16
+
+### Changed
+- When a full charge is due, the overnight discharge floor adds a buffer to the 100 % target and
+  is rounded up to the next 5 % step instead of down. Rounded down and without a buffer, a day
+  only slightly under the forecast left the battery short of full. The buffer starts at 5 points
+  and grows by 5 points for each further day the battery stays short of full, up to 20.
+- A due full charge now applies from the sunset before the due day instead of from midnight. The
+  floor then holds the evening's discharge back already; switching at midnight left only what the
+  battery had not yet discharged by then. The evening notices still judge the day that just ended.
+- The storage-loss candidate at sunset is parked only on days the charge current was actually
+  throttled (charge-intervention time of at least 15 minutes; a sensor without a number parks
+  every day). Export at maximum charge current is PV above the charging power or the zero-export
+  regulation oscillating around 0 W; no battery control could have stored it.
+
+### Fixed
+- Grid import while the discharge floor holds is settled at sunset itself, in its own run that also
+  writes the decision line to the recording. The half-hourly sum counts towards the new night from
+  sunset on, so settling half an hour later booked the first evening half hour to the previous
+  night; a half-hourly run queued past sunset still counts towards the day.
+- The logbook entry for a realised storage loss no longer says "yesterday" and "overnight", since
+  the booking often happens the same evening; it names the state of charge against the discharge
+  floor that triggered it.
+- The discharge-floor log no longer names a 100 % target when a full charge is due but no surplus
+  is forecast; the plan then uses the configured target.
+
 ## [V7.2.1] - 2026-10-10
 
 ### Changed
@@ -1156,7 +1182,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.1...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.3.0...HEAD
+[V7.3.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.1...V7.3.0
 [V7.2.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.0...V7.2.1
 [V7.2.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...V7.2.0
 [V7.1.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.0...V7.1.1

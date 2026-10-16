@@ -225,7 +225,7 @@ def szenario_dachflaechen(blueprint: dict, jetzt: dt.datetime, felder: dict[str,
 def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kwh: float,
                   v3: float = 0.7, v4: float = 0.5, eta: float = 0.92, ziel: float = 90.0,
                   reserve: float = 50.0, minimum: float = 20.0, soc: float | None = None,
-                  notstrom_pct: float = 0.0) -> dict:
+                  notstrom_pct: float = 0.0, vollladung: bool = False, puffer: float = 5.0) -> dict:
     """
     tage: Kalenderdatum -> 48 Halbstundenwerte kWh (bereits P50/P10-gemischt).
     Rollierend ab dem laufenden Slot 144 Halbstunden: Ueberschuss je Slot mal Gewicht
@@ -233,6 +233,7 @@ def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kw
     Summe bei null geklemmt (Defizite vor einer Sonnenstrecke traegt die Untergrenze);
     B* = groesstes Zwischenmaximum; Start = erster Slot mit mehr als 0.01 kWh Summe.
     notstrom_pct: Notstromreserve in Prozent (reserve_referenz), auf 5 % aufgerundet als Mindestwert.
+    vollladung: faellige Vollladung, Ziel 100 % plus Puffer, auf 5 % aufgerundet (nur mit B* > 0).
     """
     start_idx = jetzt.hour * 2 + (1 if jetzt.minute >= 30 else 0)
     kum = best = 0.0
@@ -249,7 +250,11 @@ def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kw
         if start is None and kum > 0.01:
             start = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=30 * g)
     b_pct = best / kap_kwh * 100
-    f_roh = max(ziel - b_pct, min(reserve, 100 - b_pct), math.ceil(notstrom_pct / 5) * 5)
+    if vollladung and b_pct > 0:
+        f_ziel = math.ceil(round(100 + puffer - b_pct, 1) / 5) * 5
+    else:
+        f_ziel = ziel - b_pct
+    f_roh = max(f_ziel, min(reserve, 100 - b_pct), math.ceil(notstrom_pct / 5) * 5)
     plan = (f_roh // 5) * 5
     wert = plan if (soc is None or f_roh <= soc) else float(int(soc))
     f_soc = int(min(max(wert, minimum), 100))
