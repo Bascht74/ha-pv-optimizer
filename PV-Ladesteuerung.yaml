@@ -3431,8 +3431,8 @@ action:
                   exported_kwh: "{{ states(var_grid_export_kwh) | float(0) }}"
                   # Verschenkt ist nur, was eine Drosselung zurueckhielt. Stand der Ladestrom
                   # den ganzen Tag am Maximum, war die Einspeisung PV ueber der Ladeleistung
-                  # oder das Pendeln der Nullregelung um 0 W. Liefert der Sensor keine Zahl,
-                  # wird jeder Tag geparkt.
+                  # oder das Pendeln der Batterieregelung um 0 W am Netzpunkt. Liefert der
+                  # Sensor keine Zahl, wird jeder Tag geparkt.
                   gedrosselt: "{{ (states(var_eingriff_dauer) | float(-1)) < 0 or eingriff_dauer >= 0.25 }}"
                   # Ohne Ladestand steht der Tageshoechststand still: kein Kandidat.
                   kandidat_kwh: "{{ 0 if (soc_fehlt or not gedrosselt) else ([missing_capacity_at_max_kwh, exported_kwh] | min) }}"
