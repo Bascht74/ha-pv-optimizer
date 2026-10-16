@@ -511,7 +511,7 @@ def test_sonnenuntergang_parkt_den_verlust_kandidaten(blueprint, tag):
 
 @pytest.mark.parametrize("eingriff, geparkt", [
     ("0.0", False),          # Ladestrom den ganzen Tag am Maximum
-    ("0.09", False),         # Pendeln der Nullregelung, keine Drosselung
+    ("0.09", False),         # Pendeln der Batterieregelung, keine Drosselung
     ("0.24", False),
     ("0.25", True),          # ab einer Viertelstunde Drosselung
     ("2.0", True),
@@ -521,7 +521,8 @@ def test_verlust_kandidat_nur_an_gedrosselten_tagen(blueprint, tag, eingriff, ge
     """
     Verschenkt ist nur, was eine Drosselung zurueckhielt. Stand der Ladestrom am
     Maximum, kam die Einspeisung von PV ueber der Ladeleistung oder vom Pendeln
-    der Nullregelung um 0 W, und keine Steuerung haette sie in die Batterie gebracht.
+    der Batterieregelung um 0 W am Netzpunkt, und keine Steuerung haette sie in
+    die Batterie gebracht.
     """
     h = sonnenuntergang(blueprint, tag, eingriff=eingriff)
     ctx = h.auswerten()

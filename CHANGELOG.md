@@ -20,10 +20,14 @@ Logbuch-Meldung trägt ihn.
 - A due full charge now applies from the sunset before the due day instead of from midnight. The
   floor then holds the evening's discharge back already; switching at midnight left only what the
   battery had not yet discharged by then. The evening notices still judge the day that just ended.
+- The discharge-floor log names the buffer, the attempt from the second one on, and the days
+  without a full charge counted up to tomorrow; the recording adds the buffer, that day count,
+  the due flag of the current day and its target, so each full-charge decision can be traced.
 - The storage-loss candidate at sunset is parked only on days the charge current was actually
   throttled (charge-intervention time of at least 15 minutes; a sensor without a number parks
-  every day). Export at maximum charge current is PV above the charging power or the zero-export
-  regulation oscillating around 0 W; no battery control could have stored it.
+  every day). Export at maximum charge current is PV above the charging power, or the inverter
+  overshooting into export while it balances battery power against the grid meter; no charge
+  control could have stored it.
 
 ### Fixed
 - Grid import while the discharge floor holds is settled at sunset itself, in its own run that also
