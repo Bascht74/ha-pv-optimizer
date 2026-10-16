@@ -233,7 +233,8 @@ utility_meter:
 template:
   - binary_sensor:
       # "Eingriff" = der Ladestrom steht bei Tag unter dem Maximum. Grundlage
-      # fuer die Eingriffsdauer in der Diagnose-Meldung am Tagesende.
+      # fuer die Eingriffsdauer: Diagnose-Meldung am Tagesende und Verlust-
+      # Kandidat (verschenkt zaehlt nur an Tagen mit Drosselung).
       - name: "Ladesteuerung Eingriff Aktiv"
         unique_id: "optimizer_binary_intervention_active"
         icon: mdi:flash-alert

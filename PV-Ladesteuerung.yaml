@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.2.1]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.3.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -259,7 +259,7 @@ blueprint:
         helper_offener_verlust:
           name: "Helfer: offener Speicherverlust-Kandidat (kWh)"
           description: >-
-            input_number als Zwischenspeicher für den abends ermittelten potenziellen Verlust. Am Morgen wird er verbucht oder verworfen.
+            input_number als Zwischenspeicher für den abends ermittelten potenziellen Verlust. Verbucht wird er, sobald die Batterie die Entlade-Untergrenze erreicht; sonst überschreibt ihn der nächste Sonnenuntergang.
             Normalerweise 0, reine Statistik.
           default: ""
           selector: {"entity": {"domain": "input_number"}}
@@ -309,7 +309,7 @@ blueprint:
         eingriff_dauer_sensor:
           name: "Diagnose: Eingriffsdauer heute"
           description: >-
-            History-Stats-Sensor, der misst, wie lange die Ladesteuerung heute aktiv eingegriffen hat. Nur für die Diagnose-Meldung am Tagesende — beeinflusst die Steuerung nicht.
+            History-Stats-Sensor, der misst, wie lange die Ladesteuerung heute aktiv eingegriffen hat. Für die Diagnose am Tagesende: Verschenkte Ladekapazität zählt nur an Tagen mit mindestens 15 Minuten Drosselung. Beeinflusst die Steuerung nicht.
           default: ""
           selector: {"entity": {"domain": "sensor"}}
     sec_peak_shaving:
@@ -652,6 +652,10 @@ trigger:
     event: sunset
     offset: "00:30:00"
     id: sunset_check
+  - alias: "Trigger: Sonnenuntergang (Abrechnung Netzbezug im Halten)"
+    platform: sun
+    event: sunset
+    id: halten_abrechnung
   - alias: "Trigger WP Boost ENDE (Rückfall auf Normalwerte)"
     platform: state
     entity_id: !input helper_timer_wp_boost
@@ -701,7 +705,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.2.1]"
+      bp_version: "[V7.3.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -1310,8 +1314,12 @@ action:
           # Halte-Lage unabhaengig vom Helfer, damit die Aufzeichnung sie auch
           # ohne zugewiesenen Helfer festhaelt. Der Ladestand wird gegen das rohe
           # Register geprueft - beide in der Skala des Wechselrichters.
+          # Nacht zaehlt erst, wenn die Sonne schon beim Ausloesen unten war: Ein Lauf, den
+          # die Warteschlange ueber den Sonnenuntergang schiebt, gehoert noch zum Tag.
           hb_lage: >
-            {{ hb_planung | default('', true) | length > 0 and not is_state('sun.sun', 'above_horizon') and hb_soc_gueltig
+            {% set sonne = states.sun.sun %}
+            {{ hb_planung | default('', true) | length > 0 and not is_state('sun.sun', 'above_horizon')
+               and (sonne is none or sonne.last_changed is none or sonne.last_changed <= trigger.now) and hb_soc_gueltig
                and hb_tou_ist - hb_min_register >= 5
                and hb_soc_roh <= hb_tou_ist + 1 }}
           hb_haelt: "{{ hb_helfer != '' and hb_lage }}"
@@ -2495,7 +2503,15 @@ action:
         {% else %}{% set liste = [] %}{% endif %}
         {{ 0 if liste | length == 0 else (now().date() - (liste | max | as_datetime).date()).days }}
       # Der heutige Volltag zaehlt sofort, die Liste bekommt ihn erst um 23:58.
-      vollladung_faellig: "{{ tage_seit_voll > vollladung_nach_tagen and not heute_schon_voll }}"
+      vollladung_heute: "{{ tage_seit_voll > vollladung_nach_tagen and not heute_schon_voll }}"
+      # Nach Sonnenuntergang plant die Entladung fuer den naechsten Sonnentag: Faelligkeit
+      # und Puffer gelten schon fuer die Nacht davor, nicht erst ab Mitternacht.
+      plan_tage_seit_voll: "{{ tage_seit_voll + (1 if (tage_seit_voll > 0 and now().hour >= 12 and not is_day) else 0) }}"
+      vollladung_faellig: "{{ plan_tage_seit_voll > vollladung_nach_tagen and not heute_schon_voll }}"
+      # Bleibt sie am faelligen Tag unter voll, versucht sie es am naechsten wieder,
+      # mit 5 Punkten mehr Puffer je Versuch, hoechstens 20.
+      vollladung_versuch: "{{ (plan_tage_seit_voll - vollladung_nach_tagen) if vollladung_faellig else 0 }}"
+      vollladung_puffer: "{{ [5 * vollladung_versuch, 20] | min }}"
       # Die 48 Halbstunden (kWh) je Kalendertag, aus allen Solcast-Sensoren aller Felder
       # addiert: k als P50/P10-Blend fuer die Planung, k10 als reines P10 fuer die
       # Notstromreserve. Jeder Slot zaehlt am Datum seines Arrays; so traegt jede Dachflaeche
@@ -2625,8 +2641,16 @@ action:
       plan_start: "{{ slot_plan.start }}"
       # B* in Prozent der Kapazitaet; gerundet, damit ein Rest nie als Exponentialzahl rendert.
       b_stern_pct: "{{ ((slot_plan.b_stern_kwh / batterie_kapazitaet * 100) | round(3)) if batterie_kapazitaet > 0 else 0 }}"
-      ziel_soc_eff: "{{ 100 if (vollladung_faellig and b_stern_pct > 0) else (ziel_soc | float(90)) }}"
-      f_ziel: "{{ ziel_soc_eff - b_stern_pct }}"
+      vollladung_plan: "{{ vollladung_faellig and b_stern_pct > 0 }}"
+      ziel_soc_eff: "{{ 100 if vollladung_plan else (ziel_soc | float(90)) }}"
+      # Das Ziel des Kalendertags: Abends ab Sonnenuntergang plant ziel_soc_eff schon
+      # fuer morgen, die Abendmeldungen bewerten aber den Tag, der eben endete.
+      ziel_heute: "{{ 100 if (vollladung_heute and b_stern_pct > 0) else (ziel_soc | float(90)) }}"
+      # Vor einer faelligen Vollladung mit Puffer und aufgerundet: Abgerundet und ohne
+      # Puffer verfehlt sie die 100 % schon, wenn der Tag nur wenig unter der Prognose bleibt.
+      f_ziel: >
+        {%- if vollladung_plan %}{{ (((ziel_soc_eff + vollladung_puffer - b_stern_pct) / 5) | round(0, 'ceil')) * 5 }}
+        {%- else %}{{ ziel_soc_eff - b_stern_pct }}{% endif %}
       f_spill: "{{ 100 - b_stern_pct }}"
       # NOTSTROMRESERVE: Ohne Netz gelten die ToU-Programme nicht, der Wechselrichter
       # entlaedt im Inselbetrieb bis zum Abschalt-Ladestand. Die Reserve ist dieser
@@ -2917,6 +2941,7 @@ action:
               'entlade_aktiv': entlade_aktiv, 'verbrauch_tag_kwh': verbrauch_tag_kwh | round(2),
               'prognose_tage': prognose_tage, 'plan_start': plan_start, 'b_stern_pct': b_stern_pct | round(1),
               'ziel_soc_eff': ziel_soc_eff, 'vollladung_faellig': vollladung_faellig, 'tage_seit_voll': tage_seit_voll,
+              'vollladung_puffer': vollladung_puffer,
               'f_ziel': f_ziel | round(1), 'f_spill': f_spill | round(1), 'f_roh': f_roh | round(1), 'f_soc': f_soc,
               'shutdown_soc': shutdown_soc, 'reserve_kwh': reserve_plan.kwh, 'reserve_bis': reserve_plan.bis, 'reserve_pct': reserve_pct,
               'soc_deye': soc_deye, 'soc_fehlt': soc_fehlt, 'schatten_gueltig': schatten_gueltig, 'soc_versatz': soc_versatz | round(2),
@@ -3083,6 +3108,72 @@ action:
                                 'p50_anteil_heute': blend_p50_anteil | float(0.5), 'pv_abschlag': pv_abschlag | round(3)} } | to_json }}
       - stop: "Zweitmeinung des Optimizers aufgezeichnet; dieser Lauf steuert nichts."
 
+  # NETZBEZUG IM HALTEN ABRECHNEN: Hielt die Untergrenze nachts und wurde
+  # die Batterie tags voll, war das Halten unnoetig. Nicht voll: kein
+  # Verlust und kein Urteil ueber die Planung (ob sie auf heute zaehlte,
+  # zeigen nur die Nachtlaeufe der Aufzeichnung). Eigener Trigger genau bei
+  # Sonnenuntergang: Ab dann zaehlt der Halbstundenlauf fuer die neue Nacht.
+  - if:
+      - condition: trigger
+        id: halten_abrechnung
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ var_halten_bezug != '' }}"
+        then:
+          - variables:
+              verlust_vorher: "{{ states(var_speicherverlust) | float(0) if var_speicherverlust != '' else 0 }}"
+              hoechster_soc_heute: >
+                {% set h = states(var_max_soc_heute) | float(0) if var_max_soc_heute != '' else 0 %}
+                {{ [h, aktueller_soc] | max }}
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ halten_kwh > 0 and is_state(var_batterie_heute_voll, 'on') and halten_verlust_kwh > 0.1 and var_speicherverlust != '' }}"
+                sequence:
+                  - action: logbook.log
+                    data:
+                      name: "PV Optimizer"
+                      message: >-
+                        {{ log_kopf }} Speicherverlust realisiert: {{ halten_verlust_kwh | round(2) }} kWh auf den Verlust-Zähler addiert (von {{ verlust_vorher | round(2) }} kWh auf {{ (verlust_vorher + halten_verlust_kwh) | round(2) }} kWh), da die Entlade-Untergrenze die Batterie nachts hielt und sie heute trotzdem voll wurde.
+                        (Verlust = kleinerer Wert aus Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh, bereits gedeckelt auf die zurückgehaltene Energie, und Netzeinspeisung heute {{ export_heute_kwh | round(2) }} kWh.)
+                      entity_id: !input helper_logbook_dummy
+                  - action: input_number.set_value
+                    target:
+                      entity_id: "{{ var_speicherverlust }}"
+                    data:
+                      value: "{{ verlust_vorher + halten_verlust_kwh }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ halten_kwh > 0 and is_state(var_batterie_heute_voll, 'off') }}"
+                sequence:
+                  - action: logbook.log
+                    data:
+                      name: "PV Optimizer"
+                      message: >-
+                        {{ log_kopf }} Diagnose: Entlade-Untergrenze hielt nachts bei Netzbezug {{ halten_kwh | round(2) }} kWh, Batterie heute nicht voll,
+                        {%- if hoechster_soc_heute >= ziel_heute %} Ziel-Ladestand aber erreicht: höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0, 'floor') }} % ≥ Ziel-Ladestand {{ ziel_heute | round(0) }} %.
+                        {%- else %} höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0, 'floor') }} % < Ziel-Ladestand {{ ziel_heute | round(0) }} %.{% endif %}
+                      entity_id: !input helper_logbook_dummy
+          - action: input_number.set_value
+            target:
+              entity_id: "{{ var_halten_bezug }}"
+            data:
+              value: 0
+      # Der stop endet vor der Entscheidungszeile; sie kommt deshalb von hier.
+      - if:
+          - condition: template
+            value_template: "{{ aufz_aktiv and halten_kwh > 0 }}"
+        then:
+          - action: notify.send_message
+            target:
+              entity_id: notify.pv_optimizer_aufzeichnung
+            data:
+              message: >-
+                {% set z = aufz_zeile if aufz_zeile is mapping else (aufz_zeile | from_json) %}
+                {{ dict(z, art='entscheidung') | to_json }}
+      - stop: "Netzbezug im Halten abgerechnet; dieser Lauf steuert nichts."
+
   # SCHATTEN-BMS NICHT VERWERTBAR: Entprellt wie die Deye-Warnung, sonst schriebe
   # jeder 5-Minuten-Lauf denselben Eintrag.
   - if:
@@ -3134,14 +3225,16 @@ action:
           name: "PV Optimizer"
           message: >-
             {{ log_kopf }} Entlade-Untergrenze: ToU-Programme 1–6 von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
-            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ f_roh | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0) }} % und die Batterie deshalb gehalten wird
+            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ ([f_roh, 100] | min) | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0) }} % und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if soc_versatz %} Am Wechselrichter steht dafür {{ tou_schreibwert }} %, da sein eigener Ladestand (SOC) {{ soc_deye | round(0) }} % beträgt, {{ '%+.1f' | format(soc_versatz) }} % gegenüber dem Schatten-BMS.{% endif %}
             {%- if untergrenze_text %} {{ untergrenze_text }}{% endif %}
-            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
+            (Ziel-Kandidat = Ziel-Ladestand {{ ziel_soc_eff | round(0) }} % − beste Auffüllung
+            {%- if vollladung_plan %} {{ b_stern_pct | round(1) }} % + Puffer {{ vollladung_puffer }} %{% if vollladung_versuch > 1 %} im {{ vollladung_versuch }}. Versuch{% endif %} = {{ (ziel_soc_eff + vollladung_puffer - b_stern_pct) | round(1) }} %, auf volle 5 % aufgerundet {{ f_ziel | int }} %
+            {%- else %} {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %{% endif %}, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
             {% if plan_start and prognose_tage %}Auffüllung ab {{ (plan_start | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %}{% else %}Kein Überschuss in den nächsten 72 Stunden{% endif %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
-            {%- if vollladung_faellig %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
+            {%- if vollladung_plan %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
           entity_id: !input helper_logbook_dummy
 
 
@@ -3321,9 +3414,9 @@ action:
             id: sunset_check
         sequence:
           # SPEICHERVERLUST — SCHRITT 1 (abends): Nur den POTENZIELLEN Verlust
-          # ermitteln und parken. Noch KEINE Verbuchung, KEIN Log. Ob daraus ein
-          # echter Verlust wird, entscheidet sich erst am Sonnenaufgang (fiel die
-          # Batterie über Nacht unter die Reserve?). Der potenzielle Verlust ist
+          # ermitteln und parken. Noch KEINE Verbuchung, KEIN Log. Ein echter
+          # Verlust wird daraus, sobald die Batterie die Entlade-Untergrenze
+          # erreicht, oft schon am selben Abend. Der potenzielle Verlust ist
           # die ungenutzte Ladekapazität beim höchsten Tages-SOC, gedeckelt durch
           # die tatsächliche Tages-Einspeisung (mehr als eingespeist wurde, kann
           # nicht "verschenkt" worden sein).
@@ -3335,8 +3428,13 @@ action:
                   max_soc_tag: "{{ states(var_max_soc_heute) | float(0) }}"
                   missing_capacity_at_max_kwh: "{{ batterie_kapazitaet * (1 - (max_soc_tag / 100)) }}"
                   exported_kwh: "{{ states(var_grid_export_kwh) | float(0) }}"
+                  # Verschenkt ist nur, was eine Drosselung zurueckhielt. Stand der Ladestrom
+                  # den ganzen Tag am Maximum, war die Einspeisung PV ueber der Ladeleistung
+                  # oder das Pendeln der Nullregelung um 0 W. Liefert der Sensor keine Zahl,
+                  # wird jeder Tag geparkt.
+                  gedrosselt: "{{ (states(var_eingriff_dauer) | float(-1)) < 0 or eingriff_dauer >= 0.25 }}"
                   # Ohne Ladestand steht der Tageshoechststand still: kein Kandidat.
-                  kandidat_kwh: "{{ 0 if soc_fehlt else ([missing_capacity_at_max_kwh, exported_kwh] | min) }}"
+                  kandidat_kwh: "{{ 0 if (soc_fehlt or not gedrosselt) else ([missing_capacity_at_max_kwh, exported_kwh] | min) }}"
               - action: input_number.set_value
                 target:
                   entity_id: "{{ var_offener_verlust }}"
@@ -3355,56 +3453,6 @@ action:
                   message: "{{ log_kopf }} Diagnose: Keine Diagnose-Aufzeichnung eingerichtet (notify.pv_optimizer_aufzeichnung fehlt). Die Entscheidungen von heute lassen sich nicht nachrechnen, das Logbuch nennt nur die tragenden Zahlen. Einrichtung steht im Kopf des Package."
                   entity_id: !input helper_logbook_dummy
 
-          # NETZBEZUG IM HALTEN ABRECHNEN: Hielt die Untergrenze nachts und wurde
-          # die Batterie tags voll, war das Halten unnoetig. Nicht voll: kein
-          # Verlust und kein Urteil ueber die Planung. Ob sie auf heute zaehlte,
-          # zeigen nur die Nachtlaeufe der Aufzeichnung: Am Abend kann ein Halten
-          # das Register schon angehoben haben, und Solcast hat die heutige
-          # Prognose nachgefuehrt. Danach ist der Helfer frei fuer die Nacht.
-          - if:
-              - condition: template
-                value_template: "{{ var_halten_bezug != '' }}"
-            then:
-              - variables:
-                  verlust_vorher: "{{ states(var_speicherverlust) | float(0) if var_speicherverlust != '' else 0 }}"
-                  hoechster_soc_heute: >
-                    {% set h = states(var_max_soc_heute) | float(0) if var_max_soc_heute != '' else 0 %}
-                    {{ [h, aktueller_soc] | max }}
-              - choose:
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ halten_kwh > 0 and is_state(var_batterie_heute_voll, 'on') and halten_verlust_kwh > 0.1 and var_speicherverlust != '' }}"
-                    sequence:
-                      - action: logbook.log
-                        data:
-                          name: "PV Optimizer"
-                          message: >-
-                            {{ log_kopf }} Speicherverlust realisiert: {{ halten_verlust_kwh | round(2) }} kWh auf den Verlust-Zähler addiert (von {{ verlust_vorher | round(2) }} kWh auf {{ (verlust_vorher + halten_verlust_kwh) | round(2) }} kWh), da die Entlade-Untergrenze die Batterie nachts hielt und sie heute trotzdem voll wurde.
-                            (Verlust = kleinerer Wert aus Netzbezug während des Haltens {{ halten_kwh | round(2) }} kWh, bereits gedeckelt auf die zurückgehaltene Energie, und Netzeinspeisung heute {{ export_heute_kwh | round(2) }} kWh.)
-                          entity_id: !input helper_logbook_dummy
-                      - action: input_number.set_value
-                        target:
-                          entity_id: "{{ var_speicherverlust }}"
-                        data:
-                          value: "{{ verlust_vorher + halten_verlust_kwh }}"
-                  - conditions:
-                      - condition: template
-                        value_template: "{{ halten_kwh > 0 and is_state(var_batterie_heute_voll, 'off') }}"
-                    sequence:
-                      - action: logbook.log
-                        data:
-                          name: "PV Optimizer"
-                          message: >-
-                            {{ log_kopf }} Diagnose: Entlade-Untergrenze hielt nachts bei Netzbezug {{ halten_kwh | round(2) }} kWh, Batterie heute nicht voll,
-                            {%- if hoechster_soc_heute >= ziel_soc_eff %} Ziel-Ladestand aber erreicht: höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0, 'floor') }} % ≥ Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %.
-                            {%- else %} höchster Tages-Ladestand (SOC) {{ hoechster_soc_heute | round(0, 'floor') }} % < Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %.{% endif %}
-                          entity_id: !input helper_logbook_dummy
-              - action: input_number.set_value
-                target:
-                  entity_id: "{{ var_halten_bezug }}"
-                data:
-                  value: 0
-
           - if:
               - condition: state
                 entity_id: !input helper_batterie_heute_voll
@@ -3413,7 +3461,7 @@ action:
                 value_template: "{{ eingriff_dauer > 0.5 }}"
               # Unter dem Ziel-Ladestand zu bleiben ist mit Entlade-Planung Absicht.
               - condition: template
-                value_template: "{{ not (entlade_aktiv and ziel_soc_eff < 100) }}"
+                value_template: "{{ not (entlade_aktiv and ziel_heute < 100) }}"
             then:
               # Mit Entlade-Planung zielt sie hier auf 100 %, meist weil die Vollladung
               # ueberfaellig ist; dann fehlt Sonne, nicht die Auslegung. Feste Kennung:
@@ -3422,10 +3470,10 @@ action:
                   nicht_voll_text: >-
                     {%- set max_heute = (states(var_max_soc_heute) | float(0)) | round(0, 'floor') -%}
                     {%- set ueber = tage_seit_voll - vollladung_nach_tagen -%}
-                    {%- if entlade_aktiv and vollladung_faellig -%}
-                    Vollladung seit {{ ueber }} Tag{{ 'en' if ueber != 1 else '' }} überfällig und auch heute nicht erreicht: höchster Tages-Ladestand (SOC) {{ max_heute }} % < 99 %. (Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %; Batterie seit {{ tage_seit_voll }} Tagen nicht voll, Vollladung fällig nach {{ vollladung_nach_tagen }} Tagen; Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
+                    {%- if entlade_aktiv and vollladung_heute -%}
+                    Vollladung seit {{ ueber }} Tag{{ 'en' if ueber != 1 else '' }} überfällig und auch heute nicht erreicht: höchster Tages-Ladestand (SOC) {{ max_heute }} % < 99 %. (Ziel-Ladestand {{ ziel_heute | round(0) }} %; Batterie seit {{ tage_seit_voll }} Tagen nicht voll, Vollladung fällig nach {{ vollladung_nach_tagen }} Tagen; Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
                     {%- elif entlade_aktiv -%}
-                    Batterie wurde heute nicht voll: höchster Tages-Ladestand (SOC) {{ max_heute }} % < 99 %. (Ziel-Ladestand {{ ziel_soc_eff | round(0) }} %; Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
+                    Batterie wurde heute nicht voll: höchster Tages-Ladestand (SOC) {{ max_heute }} % < 99 %. (Ziel-Ladestand {{ ziel_heute | round(0) }} %; Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
                     {%- else -%}
                     Batterie wurde heute nicht voll: höchster Tages-Ladestand (SOC) {{ max_heute }} % < 99 %. Bitte die Auslegung prüfen. (Informativ: Eingriffsdauer {{ eingriff_dauer | round(1) }} h.)
                     {%- endif -%}
@@ -3483,13 +3531,13 @@ action:
       # ============================================================
       # SPEICHERVERLUST — SCHRITT 2 (Verbuchung): Läuft im regulären Takt, ist
       # aber fast immer sofort false (Kandidat = 0). Nur wenn abends ein Kandidat
-      # geparkt wurde UND die Batterie über Nacht bis auf die Reserve fällt, wird
+      # geparkt wurde UND die Batterie danach die Entlade-Untergrenze erreicht, wird
       # er als echter Verlust verbucht und auf 0 gesetzt (keine Doppelverbuchung).
       # Kein Verwerfen nötig: Bleibt die Batterie oben, überschreibt der nächste
       # Sonnenuntergang den Kandidaten. Fängt den nächtlichen Tiefpunkt
       # unabhängig davon, wann er eintritt.
       # ============================================================
-      - alias: "Speicherverlust verbuchen (wenn Batterie unter Reserve fiel)"
+      - alias: "Speicherverlust verbuchen (Batterie auf Entlade-Untergrenze)"
         conditions:
           - condition: template
             value_template: "{{ var_offener_verlust is string and var_offener_verlust | length > 0 and (states(var_offener_verlust) | float(0)) > 0.1 and var_speicherverlust is string and var_speicherverlust | length > 0 and not soc_fehlt and aktueller_soc <= tou_ist }}"
@@ -3506,7 +3554,7 @@ action:
             data:
               name: "PV Optimizer"
               message: >
-                {{ log_kopf }} Speicherverlust realisiert: {{ kandidat_kwh | round(2) }} kWh gestern verschenkte Ladekapazität auf den Verlust-Zähler addiert (Erhöhung von {{ current_tracker_val | round(2) }} kWh auf {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh), da die Batterie über Nacht bis auf {{ aktueller_soc | round(0) }} % gefallen ist{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}. Der Verlust hätte womöglich nachts ans Haus gehen können und musste stattdessen ggf. aus dem Netz bezogen werden.
+                {{ log_kopf }} Speicherverlust realisiert: {{ kandidat_kwh | round(2) }} kWh tagsüber verschenkte Ladekapazität auf den Verlust-Zähler addiert (von {{ current_tracker_val | round(2) }} kWh auf {{ (current_tracker_val + kandidat_kwh) | round(2) }} kWh), da die Batterie danach bis auf die Entlade-Untergrenze gefallen ist: Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ tou_ist | round(0) }} %{% if soc_versatz %} (laut Schatten-BMS, am Wechselrichter {{ soc_deye | round(0) }} %){% endif %}.
               entity_id: !input helper_logbook_dummy
           - action: input_number.set_value
             target:

@@ -20,7 +20,7 @@ import pytest
 
 from conftest import fake_entity, standard_inputs, szenario, zeit
 from ha_jinja import Zustand
-from kaskade import (gewinner, gruppe, gruppen, schreibt, template_wahr, zweig,
+from kaskade import (Stopp, _lauf, bedingung, gewinner, gruppe, gruppen, schreibt, template_wahr, zweig,
                      zweig_und_aktionen)
 
 
@@ -107,9 +107,10 @@ def tou_minimum(blueprint, tag):
                     prognose_tage_kwh=None, zustands_overrides=ov)
 
 
-def sonnenuntergang(blueprint, tag):
-    """Der Sonnenuntergangs-Lauf parkt den Verlust-Kandidaten des Tages."""
-    return szenario(blueprint, zeit(tag, 21, 30), trigger_id="sunset_check")
+def sonnenuntergang(blueprint, tag, eingriff="2.0"):
+    """Der Sonnenuntergangs-Lauf parkt den Verlust-Kandidaten eines gedrosselten Tages."""
+    return szenario(blueprint, zeit(tag, 21, 30), trigger_id="sunset_check",
+                    zustands_overrides=_z(blueprint, "eingriff_dauer_sensor", eingriff))
 
 
 def verlust_verbuchen(blueprint, tag):
@@ -507,6 +508,45 @@ def test_sonnenuntergang_parkt_den_verlust_kandidaten(blueprint, tag):
     assert schreibt(aktionen, "input_number.set_value", ctx["var_offener_verlust"]) == [pytest.approx(export)]
 
 
+@pytest.mark.parametrize("eingriff, geparkt", [
+    ("0.0", False),          # Ladestrom den ganzen Tag am Maximum
+    ("0.09", False),         # Pendeln der Nullregelung, keine Drosselung
+    ("0.24", False),
+    ("0.25", True),          # ab einer Viertelstunde Drosselung
+    ("2.0", True),
+    ("unavailable", True),   # Sensor liefert keine Zahl: ungefiltert
+])
+def test_verlust_kandidat_nur_an_gedrosselten_tagen(blueprint, tag, eingriff, geparkt):
+    """
+    Verschenkt ist nur, was eine Drosselung zurueckhielt. Stand der Ladestrom am
+    Maximum, kam die Einspeisung von PV ueber der Ladeleistung oder vom Pendeln
+    der Nullregelung um 0 W, und keine Steuerung haette sie in die Batterie gebracht.
+    """
+    h = sonnenuntergang(blueprint, tag, eingriff=eingriff)
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Aktionen bei Sonnenuntergang"))
+    export = float(h.states(ctx["var_grid_export_kwh"]))
+    assert export > 0.1
+    erwartet = pytest.approx(export) if geparkt else 0
+    assert schreibt(aktionen, "input_number.set_value", ctx["var_offener_verlust"]) == [erwartet]
+
+
+def test_verbuchung_nennt_tag_und_untergrenze(blueprint, tag):
+    """
+    Gebucht wird, sobald der Ladestand die Untergrenze erreicht, oft am selben
+    Abend. Die Meldung nennt deshalb keinen Kalendertag, aber beide Seiten des
+    Vergleichs, der die Buchung ausloest.
+    """
+    h = verlust_verbuchen(blueprint, tag)
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Speicherverlust verbuchen"))
+    assert alias.startswith("Speicherverlust verbuchen")
+    meldung = " ".join(schreibt(aktionen, "logbook.log")[0].split())
+    assert "2.0 kWh tagsüber verschenkte Ladekapazität" in meldung, meldung
+    assert f"Ladestand (SOC) 19 % ≤ Untergrenze {round(float(ctx['tou_ist']))} %" in meldung, meldung
+    assert "gestern" not in meldung and "Nacht" not in meldung
+
+
 def _sonnenuntergang_nach_halten(blueprint, tag, *, tou, max_soc, kw, **ov):
     """Die Untergrenze hielt nachts (1,234 kWh Netzbezug), die Batterie wurde nicht voll."""
     from conftest import prognose
@@ -515,7 +555,20 @@ def _sonnenuntergang_nach_halten(blueprint, tag, *, tou, max_soc, kw, **ov):
         zs.update(_z(blueprint, f"wr_tou_{i}", str(tou)))
     zs.update(ov)
     return szenario(blueprint, zeit(tag, 18, 30), soc=60.0, forecast=prognose(tag, [kw] * 16, dt.time(9, 0), p10_anteil=1.0),
-                    profil_kwh=0.2, trigger_id="sunset_check", zustands_overrides=zs)
+                    profil_kwh=0.2, trigger_id="halten_abrechnung", zustands_overrides=zs)
+
+
+def _halten_abrechnung(h, blueprint, ctx):
+    """Der eigene Block der Abrechnung: seine Aktionen, bis zum stop."""
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                 and "halten_abrechnung" in str(st["if"]))
+    aktionen: list = []
+    if all(bedingung(h, b, ctx) for b in block["if"]):
+        try:
+            _lauf(h, block["then"], ctx, aktionen)
+        except Stopp:
+            pass
+    return aktionen
 
 
 @pytest.mark.parametrize("tou, max_soc, text", [
@@ -537,12 +590,73 @@ def test_nicht_voll_nach_haltenacht_ohne_urteil_ueber_die_planung(blueprint, tag
     """
     h = _sonnenuntergang_nach_halten(blueprint, tag, tou=tou, max_soc=max_soc, kw=2.0)
     ctx = h.auswerten()
-    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Aktionen bei Sonnenuntergang"))
+    aktionen = _halten_abrechnung(h, blueprint, ctx)
     diagnose = [" ".join(m.split()) for m in schreibt(aktionen, "logbook.log") if "Entlade-" in m]
     assert len(diagnose) == 1, diagnose
     assert "Entlade-Untergrenze hielt nachts bei Netzbezug 1.23 kWh, " + text in diagnose[0], diagnose[0]
     assert "mutig" not in diagnose[0] and "Prognose" not in diagnose[0]
     assert schreibt(aktionen, "input_number.set_value", ctx["var_halten_bezug"]) == [0]
+    assert aktionen[-1][0] == "stop", "der Lauf steuert nichts"
+
+
+def test_halten_abrechnung_bucht_den_verlust_und_zeichnet_auf(blueprint, tag):
+    """
+    Voll geworden nach einer Haltenacht: Der Zaehler bekommt den kleineren Wert aus Netzbezug im
+    Halten und Tageseinspeisung dazu, der Helfer wird geleert. Die Aufzeichnung bekommt die
+    Entscheidungszeile aus dem Block selbst, weil sein stop vor der allgemeinen endet.
+    """
+    from conftest import AUFZEICHNUNG_ENTITY
+    zs = {**_z(blueprint, "helper_batterie_heute_voll", "on"), **_z(blueprint, "speicherverlust_gesamt", "5.0"),
+          **_z(blueprint, "grid_export_kwh_heute", "3.2"), AUFZEICHNUNG_ENTITY: Zustand(AUFZEICHNUNG_ENTITY, "unknown")}
+    h = _sonnenuntergang_nach_halten(blueprint, tag, tou=60, max_soc=100, kw=2.0, **zs)
+    for z in h.states.tabelle.values():   # die Aufzeichnung liest last_changed jeder Entitaet
+        z.last_changed = z.last_changed or zeit(tag, 17, 0)
+    ctx = h.auswerten()
+    assert ctx["halten_verlust_kwh"] == pytest.approx(1.234)
+    aktionen = _halten_abrechnung(h, blueprint, ctx)
+    assert schreibt(aktionen, "input_number.set_value", ctx["var_speicherverlust"]) == [pytest.approx(6.234)]
+    log = [" ".join(m.split()) for m in schreibt(aktionen, "logbook.log")]
+    assert len(log) == 1 and "Speicherverlust realisiert: 1.23 kWh" in log[0], log
+    assert schreibt(aktionen, "input_number.set_value", ctx["var_halten_bezug"]) == [0]
+    zeile = schreibt(aktionen, "notify.send_message")
+    assert len(zeile) == 1 and '"art": "entscheidung"' in zeile[0] and ctx["lauf_kennung"] in zeile[0]
+    assert aktionen[-1][0] == "stop"
+
+
+def test_halten_diagnose_misst_am_ziel_des_endenden_tags(blueprint, tag):
+    """
+    Die Abrechnung laeuft nach Sonnenuntergang, die Planung zaehlt dann schon morgen. Am Abend
+    vor dem ersten faelligen Tag galt heute noch das Ziel 90 %, nicht die 100 % von morgen.
+    """
+    import json
+    zs = _z(blueprint, "json_tracking_sensor", json.dumps([(tag - dt.timedelta(days=9)).isoformat()]))
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=60.0, profil_kwh=0.2, trigger_id="halten_abrechnung",
+                 zustands_overrides={**zs, **_z(blueprint, "helper_halten_bezug", "1.234"),
+                                     **_z(blueprint, "helper_max_soc_heute", "93")})
+    ctx = h.auswerten()
+    assert ctx["is_day"] is False and ctx["ziel_soc_eff"] == 100 and ctx["ziel_heute"] == 90
+    diagnose = [" ".join(m.split()) for m in schreibt(_halten_abrechnung(h, blueprint, ctx), "logbook.log")]
+    assert len(diagnose) == 1 and "Ziel-Ladestand aber erreicht: höchster Tages-Ladestand (SOC) 93 % ≥ Ziel-Ladestand 90 %." in diagnose[0], diagnose
+
+
+def test_halten_abrechnung_genau_bei_sonnenuntergang(blueprint, tag):
+    """
+    Der Halbstundenlauf zaehlt den Netzbezug, sobald die Sonne unter dem Horizont
+    steht. Rechnet die Abrechnung spaeter ab, landet die erste Abend-Halbstunde der
+    neuen Nacht in der alten. Deshalb ein eigener Trigger ohne Versatz, und der
+    Lauf eine halbe Stunde spaeter fasst den Helfer nicht mehr an.
+    """
+    trig = next(t for t in blueprint["trigger"] if t.get("id") == "halten_abrechnung")
+    assert trig["platform"] == "sun" and trig["event"] == "sunset" and not trig.get("offset")
+    zaehlt = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                  and "update_json" in str(st["if"]))
+    assert "not is_state('sun.sun', 'above_horizon')" in str(zaehlt)
+    h = szenario(blueprint, zeit(tag, 19, 0), soc=60.0, trigger_id="sunset_check",
+                 zustands_overrides=_z(blueprint, "helper_halten_bezug", "1.234"))
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Aktionen bei Sonnenuntergang"))
+    assert schreibt(aktionen, "input_number.set_value", ctx["var_halten_bezug"]) == []
+    assert _halten_abrechnung(h, blueprint, ctx) == []
 
 
 def _blockade_austritt(blueprint, h, ctx):
@@ -638,6 +752,42 @@ def test_nicht_voll_hinweis_nennt_die_ueberfaellige_vollladung(blueprint, tag):
     angelegt = [i for i in _benachrichtigungs_ids(blueprint["action"], "persistent_notification.create") if i != "soc_fehlt_warning"]
     assert angelegt == ["batterie_nicht_voll"]
     assert _benachrichtigungs_ids(_voll_marker(blueprint), "persistent_notification.dismiss") == ["batterie_nicht_voll"]
+
+
+@pytest.mark.parametrize("voll_vor, hinweis_text", [
+    (9, None),   # erst morgen faellig: unter dem Ziel zu bleiben war heute Absicht
+    (12, "Vollladung seit 3 Tagen überfällig und auch heute nicht erreicht"),
+])
+def test_nicht_voll_hinweis_urteilt_ueber_heute_nicht_ueber_morgen(blueprint, tag, voll_vor, hinweis_text):
+    """
+    Der Abendlauf liegt nach Sonnenuntergang, die Planung zaehlt dann schon den naechsten Tag. Der
+    Hinweis bewertet den Tag, der eben endete: Am Abend vor dem ersten faelligen Tag bleibt er aus,
+    und die Zahl der ueberfaelligen Tage bleibt die des Kalenders.
+    """
+    import json
+    zs = {**_z(blueprint, "json_tracking_sensor", json.dumps([(tag - dt.timedelta(days=voll_vor)).isoformat()])),
+          **_z(blueprint, "eingriff_dauer_sensor", "2.3"), **_z(blueprint, "helper_max_soc_heute", "98.7")}
+    h = szenario(blueprint, zeit(tag, 21, 30), soc=60.0, trigger_id="sunset_check", zustands_overrides=zs)
+    ctx = h.auswerten()
+    assert ctx["is_day"] is False and ctx["vollladung_faellig"] is True
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Aktionen bei Sonnenuntergang"))
+    hinweis = schreibt(aktionen, "persistent_notification.create")
+    if hinweis_text is None:
+        assert hinweis == []
+    else:
+        assert len(hinweis) == 1 and hinweis_text in hinweis[0], hinweis
+
+
+def test_nicht_voll_hinweis_bei_eingestelltem_ziel_100(blueprint, tag):
+    """Wer das Ziel auf 100 % stellt, bekommt den Hinweis auch ohne faellige Vollladung."""
+    zs = {**_z(blueprint, "eingriff_dauer_sensor", "2.3"), **_z(blueprint, "helper_max_soc_heute", "95")}
+    h = szenario(blueprint, zeit(tag, 21, 30), soc=60.0, trigger_id="sunset_check", zustands_overrides=zs,
+                 input_overrides={"ziel_soc": 100})
+    ctx = h.auswerten()
+    assert ctx["vollladung_heute"] is False and ctx["ziel_heute"] == 100
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Aktionen bei Sonnenuntergang"))
+    hinweis = schreibt(aktionen, "persistent_notification.create")
+    assert len(hinweis) == 1 and "Batterie wurde heute nicht voll: höchster Tages-Ladestand (SOC) 95 % < 99 %. (Ziel-Ladestand 100 %" in hinweis[0], hinweis
 
 
 def _voll_marker(blueprint):
