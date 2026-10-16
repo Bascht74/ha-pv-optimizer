@@ -251,7 +251,7 @@ def plan_referenz(jetzt: dt.datetime, tage: dict, profil: list[float], *, kap_kw
             start = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=30 * g)
     b_pct = best / kap_kwh * 100
     if vollladung and b_pct > 0:
-        f_ziel = math.ceil((100 + puffer - b_pct) / 5) * 5
+        f_ziel = math.ceil(round(100 + puffer - b_pct, 1) / 5) * 5
     else:
         f_ziel = ziel - b_pct
     f_roh = max(f_ziel, min(reserve, 100 - b_pct), math.ceil(notstrom_pct / 5) * 5)

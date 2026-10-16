@@ -234,8 +234,8 @@ blueprint:
         json_tracking_sensor:
           name: "Helfer: 100-%-Tage-Liste"
           description: >-
-            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage; leer startet sie mit dem ersten Tag). War sie länger als 9 Tage nicht voll, hebt die
-            Entlade-Planung ihren Ziel-Ladestand auf 100 %. Muss ein input_text sein — ein Sensor würde die Liste umformatieren.
+            input_text mit den Tagen, an denen die Batterie voll wurde (JSON-Liste, max. 14 Tage; leer startet sie mit dem ersten Tag). War sie länger als 9 Tage nicht voll, plant die
+            Entladung ab dem Abend davor auf 100 %. Muss ein input_text sein — ein Sensor würde die Liste umformatieren.
           default: ""
           selector: {"entity": {"domain": "input_text"}}
         helper_blockade_beendet:
@@ -2649,7 +2649,7 @@ action:
       # Vor einer faelligen Vollladung mit Puffer und aufgerundet: Abgerundet und ohne
       # Puffer verfehlt sie die 100 % schon, wenn der Tag nur wenig unter der Prognose bleibt.
       f_ziel: >
-        {%- if vollladung_plan %}{{ (((ziel_soc_eff + vollladung_puffer - b_stern_pct) / 5) | round(0, 'ceil')) * 5 }}
+        {%- if vollladung_plan %}{{ ((((ziel_soc_eff + vollladung_puffer - b_stern_pct) | round(1)) / 5) | round(0, 'ceil')) * 5 }}
         {%- else %}{{ ziel_soc_eff - b_stern_pct }}{% endif %}
       f_spill: "{{ 100 - b_stern_pct }}"
       # NOTSTROMRESERVE: Ohne Netz gelten die ToU-Programme nicht, der Wechselrichter
@@ -2941,7 +2941,8 @@ action:
               'entlade_aktiv': entlade_aktiv, 'verbrauch_tag_kwh': verbrauch_tag_kwh | round(2),
               'prognose_tage': prognose_tage, 'plan_start': plan_start, 'b_stern_pct': b_stern_pct | round(1),
               'ziel_soc_eff': ziel_soc_eff, 'vollladung_faellig': vollladung_faellig, 'tage_seit_voll': tage_seit_voll,
-              'vollladung_puffer': vollladung_puffer,
+              'vollladung_puffer': vollladung_puffer, 'vollladung_heute': vollladung_heute,
+              'plan_tage_seit_voll': plan_tage_seit_voll, 'ziel_heute': ziel_heute,
               'f_ziel': f_ziel | round(1), 'f_spill': f_spill | round(1), 'f_roh': f_roh | round(1), 'f_soc': f_soc,
               'shutdown_soc': shutdown_soc, 'reserve_kwh': reserve_plan.kwh, 'reserve_bis': reserve_plan.bis, 'reserve_pct': reserve_pct,
               'soc_deye': soc_deye, 'soc_fehlt': soc_fehlt, 'schatten_gueltig': schatten_gueltig, 'soc_versatz': soc_versatz | round(2),
@@ -3234,7 +3235,7 @@ action:
             {%- if vollladung_plan %} {{ b_stern_pct | round(1) }} % + Puffer {{ vollladung_puffer }} %{% if vollladung_versuch > 1 %} im {{ vollladung_versuch }}. Versuch{% endif %} = {{ (ziel_soc_eff + vollladung_puffer - b_stern_pct) | round(1) }} %, auf volle 5 % aufgerundet {{ f_ziel | int }} %
             {%- else %} {{ b_stern_pct | round(0) }} % = {{ f_ziel | round(1) }} %{% endif %}, Einspeise-Kandidat = 100 % − {{ b_stern_pct | round(0) }} % = {{ f_spill | round(1) }} %, Mindest-Ladestand {{ reserve_soc | round(0) }} %{% if notstrom_profil is not none %}, Notstromreserve = Abschalt-Ladestand {{ shutdown_soc | round(0) }} % + Defizit am Notstromausgang {{ reserve_plan.kwh | round(1) }} kWh{% if reserve_plan.bis %} bis {{ (reserve_plan.bis | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr{% endif %} von {{ batterie_kapazitaet | round(1) }} kWh = {{ reserve_pct | round(1) }} %, aufgerundet {{ reserve_5 | round(0) }} %{% endif %}; Untergrenze = größerer Wert aus Ziel-Kandidat und kleinerem Wert aus Mindest-Ladestand und Einspeise-Kandidat{% if notstrom_profil is not none %}, mindestens die Notstromreserve{% endif %}, auf volle 5 % abgerundet.
             {% if plan_start and prognose_tage %}Auffüllung ab {{ (plan_start | as_datetime | as_local).strftime('%d.%m. %H:%M') }} Uhr aus {% for t in prognose_tage %}{{ t.name }} {{ '%+.1f' | format(t.bilanz) }} kWh{{ ', ' if not loop.last else '' }}{% endfor %}{% else %}Kein Überschuss in den nächsten 72 Stunden{% endif %} bei {{ batterie_kapazitaet | round(1) }} kWh Kapazität
-            {%- if vollladung_plan %}; Ziel 100 %, da die Batterie seit {{ tage_seit_voll }} Tagen nicht voll war{% endif %}.)
+            {%- if vollladung_plan %}; Ziel 100 %, da Tage ohne Vollladung {{ plan_tage_seit_voll }}{% if plan_tage_seit_voll > tage_seit_voll %} (bis morgen gezählt){% endif %} > {{ vollladung_nach_tagen }}{% endif %}.)
           entity_id: !input helper_logbook_dummy
 
 

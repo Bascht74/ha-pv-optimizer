@@ -15,6 +15,7 @@ schreibt, steht darunter je Zweig - dort, wo der Schreibvorgang etwas aussagt.
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 
@@ -620,6 +621,8 @@ def test_halten_abrechnung_bucht_den_verlust_und_zeichnet_auf(blueprint, tag):
     assert schreibt(aktionen, "input_number.set_value", ctx["var_halten_bezug"]) == [0]
     zeile = schreibt(aktionen, "notify.send_message")
     assert len(zeile) == 1 and '"art": "entscheidung"' in zeile[0] and ctx["lauf_kennung"] in zeile[0]
+    rechnung = json.loads(zeile[0])["rechnung"]
+    assert rechnung["ziel_heute"] == ctx["ziel_heute"] and rechnung["halten_verlust_kwh"] == pytest.approx(1.234, abs=0.01)
     assert aktionen[-1][0] == "stop"
 
 

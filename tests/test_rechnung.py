@@ -635,6 +635,20 @@ def test_vollladung_rundet_auf_nicht_zum_naechsten(blueprint, tag):
     assert ref["f_soc"] == 75
 
 
+def test_vollladung_rundet_den_angezeigten_wert(blueprint, tag):
+    """
+    Morgen 14,48 kWh: B* 29,966 % -> 105 - 29,966 = 75,034. Gerundet wird, was das Logbuch
+    zeigt (75,0), sonst stuende "= 75.0 %, aufgerundet 80 %" da.
+    """
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=95.0, prognose_tage_kwh=(14.48, 5, 5),
+                   zustands_overrides=_liste_voll_vor(tag, 9)).auswerten(bis="tou_schreiben")
+    assert ctx["b_stern_pct"] == pytest.approx(29.966, abs=0.01)
+    assert ctx["f_ziel"] == 75
+    ref = plan_referenz(zeit(tag, 21, 0), tage_aus_szenario(zeit(tag, 21, 0), (14.48, 5, 5)), [0.19] * 48,
+                        kap_kwh=ctx["batterie_kapazitaet"], soc=95.0, vollladung=True, puffer=5)
+    assert ref["f_soc"] == 75
+
+
 @pytest.mark.parametrize("stunde, minute, tag_versatz, faellig, versuch", [
     (18, 0, 0, False, 0),   # vor Sonnenuntergang zaehlt noch heute: 9 Tage, nicht faellig
     (21, 0, 0, True, 1),    # nach Sonnenuntergang plant sie fuer morgen
@@ -671,7 +685,7 @@ def test_vollladung_nennt_den_puffer_im_logbuch(blueprint, tag, voll_vor, text):
     meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
     assert f"von 20 % auf {ctx['f_soc']} % gesetzt" in meldung, meldung
     assert "Ziel-Kandidat = Ziel-Ladestand 100 % − beste Auffüllung " + text in meldung, meldung
-    assert f"Ziel 100 %, da die Batterie seit {voll_vor} Tagen nicht voll war" in meldung, meldung
+    assert f"Ziel 100 %, da Tage ohne Vollladung {voll_vor + 1} (bis morgen gezählt) > 9.)" in meldung, meldung
 
 
 def test_vollladung_ohne_auffuellung_plant_auf_das_normale_ziel(blueprint, tag):
