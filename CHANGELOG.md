@@ -14,9 +14,10 @@ Logbuch-Meldung trägt ihn.
 
 ### Added
 - The one-shot hot-water charge can be a switch as well as a button. A switch is turned on at the
-  start and, if it still reports on when the run time ends, off again; the watchdog does the same
-  when the target reset at that end failed. Some integrations offer the one-shot charge only as a
-  switch, and one left on keeps heating past the run time.
+  start and, if it still reports on when the run time ends, off again. The watchdog switches it
+  off too, but only when it finds the target still at the boost value and has reset it. Some
+  integrations offer the one-shot charge only as a switch, and one left on keeps heating past the
+  run time.
 
 ### Changed
 - The heat pump's hysteresis entity is optional. Without it the boost changes only the target
@@ -32,6 +33,8 @@ Logbuch-Meldung trägt ihn.
   again in the same run. Its start conditions saw the cancelled timer as idle and counted the wait
   from the earlier start, so a new boost went out, the end of the cancelled run time reset it at
   once, and its timers still held the charge current.
+- Log messages gave the heat pump's hysteresis in °C; it is a temperature difference and now
+  reads K.
 
 ## [V7.4.0] - 2026-10-17
 
