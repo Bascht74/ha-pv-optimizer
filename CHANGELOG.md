@@ -10,6 +10,20 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.4.0] - 2026-10-17
+
+### Added
+- After a restart, reload or re-enable, the first run queues the timed runs Home Assistant skipped
+  meanwhile: the first missed 23:58 maintenance (for its own day), today's sunset settlement and
+  sunset check, and that Monday's archive of the recording. Home Assistant does not repeat a missed
+  time or sun trigger, so a restart around sunset or midnight lost that run.
+
+### Changed
+- The discharge floor is no longer raised while the battery charges. It has no effect then, and
+  around midday the plan drifts across a 5 % step and back as tomorrow's half hours move under the
+  24-hour trust limit, so the floor flipped up and down within minutes. Lowering it while charging,
+  and every write while the battery is idle or discharging, stay as they were.
+
 ## [V7.3.0] - 2026-10-16
 
 ### Changed
@@ -1186,7 +1200,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.3.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.4.0...HEAD
+[V7.4.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.3.0...V7.4.0
 [V7.3.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.1...V7.3.0
 [V7.2.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.0...V7.2.1
 [V7.2.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.1.1...V7.2.0

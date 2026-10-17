@@ -6,7 +6,7 @@ Nachgebaut ist nur, was der Blueprint tatsaechlich benutzt:
 
 - states(entity), states[entity].state / .last_changed / .attributes, states.domain.objekt
 - state_attr, is_state, now, utcnow, today_at, as_datetime, as_local,
-  as_timestamp, timedelta
+  as_timestamp, timedelta, sin/cos/tan/asin/acos und pi
 - Filter float/int mit Default, round mit Methode (HA liefert bei
   precision 0 ein int), from_json, to_json, as_local, as_datetime, as_timestamp
 - HA-"native types": ein gerendertes "[1, 2]" wird zur Liste, "5.0" zum float,
@@ -222,16 +222,18 @@ def parse_native(gerendert: str) -> Any:
 # --------------------------------------------------------------------------
 def _statische_env() -> jinja2.Environment:
     env = jinja2.Environment(undefined=jinja2.ChainableUndefined)
+    # Winkelfunktionen wie in HA als Funktion und Filter (Bogenmass), pi als Global.
+    trig = dict(sin=math.sin, cos=math.cos, tan=math.tan, asin=math.asin, acos=math.acos)
     env.globals.update(
         as_datetime=ha_as_datetime, as_local=ha_as_local, as_timestamp=ha_as_timestamp,
-        timedelta=dt.timedelta, float=ha_float, int=ha_int,
+        timedelta=dt.timedelta, float=ha_float, int=ha_int, pi=math.pi, **trig,
     )
     env.filters.update(
         float=ha_float, int=ha_int, round=ha_round, from_json=json.loads,
         # Wie HA: datetime-Objekte (period_start im Solcast-Attribut) sind NICHT
         # serialisierbar - to_json wirft dann "Type is not JSON serializable".
         to_json=lambda v, **kw: json.dumps(v, **kw),
-        as_datetime=ha_as_datetime, as_local=ha_as_local, as_timestamp=ha_as_timestamp,
+        as_datetime=ha_as_datetime, as_local=ha_as_local, as_timestamp=ha_as_timestamp, **trig,
     )
     env.tests.update(
         number=lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
