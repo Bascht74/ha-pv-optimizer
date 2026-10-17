@@ -139,6 +139,59 @@ def test_boost_start_verlangt_gueltigen_warmwasser_sensor(blueprint):
     raise AssertionError("WP-BOOST: START nicht gefunden")
 
 
+def test_hysterese_wird_nur_mit_entitaet_geschrieben(blueprint):
+    """
+    Das Hysterese-Feld ist optional. Ein Schreibvorgang ohne Waechter ginge mit
+    leerer Entitaet an Home Assistant und braeche den Lauf ab - auch in den
+    Zweigen mit repeat:, die der Kaskaden-Ausfuehrer nicht nachspielt.
+    """
+    gefunden, ungeschuetzt = [], []
+
+    def lauf(knoten, geschuetzt, pfad):
+        if isinstance(knoten, list):
+            for i, k in enumerate(knoten):
+                lauf(k, geschuetzt, f"{pfad}[{i}]")
+        elif isinstance(knoten, dict):
+            ziel = str((knoten.get("target") or {}).get("entity_id", ""))
+            if knoten.get("action") == "number.set_value" and "var_wp_hysterese_number" in ziel:
+                gefunden.append(pfad)
+                if not geschuetzt:
+                    ungeschuetzt.append(pfad)
+            schutz = geschuetzt or ("if" in knoten and "var_wp_hysterese_number != ''" in str(knoten["if"]))
+            for k, v in knoten.items():
+                lauf(v, schutz if k == "then" else geschuetzt, f"{pfad}.{k}")
+
+    lauf(blueprint["action"], False, "action")
+    assert len(gefunden) == 5, gefunden
+    assert ungeschuetzt == [], f"Hysterese ohne Waechter geschrieben: {ungeschuetzt}"
+
+
+def test_watchdog_schaltet_den_schalter_erst_nach_dem_ziel_aus(blueprint):
+    """
+    Bricht der Lauf am Laufzeitende ab, bleibt eine Einmal-Ladung als Schalter an.
+    Der Watchdog schaltet sie nach. Erst nach dem Ziel-Reset: Ein abgelehntes Aus
+    beendet den Lauf, und danach prueft der Watchdog nur noch das Ziel. Der
+    Kaskaden-Ausfuehrer spielt den Zweig wegen repeat: nicht nach, daher hier.
+    """
+    zweig = next(o for s in blueprint["action"] if isinstance(s, dict)
+                 for o in (s.get("choose") or []) if str(o.get("alias", "")).startswith("WP-BOOST: WATCHDOG"))
+    seq = zweig["sequence"]
+    reset = next(i for i, s in enumerate(seq) if "repeat" in s)
+    merker = next(i for i, s in enumerate(seq) if "einmal_ladung_an" in (s.get("variables") or {}))
+    aus = next(i for i, s in enumerate(seq) if "switch.turn_off" in str(s.get("then", "")))
+    assert reset < merker < aus
+    assert "is_state(var_wp_boost_button, 'on')" in seq[merker]["variables"]["einmal_ladung_an"]
+    assert "startswith('switch.')" in seq[merker]["variables"]["einmal_ladung_an"]
+    assert "einmal_ladung_an" in str(seq[aus]["if"])
+
+
+def test_einmal_ladung_aus_steht_hinter_dem_ende_zweig(blueprint):
+    """Hinter ENDE liest die Pruefung 'Schalter an' den Zustand, den dessen Schreiben aufgefrischt hat."""
+    ende = _schritt(blueprint, lambda s: _hat_choose_alias(s, "WP-BOOST: ENDE"), "WP-BOOST: ENDE")
+    aus = _schritt(blueprint, lambda s: _hat_choose_alias(s, "WP-BOOST: EINMAL-LADUNG AUS"), "EINMAL-LADUNG AUS")
+    assert ende < aus
+
+
 def test_halbstundenzaehler_werden_zurueckgesetzt_nie_kalibriert(blueprint):
     """
     Nur utility_meter.reset setzt last_reset, an dem der naechste Lauf einen frischen Stand

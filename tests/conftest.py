@@ -61,6 +61,8 @@ def standard_inputs(blueprint: dict) -> dict:
         selector = definition.get("selector", {}) or {}
         if "entity" in selector:
             domain = selector["entity"].get("domain", "sensor")
+            if isinstance(domain, list):  # mehrere erlaubt: die erste steht fuer die Vorgabe
+                domain = domain[0]
             eid = fake_entity(name, domain)
             inputs[name] = [eid] if selector["entity"].get("multiple") else eid
         else:

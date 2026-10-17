@@ -158,6 +158,16 @@ def wp_boost_watchdog(blueprint, tag):
                     zustands_overrides=_z(blueprint, "wp_water_heater", "heat", attributes={"temperature": 59}))
 
 
+SCHALTER = "switch.fx_wp_boost_button"
+
+
+def wp_einmal_ladung_aus(blueprint, tag):
+    """Die Laufzeit ist zu Ende, die Einmal-Ladung ist ein Schalter und steht noch auf an."""
+    return szenario(blueprint, zeit(tag, 12, 0), trigger_id="wp_boost_ende",
+                    input_overrides={"wp_boost_button": SCHALTER},
+                    zustands_overrides={SCHALTER: Zustand(SCHALTER, "on")})
+
+
 WEITERE_ZWEIGE = [
     ("100%-Tage-Tracking", mitternacht),
     ("Tageshelfer zurücksetzen", mitternacht),
@@ -171,6 +181,7 @@ WEITERE_ZWEIGE = [
     ("WP-BOOST: START", wp_boost_start),
     ("WP-BOOST: ENDE", wp_boost_ende),
     ("WP-BOOST: WATCHDOG", wp_boost_watchdog),
+    ("WP-BOOST: EINMAL-LADUNG AUS", wp_einmal_ladung_aus),
 ]
 
 ALLE_ZWEIGE = ZWEIGE + WEITERE_ZWEIGE
@@ -886,6 +897,111 @@ def test_boost_laesst_den_fast_vollen_speicher_in_ruhe(blueprint, tag):
                     zustands_overrides={**ov, **_z(blueprint, "wp_temp_sensor", str(startwert - 1))})
     assert voll.auswerten()["wp_boost_startet_gleich"] is False
     assert leer.auswerten()["wp_boost_startet_gleich"] is True
+
+
+# --------------------------------------------------------------------------
+# Einmal-Ladung als Button oder Schalter, Hysterese-Entitaet optional
+# --------------------------------------------------------------------------
+def _boost_aktionen(blueprint, tag, input_overrides):
+    ov = {**_z(blueprint, "grid_export_sensor", "-8000"), **_z(blueprint, "wp_temp_sensor", "30.0")}
+    h = szenario(blueprint, zeit(tag, 12, 0), zustands_overrides=ov, input_overrides=input_overrides)
+    ctx = h.auswerten()
+    alias, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "WP-BOOST: START"))
+    assert alias.startswith("WP-BOOST: START"), alias
+    return ctx, aktionen
+
+
+@pytest.mark.parametrize("entitaet, service", [
+    ("button.fx_wp_boost_button", "button.press"),
+    (SCHALTER, "switch.turn_on"),
+])
+def test_einmal_ladung_drueckt_den_button_oder_schaltet_ein(blueprint, tag, entitaet, service):
+    """Manche Integrationen bieten die Einmal-Ladung nur als Schalter: der bekommt turn_on, kein press."""
+    _, aktionen = _boost_aktionen(blueprint, tag, {"wp_boost_button": entitaet})
+    assert [s for s, e, _ in aktionen if e == entitaet] == [service]
+
+
+def test_boost_startet_die_timer_vor_den_befehlen_an_die_waermepumpe(blueprint, tag):
+    """
+    Lehnt eine Cloud-Integration einen Befehl ab, endet der Lauf dort. Laufen die
+    Timer dann schon, haelt Prio 2 den Strom fest, das Logbuch nennt den Boost als
+    Grund, und der naechste Lauf startet ihn nicht ein zweites Mal.
+    """
+    ctx, aktionen = _boost_aktionen(blueprint, tag, {"wp_boost_button": SCHALTER})
+    assert [(s, e) for s, e, _ in aktionen[:2]] == [("timer.start", ctx["var_timer_wp_anlauf"]),
+                                                    ("timer.start", ctx["var_timer_wp_boost"])]
+    assert aktionen[2][0] == "logbook.log"
+    assert "wird von" in aktionen[2][2], "die Meldung steht vor dem Befehl, sie darf ihn nicht als erledigt melden"
+
+
+def test_ohne_hysterese_entitaet_aendert_der_boost_nur_das_ziel(blueprint, tag):
+    """Ohne schreibbare Hysterese bleibt die der Anlage; Start und Meldung kommen ohne sie aus."""
+    ctx, aktionen = _boost_aktionen(blueprint, tag, {"wp_hysterese_number": ""})
+    assert schreibt(aktionen, "water_heater.set_temperature") == [ctx["var_wp_ziel_temp_pv"]]
+    assert schreibt(aktionen, "number.set_value") == [ctx["var_wp_ziel_temp_pv"]]   # nur die Ziel-Entitaet
+    assert [e for s, e, _ in aktionen if s == "number.set_value"] == [ctx["var_wp_ziel_number"]]
+    meldung = schreibt(aktionen, "logbook.log")[0]
+    assert "Hysterese" not in meldung
+
+
+def _hysterese_meldungen(knoten):
+    """Jede Logbuch-Meldung, die die Hysterese nennt - Boost-Start und alle Ruecksetzungen."""
+    if isinstance(knoten, dict):
+        msg = (knoten.get("data") or {}).get("message") if knoten.get("action") == "logbook.log" else None
+        if isinstance(msg, str) and "var_wp_hysterese_" in msg:
+            yield msg
+        for v in knoten.values():
+            yield from _hysterese_meldungen(v)
+    elif isinstance(knoten, list):
+        for v in knoten:
+            yield from _hysterese_meldungen(v)
+
+
+@pytest.mark.parametrize("hysterese, erwartet", [("number.fx_wp_hysterese_number", True), ("", False)])
+def test_meldungen_nennen_die_hysterese_nur_wenn_sie_geschrieben_wird(blueprint, tag, hysterese, erwartet):
+    """Fuenf Stellen setzen die Hysterese: Start, Beenden, Ende, Watchdog, Mitternacht."""
+    meldungen = list(_hysterese_meldungen(blueprint["action"]))
+    assert len(meldungen) == 5
+    h = szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_hysterese_number": hysterese})
+    ctx = h.auswerten()
+    for quelle in meldungen:
+        text = str(h.render(quelle, ctx))
+        assert ("Hysterese" in text) is erwartet, text
+        if erwartet:
+            assert " K" in text.split("Hysterese", 1)[1][:8], text
+
+
+@pytest.mark.parametrize("entitaet, zustand, schaltet_aus", [
+    (SCHALTER, "on", True),
+    (SCHALTER, "off", False),
+    ("button.fx_wp_boost_button", "unknown", False),
+])
+def test_schalter_wird_am_laufzeitende_ausgeschaltet(blueprint, tag, entitaet, zustand, schaltet_aus):
+    """
+    Ein Schalter, der nach der Laufzeit noch an ist, heizt sonst weiter. Ein Aus
+    an einen schon ausgeschalteten Schalter unterbleibt, ein Button hat keines.
+    """
+    h = szenario(blueprint, zeit(tag, 12, 0), trigger_id="wp_boost_ende",
+                 input_overrides={"wp_boost_button": entitaet},
+                 zustands_overrides={entitaet: Zustand(entitaet, zustand)})
+    alias, aktionen = zweig_und_aktionen(h, blueprint, zweige=gruppe(blueprint, "WP-BOOST: EINMAL-LADUNG AUS"))
+    assert (alias is not None) is schaltet_aus
+    if schaltet_aus:
+        assert [s for s, _, _ in aktionen] == ["logbook.log", "switch.turn_off"]
+        assert aktionen[1][1] == SCHALTER
+
+
+def test_schalter_bleibt_ohne_laufzeitende_und_ohne_boost_unberuehrt(blueprint, tag):
+    """Nur das Laufzeitende schaltet aus; mit abgeschaltetem Boost gehoert der Schalter niemandem."""
+    zweige = gruppe(blueprint, "WP-BOOST: EINMAL-LADUNG AUS")
+    zustand = {SCHALTER: Zustand(SCHALTER, "on")}
+    takt = szenario(blueprint, zeit(tag, 12, 0), input_overrides={"wp_boost_button": SCHALTER},
+                    zustands_overrides=zustand)
+    aus = szenario(blueprint, zeit(tag, 12, 0), trigger_id="wp_boost_ende",
+                   input_overrides={"wp_boost_button": SCHALTER, "wp_boost_aktiv": False},
+                   zustands_overrides=zustand)
+    assert gewinner(takt, zweige) is None
+    assert gewinner(aus, zweige) is None
 
 
 # --------------------------------------------------------------------------

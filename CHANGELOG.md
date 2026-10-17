@@ -10,6 +10,25 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.5.0] - 2026-10-17
+
+### Added
+- The one-shot hot-water charge can be a switch as well as a button. A switch is turned on at the
+  start and, if it still reports on when the run time ends, off again; the watchdog does the same
+  when the target reset at that end failed. Some integrations offer the one-shot charge only as a
+  switch, and one left on keeps heating past the run time.
+
+### Changed
+- The heat pump's hysteresis entity is optional. Without it the boost changes only the target
+  temperature and the pump keeps its own hysteresis; the boost hysteresis still sets the tank
+  temperature below which a boost starts. Some integrations expose the hysteresis read-only.
+
+### Fixed
+- The boost start no longer resends a command the heat-pump integration rejects on every run. It
+  started its timers after the commands, so each run that still met the start conditions resent them
+  and ended before the battery cascade. Timers and log line now come first: it tries again once the
+  run time has ended, and the logbook names the boost as the reason the charge current is held.
+
 ## [V7.4.0] - 2026-10-17
 
 ### Added
@@ -1200,7 +1219,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.4.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.5.0...HEAD
+[V7.5.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.4.0...V7.5.0
 [V7.4.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.3.0...V7.4.0
 [V7.3.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.1...V7.3.0
 [V7.2.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.0...V7.2.1
