@@ -28,6 +28,10 @@ Logbuch-Meldung trägt ihn.
   started its timers after the commands, so each run that still met the start conditions resent them
   and ended before the battery cascade. Timers and log line now come first: it tries again once the
   run time has ended, and the logbook names the boost as the reason the charge current is held.
+- After the run time ends early because the heat pump takes no surplus, the boost no longer starts
+  again in the same run. Its start conditions saw the cancelled timer as idle and counted the wait
+  from the earlier start, so a new boost went out, the end of the cancelled run time reset it at
+  once, and its timers still held the charge current.
 
 ## [V7.4.0] - 2026-10-17
 

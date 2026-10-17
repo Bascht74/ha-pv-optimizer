@@ -3891,6 +3891,12 @@ action:
             value_template: "{{ states(var_timer_wp_boost) != 'active' }}"
           - condition: template
             value_template: "{{ wp_boost_karenz_ok }}"
+          # Stand bei Laufbeginn: Bricht "WP-LAUFZEIT BEENDEN" die Laufzeit in diesem
+          # Lauf ab, lesen die Timer-Bedingungen sie schon als beendet, und die Karenz
+          # zählt vom alten Start. Ein Neustart hier würde vom Ende-Lauf, den der
+          # Abbruch auslöst, gleich wieder zurückgesetzt.
+          - condition: template
+            value_template: "{{ not wp_laufzeit_aktiv }}"
         sequence:
           # Timer und Meldung vor den Befehlen an die Wärmepumpe: Lehnt eine
           # Cloud-Integration einen Befehl ab, endet der Lauf dort. Die Timer halten

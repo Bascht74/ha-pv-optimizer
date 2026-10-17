@@ -1051,6 +1051,38 @@ def test_tag_tor_hebt_ziel_und_startet_beide_timer(blueprint, tag):
     assert [e for s, e, _ in aktionen if s == "timer.start"] == [ctx["var_timer_wp_anlauf"], ctx["var_timer_wp_boost"]]
 
 
+def _beenden_bedingung(blueprint) -> str:
+    """Die Bedingung des Blocks "WP-LAUFZEIT BEENDEN" (oberste Ebene, if: ohne choose)."""
+    return next(c["value_template"] for s in blueprint["action"] if isinstance(s, dict) and "if" in s
+                for c in s["if"] if "wp_kompressor_aus" in str(c.get("value_template", "")))
+
+
+@pytest.mark.parametrize("trigger_id, kompressor", [
+    ("wp_kompressor_aus", None),       # Verdichter-Sensor meldet aus
+    ("monitoring_5min", ""),           # ohne Sensor: Einspeisung ueber der Kappungsschwelle
+])
+def test_boost_startet_nicht_im_lauf_der_abgebrochenen_laufzeit(blueprint, tag, trigger_id, kompressor):
+    """
+    "WP-LAUFZEIT BEENDEN" bricht die Laufzeit mitten im Lauf ab. Danach lesen die
+    Timer-Bedingungen des Start-Zweigs beide Timer als beendet, und die Karenz
+    zaehlt vom alten Start. Ein Neustart hier wuerde vom Ende-Lauf des Abbruchs
+    gleich wieder zurueckgesetzt, waehrend seine Timer den Ladestrom halten.
+    """
+    jetzt = zeit(tag, 12, 0)
+    ov = {**_z(blueprint, "grid_export_sensor", "-8000"), **_z(blueprint, "wp_temp_sensor", "30.0"),
+          **_z(blueprint, "helper_timer_wp_boost", "active", last_changed=jetzt - dt.timedelta(minutes=40),
+               attributes={"finishes_at": (jetzt + dt.timedelta(minutes=20)).isoformat()})}
+    inputs = {} if kompressor is None else {"wp_kompressor_sensor": kompressor}
+    h = szenario(blueprint, jetzt, trigger_id=trigger_id, zustands_overrides=ov, input_overrides=inputs)
+    ctx = h.auswerten()
+    assert template_wahr(h, _beenden_bedingung(blueprint), ctx), "Szenario erreicht den Abbruch nicht"
+    assert ctx["wp_laufzeit_aktiv"] and ctx["wp_boost_karenz_ok"]
+    # Der Abbruch im selben Lauf: der Timer steht danach auf idle.
+    h.states.tabelle.update(_z(blueprint, "helper_timer_wp_boost", "idle", last_changed=jetzt))
+    z = gewinner(h, gruppe(blueprint, "WP-BOOST: START"), ctx)
+    assert z is None or not z["alias"].startswith("WP-BOOST: START"), z and z["alias"]
+
+
 def test_ohne_energiefeld_bleibt_das_tag_tor_zu(blueprint, tag):
     """
     ww_energie_kwh ist der Schalter. Auf 0 - dem Standard - verhaelt sich der
