@@ -16,7 +16,10 @@ Logbuch-Meldung trägt ihn.
 - The day's highest state of charge is stored rounded down to 0.1 %. A shadow BMS reports a dozen
   decimals, and Home Assistant does not round an `input_number` to its step, so the helper showed
   the raw sensor value. Rounded down, the comparison with the whole-percent target at sunset comes
-  out the same as with the raw value, and every log text shows the value rounded down.
+  out the same as with the raw value, and every log text shows the value rounded down. The hold
+  below the day's maximum and the loss candidate at sunset read the stored value: the hold starts
+  at a state of charge less than 0.1 point lower, the candidate grows by less than 0.1 % of the
+  capacity.
 
 ## [V7.5.0] - 2026-10-17
 
