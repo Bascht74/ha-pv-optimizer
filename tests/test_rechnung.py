@@ -311,10 +311,13 @@ def test_slot_index_folgt_dem_trigger_nicht_der_uhr(blueprint, tag, trigger_hh, 
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("boost, fehlend_erwartet", [
     (False, []),
-    (True, ["Warmwasserspeicher (Entität)", "Stellgröße: Hysterese (K)", "Stellgröße: Einmal-Ladung (Button)"]),
+    (True, ["Warmwasserspeicher (Entität)", "Stellgröße: Einmal-Ladung (Button oder Schalter)"]),
 ])
 def test_wp_felder_sind_nur_mit_boost_pflicht(blueprint, tag, boost, fehlend_erwartet):
-    """Ein Standort ohne Waermepumpe laesst die Felder leer; mit Boost muessen sie belegt sein."""
+    """
+    Ein Standort ohne Waermepumpe laesst die Felder leer; mit Boost muessen sie
+    belegt sein. Die Hysterese nicht: manche Integrationen bieten sie nur lesbar.
+    """
     h = szenario(blueprint, zeit(tag, 10, 0), input_overrides={
         "wp_boost_aktiv": boost, "wp_water_heater": "", "wp_hysterese_number": "", "wp_boost_button": ""})
     fehlend = h.auswerten(bis="pflicht_liste")["pflicht_liste"]
