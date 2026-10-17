@@ -1051,6 +1051,22 @@ def test_tag_tor_hebt_ziel_und_startet_beide_timer(blueprint, tag):
     assert [e for s, e, _ in aktionen if s == "timer.start"] == [ctx["var_timer_wp_anlauf"], ctx["var_timer_wp_boost"]]
 
 
+def test_boost_startet_nicht_im_lauf_der_abgebrochenen_laufzeit(blueprint, tag):
+    """
+    "WP-LAUFZEIT BEENDEN" bricht die Laufzeit mitten im Lauf ab. Danach lesen die
+    Timer-Bedingungen des Start-Zweigs beide Timer als beendet, und die Karenz
+    zaehlt vom alten Start. Nachgebildet mit dem Stand, den der Zweig dann sieht:
+    Timer jetzt idle, beim Laufbeginn aber noch aktiv (wp_laufzeit_aktiv).
+    """
+    h = wp_boost_start(blueprint, tag)
+    ctx = h.auswerten()
+    assert _boost_startet(h, blueprint), "Gegenprobe: ohne Abbruch startet der Boost"
+    abgebrochen = {**ctx, "wp_laufzeit_aktiv": True}
+    assert ctx["wp_boost_karenz_ok"], "Szenario prueft sonst die Karenz statt des Laufbeginns"
+    z = gewinner(h, gruppe(blueprint, "WP-BOOST: START"), abgebrochen)
+    assert z is None or not z["alias"].startswith("WP-BOOST: START"), z and z["alias"]
+
+
 def test_ohne_energiefeld_bleibt_das_tag_tor_zu(blueprint, tag):
     """
     ww_energie_kwh ist der Schalter. Auf 0 - dem Standard - verhaelt sich der
