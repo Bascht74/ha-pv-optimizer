@@ -1062,6 +1062,17 @@ def test_ohne_ladestand_ruhen_verbuchung_register_und_timer(blueprint, tag, alia
     assert gewinner(h, gruppe(blueprint, alias_anfang)) is None
 
 
+@pytest.mark.parametrize("uhr, oeffnet", [((23, 58), True), ((10, 5), False)])
+def test_mitternachts_check_oeffnet_den_strom_nur_nachts(blueprint, tag, uhr, oeffnet):
+    """Eine bei Tag nachgeholte Wartung laesst den gedrosselten Ladestrom der Kaskade."""
+    register = standard_inputs(blueprint)["wr_max_charge_current"]
+    h = szenario(blueprint, zeit(tag, *uhr), trigger_id="maintenance",
+                 zustands_overrides=_z(blueprint, "wr_max_charge_current", "40"))
+    ctx = h.auswerten()
+    _, aktionen = zweig_und_aktionen(h, blueprint, ctx, zweige=gruppe(blueprint, "Tägliches Aufräumen"))
+    assert schreibt(aktionen, ziel=register) == ([ctx["max_ampere"]] if oeffnet else [])
+
+
 @pytest.mark.parametrize("liste, voll, erwartet", [
     ([], "off", ["heute"]),                 # Winterstart: der erste Tag ist der Startpunkt
     ([], "on", ["heute"]),

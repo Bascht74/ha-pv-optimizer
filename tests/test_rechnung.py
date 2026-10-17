@@ -362,7 +362,7 @@ def test_entlade_untergrenze(blueprint, tag, lage, prognose, b_stern, f_soc):
 ])
 def test_untergrenze_wird_nur_beim_annaehern_geschrieben(blueprint, tag, soc, tou, erwartet):
     """Morgen 14 kWh: Rohwert 61,4 -> Plan 60; der Ladestand liegt in allen Faellen ueber dem Rohwert (kein Halten)."""
-    h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(14, 5, 5), zustands_overrides=_tou(tou))
+    h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(14, 5, 5), zustands_overrides={**_tou(tou), **_leistung(400)})
     ctx = h.auswerten(bis="tou_schreiben")
     assert 61 < ctx["f_roh"] < 62 and ctx["halten_fall"] is False
     assert ctx["f_soc"] == 60
@@ -402,9 +402,28 @@ def test_halten_wird_erst_beim_entladen_geschrieben(blueprint, tag):
     # Ladestand 0.5 Punkte unter dem Tageshoechststand: die Entladung hat begonnen
     entlaedt = szenario(blueprint, zeit(tag, 21, 0), soc=85.0, prognose_tage_kwh=(2, 2, 2), zustands_overrides={**_tou(20), **_leistung(320), **_tagesmax(86)}).auswerten(bis="tou_schreiben")
     assert entlaedt["entlaedt_nachhaltig"] is True and entlaedt["tou_schreiben"] is True
-    # Kein Halten-Fall (Plan 60 unter dem Ladestand 62): Schreiben haengt nicht an der Entladung
-    plan = szenario(blueprint, zeit(tag, 21, 0), soc=62.0, prognose_tage_kwh=(14, 5, 5), zustands_overrides=_tou(20)).auswerten(bis="tou_schreiben")
-    assert plan["halten_fall"] is False and plan["f_soc"] == 60 and plan["tou_schreiben"] is True
+    # Kein Halten-Fall (Plan 60 unter dem Ladestand 62): Schreiben haengt nicht an der Entladung,
+    # eine ruhende Batterie genuegt
+    plan = szenario(blueprint, zeit(tag, 21, 0), soc=62.0, prognose_tage_kwh=(14, 5, 5), zustands_overrides={**_tou(20), **_leistung(0)}).auswerten(bis="tou_schreiben")
+    assert plan["halten_fall"] is False and plan["entlaedt_nachhaltig"] is False and plan["f_soc"] == 60 and plan["tou_schreiben"] is True
+
+
+@pytest.mark.parametrize("soc, tou, watt, erwartet", [
+    (62.0, 20, -1500, False),  # anheben 20 -> 60 beim Laden: wirkt nicht, wartet auf den naechsten Lauf
+    (62.0, 20, -100, True),    # Grenze der Ladeleistung: 100 W gelten noch als ruhend
+    (62.0, 20, 400, True),     # Entladen: jetzt wirkt die Grenze
+    (64.0, 65, -1500, True),   # absenken 65 -> 60 bleibt beim Laden erlaubt (64 <= 65 + 2)
+])
+def test_untergrenze_wird_beim_laden_nicht_angehoben(blueprint, tag, soc, tou, watt, erwartet):
+    """
+    Mittags wandert der Plan mit dem Vorlauf-Vertrauen ueber eine 5-%-Stufe und zurueck;
+    stand der Ladestand beim Laden im Vorlauf, sprang die Untergrenze 30 -> 35 -> 30.
+    Plan wie oben: Rohwert 61,4 -> 60, Ladestand ueber dem Rohwert und im Vorlauf.
+    """
+    ctx = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(14, 5, 5),
+                   zustands_overrides={**_tou(tou), **_leistung(watt)}).auswerten(bis="tou_schreiben")
+    assert ctx["f_soc"] == 60 and ctx["halten_fall"] is False and ctx["unter_register"] is False
+    assert ctx["tou_schreiben"] is erwartet
 
 
 def test_untergrenze_wird_nicht_nachgezogen_wenn_der_wechselrichter_nicht_haelt(blueprint, tag):
@@ -434,10 +453,10 @@ def test_trigger_untergrenze_verletzt(blueprint, tag):
 # eigene. Ohne zugewiesenen Sensor ist der Versatz 0 und nichts aendert sich.
 # --------------------------------------------------------------------------
 def _plan60(blueprint, tag, **kw):
-    """Morgen 14 kWh: Rohwert 61,4 -> Plan 60. Register per Vorgabe."""
+    """Morgen 14 kWh: Rohwert 61,4 -> Plan 60, nachts beim Entladen. Register per Vorgabe."""
     tou = kw.pop("tou", 20)
     return szenario(blueprint, zeit(tag, 21, 0), prognose_tage_kwh=(14, 5, 5),
-                    zustands_overrides=_tou(tou), **kw).auswerten(bis="tou_schreiben")
+                    zustands_overrides={**_tou(tou), **_leistung(400)}, **kw).auswerten(bis="tou_schreiben")
 
 
 def test_schatten_bms_verschiebt_den_registerwert(blueprint, tag):
@@ -676,7 +695,7 @@ def test_vollladung_nennt_den_puffer_im_logbuch(blueprint, tag, voll_vor, text):
     """Die Meldung beim Schreiben der Untergrenze fuehrt Puffer und Versuch als Teil des Ziel-Kandidaten."""
     soc = 76.0 if voll_vor == 9 else 81.0
     h = szenario(blueprint, zeit(tag, 21, 0), soc=soc, prognose_tage_kwh=(15, 5, 5),
-                 zustands_overrides={**_liste_voll_vor(tag, voll_vor), **_tou(20)})
+                 zustands_overrides={**_liste_voll_vor(tag, voll_vor), **_tou(20), **_leistung(400)})
     ctx = h.auswerten()
     assert ctx["tou_schreiben"] is True
     block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
@@ -700,7 +719,7 @@ def test_vollladung_ohne_auffuellung_plant_auf_das_normale_ziel(blueprint, tag):
     assert ctx["f_soc"] == 83
     # Am Register vorbei schreibt der Lauf, sobald der Ladestand an die Untergrenze kommt
     h = szenario(blueprint, zeit(tag, 21, 0), soc=91.0, prognose_tage_kwh=(1, 1, 1),
-                 zustands_overrides={eid: Zustand(eid, liste), **_tou(20)})
+                 zustands_overrides={eid: Zustand(eid, liste), **_tou(20), **_leistung(400)})
     ctx = h.auswerten()
     assert ctx["vollladung_plan"] is False and ctx["tou_schreiben"] is True
     block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
@@ -2017,3 +2036,226 @@ def test_aufzeichnung_wochenweise_ablegen(blueprint, tag, wochentag, aufzeichnun
     assert h.render(meldung, ctx).endswith(f"Diagnose-Aufzeichnung: Woche {ctx['ablage_woche']} als aufzeichnung-{ctx['ablage_woche']}.jsonl abgelegt.")
     ctx["ablage_ergebnis"] = {"returncode": 1, "stdout": "", "stderr": "mv: cannot stat 'x': No such file or directory"}
     assert h.render(meldung, ctx).endswith("nicht abgelegt, da das Umbenennen scheiterte. (Rückgabewert 1: mv: cannot stat 'x': No such file or directory).")
+
+
+# --------------------------------------------------------------------------
+# Nachholen nach Neustart: Home Assistant holt Termine nicht nach, die in einen
+# Neustart fielen. Der erste Lauf danach stellt sie mit ihrer Trigger-ID in die
+# Warteschlange. Sonnenuntergaenge: astral 2.2 am neutralen Bezugsort 52,52 N /
+# 13,405 O (Berlin), Hoehe 0 m.
+# --------------------------------------------------------------------------
+def _utc(s: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(s)
+
+
+def _nachhol_block(blueprint):
+    return next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                and "this.attributes.last_triggered" in str(st["if"]))
+
+
+def _nachholen(blueprint, jetzt, letzter, gestartet, untergang, trigger_id="ha_start", breite=52.52):
+    """Bedingung und Variablen des Nachhol-Blocks; untergang = next_setting von sun.sun (ISO, UTC)."""
+    zust = {"sun.sun": Zustand("sun.sun", "below_horizon", {"next_setting": untergang}),
+            "zone.home": Zustand("zone.home", "zoning", {"latitude": breite})}
+    h = szenario(blueprint, jetzt, zustands_overrides=zust, trigger_id=trigger_id)
+    this = {"entity_id": "automation.pv_ladesteuerung",
+            "last_changed": gestartet.astimezone(dt.timezone.utc).isoformat(),
+            "attributes": {"last_triggered": letzter.astimezone(dt.timezone.utc) if letzter else None}}
+    ctx = {"trigger": {"id": trigger_id}, "this": this, "log_kopf": "[V · 00:00:00]"}
+    block = _nachhol_block(blueprint)
+    erster = h._aufloesen(block["if"][0]["value_template"], ctx)
+    if erster:
+        for name, roh in block["then"][0]["variables"].items():
+            ctx[name] = h._aufloesen(roh, ctx)
+    return erster, ctx, h
+
+
+def _auftraege(ctx):
+    return [a["aufgabe"] for a in ctx.get("nh_auftraege", [])]
+
+
+UNTERGANG_16_10 = "2026-10-16T16:09:15+00:00"
+UNTERGANG_17_10 = "2026-10-17T16:07:03+00:00"
+
+
+@pytest.mark.parametrize("heute, s_heute, s_morgen", [
+    ("2026-01-15", "2026-01-15T15:21:44+00:00", "2026-01-16T15:23:22+00:00"),
+    ("2026-03-20", "2026-03-20T17:19:09+00:00", "2026-03-21T17:20:55+00:00"),
+    ("2026-03-28", "2026-03-28T17:33:14+00:00", "2026-03-29T17:34:59+00:00"),  # vor der Sommerzeit
+    ("2026-06-21", "2026-06-21T19:32:54+00:00", "2026-06-22T19:33:04+00:00"),
+    ("2026-09-19", "2026-09-19T17:11:58+00:00", "2026-09-20T17:09:36+00:00"),  # groesste Tagesaenderung
+    ("2026-10-24", "2026-10-24T15:52:09+00:00", "2026-10-25T15:50:06+00:00"),  # vor der Winterzeit
+    ("2026-12-31", "2026-12-31T15:01:11+00:00", "2027-01-01T15:02:14+00:00"),  # Jahreswechsel
+    ("2028-12-31", "2028-12-31T15:01:43+00:00", "2029-01-01T15:02:48+00:00"),  # Jahreswechsel nach Schalttag
+])
+def test_nachholen_schaetzt_den_heutigen_sonnenuntergang_auf_sekunden(blueprint, heute, s_heute, s_morgen):
+    """
+    Nach Sonnenuntergang nennt sun.sun nur den morgigen. 24 h davor laege bis zu 142 s
+    daneben; mit der Tagesaenderung aus Deklination und Zeitgleichung hoechstens 7 s
+    (die Bezugswerte sind auf die Sekunde abgeschnitten).
+    """
+    s = _utc(s_heute)
+    erster, ctx, _ = _nachholen(blueprint, (s + dt.timedelta(minutes=50)).astimezone(dt.timezone.utc),
+                                s - dt.timedelta(hours=1), s + dt.timedelta(minutes=49), s_morgen)
+    assert erster is True
+    assert abs(ctx["nh_untergang"] - s.timestamp()) <= 8, ctx["nh_untergang"] - s.timestamp()
+
+
+def test_nachholen_pruefung_verpasst_neustart_kurz_nach_dem_termin(blueprint):
+    """
+    Untergang 18:27:15, Pruefung 18:57:15; letzter Lauf 18:56:00, Neustart 19:02:40.
+    Morgen minus 24 h setzte die Pruefung auf 18:54:58, vor den letzten Lauf: Sie gaelte
+    als gelaufen. Die Abrechnung lief (Untergang vor dem letzten Lauf).
+    """
+    d = dt.date(2026, 10, 8)
+    erster, ctx, _ = _nachholen(blueprint, zeit(d, 19, 2) + dt.timedelta(seconds=58), zeit(d, 18, 56),
+                                zeit(d, 19, 2) + dt.timedelta(seconds=40), "2026-10-09T16:24:58+00:00")
+    assert erster is True and _auftraege(ctx) == ["sunset_check"]
+    assert ctx["nh_auftraege"][0]["termin"] == pytest.approx(_utc("2026-10-08T16:57:15+00:00").timestamp(), abs=6)
+
+
+def test_nachholen_abrechnung_verpasst_sonnenuntergang_im_startvorgang(blueprint):
+    """
+    Letzter Lauf 18:10, Untergang 18:13:40 waehrend des Starts. sun.sun rechnete noch
+    vor dem Termin und nennt den heutigen: exakt, ohne Schaetzung. Die Pruefung um
+    18:43:40 steht noch bevor und feuert selbst.
+    """
+    d = dt.date(2026, 10, 14)
+    erster, ctx, _ = _nachholen(blueprint, zeit(d, 18, 14) + dt.timedelta(seconds=5), zeit(d, 18, 10),
+                                zeit(d, 18, 13) + dt.timedelta(seconds=35), "2026-10-14T16:13:40+00:00")
+    assert erster is True and _auftraege(ctx) == ["halten_abrechnung"]
+    assert ctx["nh_untergang"] == _utc("2026-10-14T16:13:40+00:00").timestamp()
+
+
+@pytest.mark.parametrize("letzter_s, erwartet", [
+    (-1200, ["halten_abrechnung", "sunset_check"]),  # vor dem Untergang zuletzt gelaufen: beide verpasst
+    (-6, ["sunset_check"]),                          # 6 s davor: innerhalb der Marge, gilt als gelaufen
+    (60, ["sunset_check"]),                          # nach dem Untergang gelaufen: die Abrechnung lief
+    (1860, []),                                      # nach der Pruefung gelaufen: nichts verpasst
+])
+def test_nachholen_sonnenuntergang_marge(blueprint, letzter_s, erwartet):
+    """16.10.: Untergang 18:09:15, Neustart 18:51, sun.sun nennt den morgigen."""
+    s = _utc(UNTERGANG_16_10)
+    jetzt = s + dt.timedelta(minutes=42)
+    erster, ctx, _ = _nachholen(blueprint, jetzt, s + dt.timedelta(seconds=letzter_s),
+                                jetzt - dt.timedelta(seconds=20), UNTERGANG_17_10)
+    assert erster is True and _auftraege(ctx) == erwartet
+
+
+def test_nachholen_pruefung_wartet_auf_ihren_eigenen_termin(blueprint):
+    """Neustart 20 min nach Sonnenuntergang: Die Pruefung ist fuer heute noch geplant und feuert selbst."""
+    s = _utc(UNTERGANG_16_10)
+    erster, ctx, _ = _nachholen(blueprint, s + dt.timedelta(minutes=20), s - dt.timedelta(minutes=5),
+                                s + dt.timedelta(minutes=19), UNTERGANG_17_10)
+    assert _auftraege(ctx) == ["halten_abrechnung"]
+
+
+def test_nachholen_wartung_mit_dem_tag_des_termins(blueprint):
+    """Letzter Lauf 23:41:05, Neustart 00:12: Die Wartung von gestern 23:58 kommt mit gestrigem Datum."""
+    d = dt.date(2026, 10, 16)
+    erster, ctx, h = _nachholen(blueprint, zeit(d + dt.timedelta(days=1), 0, 12),
+                                zeit(d, 23, 41) + dt.timedelta(seconds=5), zeit(d + dt.timedelta(days=1), 0, 11),
+                                UNTERGANG_17_10)
+    assert erster is True and _auftraege(ctx) == ["maintenance"]
+    assert ctx["nh_auftraege"][0]["termin"] == zeit(d, 23, 58).timestamp()
+    block = _nachhol_block(blueprint)
+    ereignis = block["then"][1]["repeat"]["sequence"][0]
+    daten = h._aufloesen(ereignis["event_data"], {**ctx, "repeat": {"item": ctx["nh_auftraege"][0]}})
+    assert ereignis["event"] == "pv_optimizer_nachholen"
+    assert daten == {"automation": "automation.pv_ladesteuerung", "aufgabe": "maintenance", "tag": "2026-10-16"}
+    log = block["then"][2]["then"][0]
+    meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
+    assert meldung == ("[V · 00:00:00] Nachholen: Wartung vom 16.10. um 23:58 wird nachgeholt, da die Automation "
+                       "zu diesem Zeitpunkt nicht lief. (Letzter Lauf davor 16.10. 23:41:05.)"), meldung
+
+
+@pytest.mark.parametrize("letzter, gestartet_s, jetzt_s, erwartet", [
+    ((23, 55), 1.2, 1.5, ["maintenance"]),  # erst nach dem Termin angelegt: sein Trigger feuert heute nicht mehr
+    ((23, 55), 0.8, 1.5, []),               # noch in der Sekunde des Termins: der Trigger feuert selbst
+    ((23, 55), 0.8, 2.5, ["maintenance"]),  # 2 s nach dem Termin ohne eigenen Lauf: verpasst
+])
+def test_nachholen_wartung_um_den_termin(blueprint, letzter, gestartet_s, jetzt_s, erwartet):
+    """Ein Uhrzeit-Trigger, der nach seiner Sekunde scharf wird, feuert erst morgen wieder."""
+    d = dt.date(2026, 10, 16)
+    termin = zeit(d, 23, 58)
+    erster, ctx, _ = _nachholen(blueprint, termin + dt.timedelta(seconds=jetzt_s), zeit(d, *letzter),
+                                termin + dt.timedelta(seconds=gestartet_s), UNTERGANG_17_10)
+    assert erster is True and _auftraege(ctx) == erwartet
+
+
+def test_nachholen_montags_wartung_und_wochenablage(blueprint):
+    """So 18.10. letzter Lauf 23:30, Neustart Mo 00:05: erst die Wartung (Sonntag), dann die Wochenablage."""
+    so = dt.date(2026, 10, 18)
+    mo = so + dt.timedelta(days=1)
+    erster, ctx, h = _nachholen(blueprint, zeit(mo, 0, 5), zeit(so, 23, 30), zeit(mo, 0, 4), "2026-10-19T16:02:42+00:00")
+    assert _auftraege(ctx) == ["maintenance", "aufzeichnung_ablegen"]
+    log = _nachhol_block(blueprint)["then"][2]["then"][0]
+    meldung = " ".join(str(h._aufloesen(log["data"]["message"], ctx)).split())
+    assert "Wartung vom 18.10. um 23:58 und Wochenablage der Aufzeichnung um 00:00 werden nachgeholt" in meldung, meldung
+    assert "zu diesen Zeitpunkten" in meldung and "(Letzter Lauf davor 18.10. 23:30:00.)" in meldung, meldung
+
+
+@pytest.mark.parametrize("gestartet_s, erwartet", [(31.2, ["aufzeichnung_ablegen"]), (30.6, [])])
+def test_nachholen_wochenablage_um_den_termin(blueprint, gestartet_s, erwartet):
+    """Wartung So 23:58 lief; angelegt nach 00:00:31 feuert die Wochenablage nicht mehr selbst."""
+    so = dt.date(2026, 10, 18)
+    mitternacht = zeit(so + dt.timedelta(days=1), 0, 0)
+    erster, ctx, _ = _nachholen(blueprint, mitternacht + dt.timedelta(seconds=31.5), zeit(so, 23, 58) + dt.timedelta(seconds=1),
+                                mitternacht + dt.timedelta(seconds=gestartet_s), "2026-10-19T16:02:42+00:00")
+    assert erster is True and _auftraege(ctx) == erwartet
+
+
+def test_nachholen_nach_mehreren_tagen_zuerst_die_wartung(blueprint):
+    """Aus seit 14.10. 15:00, Neustart 16.10. 18:51: Wartung vom 14.10. vor Abrechnung und Pruefung von heute."""
+    s = _utc(UNTERGANG_16_10)
+    erster, ctx, _ = _nachholen(blueprint, s + dt.timedelta(minutes=42), zeit(dt.date(2026, 10, 14), 15, 0),
+                                s + dt.timedelta(minutes=41), UNTERGANG_17_10)
+    assert _auftraege(ctx) == ["maintenance", "halten_abrechnung", "sunset_check"]
+    assert ctx["nh_auftraege"][0]["termin"] == zeit(dt.date(2026, 10, 14), 23, 58).timestamp()
+
+
+@pytest.mark.parametrize("fall, letzter, gestartet, trigger_id, erster_erwartet, erwartet", [
+    ("vor Sonnenuntergang gestartet", (16, 10), (16, 15), "ha_start", True, []),
+    ("nicht der erste Lauf", (16, 16), (16, 15), "monitoring_5min", False, None),
+    ("ohne gespeicherten Lauf", None, (16, 15), "ha_start", False, None),
+])
+def test_nachholen_nichts_doppelt(blueprint, fall, letzter, gestartet, trigger_id, erster_erwartet, erwartet):
+    d = dt.date(2026, 10, 16)
+    erster, ctx, _ = _nachholen(blueprint, zeit(d, *gestartet) + dt.timedelta(seconds=30),
+                                zeit(d, *letzter) if letzter else None, zeit(d, *gestartet), UNTERGANG_16_10,
+                                trigger_id=trigger_id)
+    assert erster is erster_erwartet, fall
+    if erwartet is not None:
+        assert _auftraege(ctx) == erwartet, fall
+
+
+@pytest.mark.parametrize("trigger_id, jetzt, untergang", [
+    ("halten_abrechnung", _utc(UNTERGANG_16_10) + dt.timedelta(seconds=1), UNTERGANG_16_10),
+    ("halten_abrechnung", _utc(UNTERGANG_16_10) + dt.timedelta(seconds=10), UNTERGANG_17_10),
+    ("maintenance", zeit(dt.date(2026, 10, 16), 23, 58) + dt.timedelta(seconds=5), UNTERGANG_17_10),
+])
+def test_nachholen_eigener_trigger_ist_kein_verpasster(blueprint, trigger_id, jetzt, untergang):
+    """Ist der erste Lauf selbst der Termin, stellt er sich nicht noch einmal in die Warteschlange."""
+    letzter = jetzt - dt.timedelta(minutes=3) if trigger_id == "halten_abrechnung" else zeit(dt.date(2026, 10, 16), 23, 50)
+    erster, ctx, _ = _nachholen(blueprint, jetzt, letzter, letzter + dt.timedelta(minutes=1), untergang,
+                                trigger_id=trigger_id)
+    assert erster is True and _auftraege(ctx) == []
+
+
+def test_nachholen_ohne_breitengrad_nur_wartung(blueprint):
+    """Ohne zone.home-Breite ist der heutige Untergang nach dem Termin nicht bestimmbar: dann nichts dazu."""
+    s = _utc(UNTERGANG_16_10)
+    erster, ctx, _ = _nachholen(blueprint, s + dt.timedelta(minutes=42), s - dt.timedelta(minutes=20),
+                                s + dt.timedelta(minutes=41), UNTERGANG_17_10, breite=None)
+    assert ctx["nh_untergang"] == 0 and _auftraege(ctx) == []
+
+
+def test_wartung_traegt_beim_nachholen_den_tag_des_termins_ein(blueprint, tag):
+    """Die 100-%-Liste bekommt den Tag des verpassten Termins, nicht den Tag des Nachholens."""
+    block = next(st for st in blueprint["action"] if isinstance(st, dict)
+                 and any(str(o.get("alias", "")).startswith("100%-Tage-Tracking") for o in (st.get("choose") or [])))
+    roh = block["choose"][0]["sequence"][0]["then"][0]["variables"]["tracking_heute"]
+    h = szenario(blueprint, zeit(tag, 0, 12))
+    assert h._aufloesen(roh, {"trigger": {"id": "maintenance", "platform": "time"}}) == tag.isoformat()
+    nachgeholt = {"id": "maintenance", "platform": "event", "event": {"data": {"tag": "2026-08-27"}}}
+    assert h._aufloesen(roh, {"trigger": nachgeholt}) == "2026-08-27"

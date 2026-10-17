@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.3.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.4.0]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -632,8 +632,8 @@ trigger:
     id: wp_kompressor_aus
   - alias: "Trigger: Home-Assistant-Neustart (Einlesepause)"
     # Nach einem HA-Neustart sind Deye- und BMS-Entitaeten kurzzeitig
-    # 'unavailable'. Dieser Lauf tut nichts ausser 20 s zu warten - da die
-    # Automation im Modus 'queued' laeuft, stauen sich gleichzeitig
+    # 'unavailable'. Dieser Lauf holt verpasste Termine nach und wartet dann
+    # 20 s - da die Automation im Modus 'queued' laeuft, stauen sich gleichzeitig
     # ausgeloeste Laeufe dahinter und finden danach saubere Werte vor.
     platform: homeassistant
     event: start
@@ -677,6 +677,36 @@ trigger:
     to: "active"
     from: "idle"
     id: wp_anlauf_start
+  # Verpasste Termine nach einem Neustart: Der erste Lauf feuert das Ereignis,
+  # die Trigger tragen die ID des verpassten Termins, damit dessen Bloecke greifen.
+  - alias: "Trigger: Abrechnung bei Sonnenuntergang nachholen (nach Neustart)"
+    platform: event
+    event_type: pv_optimizer_nachholen
+    event_data:
+      automation: "{{ this.entity_id }}"
+      aufgabe: halten_abrechnung
+    id: halten_abrechnung
+  - alias: "Trigger: Prüfung nach Sonnenuntergang nachholen (nach Neustart)"
+    platform: event
+    event_type: pv_optimizer_nachholen
+    event_data:
+      automation: "{{ this.entity_id }}"
+      aufgabe: sunset_check
+    id: sunset_check
+  - alias: "Trigger: Wartung nachholen (nach Neustart)"
+    platform: event
+    event_type: pv_optimizer_nachholen
+    event_data:
+      automation: "{{ this.entity_id }}"
+      aufgabe: maintenance
+    id: maintenance
+  - alias: "Trigger: Wochenablage nachholen (nach Neustart)"
+    platform: event
+    event_type: pv_optimizer_nachholen
+    event_data:
+      automation: "{{ this.entity_id }}"
+      aufgabe: aufzeichnung_ablegen
+    id: aufzeichnung_ablegen
 
 # ====================================================================
 # QUEUED MODE (Schützt Timer-Events vor parallelen Triggern)
@@ -687,25 +717,11 @@ trace:
   stored_traces: 600
 
 action:
-  # NEUSTART-EINLESEPAUSE
-  #
-  # Nach einem HA-Neustart melden Deye- und BMS-Entitaeten kurzzeitig
-  # 'unavailable'. Dieser Lauf wartet nur - im Modus 'queued' stauen sich
-  # gleichzeitig ausgeloeste Laeufe dahinter und finden danach saubere Werte
-  # vor. Danach wird der Lauf beendet: Zum Regeln waeren die Werte zwar da,
-  # aber der naechste regulaere Trigger uebernimmt das ohnehin.
-  - if:
-      - condition: trigger
-        id: ha_start
-    then:
-      - delay: "00:00:20"
-      - stop: "Neustart-Einlesepause beendet - Regelung übernimmt der nächste reguläre Lauf."
-
   # ====================================================================
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.3.0]"
+      bp_version: "[V7.4.0]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -798,6 +814,122 @@ action:
       var_batterie_heute_voll: !input helper_batterie_heute_voll
       var_max_soc_heute: !input helper_max_soc_heute
 
+  # NACHHOLEN NACH NEUSTART
+  #
+  # Home Assistant holt Termine nicht nach, die in einen Neustart fielen. Der erste
+  # Lauf danach (letztes Ausloesen vor dem Anlegen oder Einschalten der Automation)
+  # stellt verpasste Termine mit ihrer Trigger-ID in die Warteschlange: die erste
+  # Wartung (jede weitere setzte nur dasselbe zurueck), die heutige Wochenablage und
+  # den heutigen Sonnenuntergang (danach sind Tageszaehler und Voll-Marker zurueckgesetzt).
+  - if:
+      - condition: template
+        value_template: >
+          {% set l = as_timestamp(this.attributes.last_triggered | default(none), 0) if this is mapping else 0 %}
+          {{ l > 0 and l < as_timestamp(this.last_changed | default(none), 0) }}
+    then:
+      - variables:
+          nh_letzter: "{{ as_timestamp(this.attributes.last_triggered) }}"
+          nh_gestartet: "{{ as_timestamp(this.last_changed) }}"
+          nh_jetzt: "{{ as_timestamp(now()) }}"
+          # Erste 23:58 nach dem letzten Lauf.
+          nh_wartung: >
+            {% set l = as_local(as_datetime(nh_letzter)) %}
+            {% set t = l.replace(hour=23, minute=58, second=0, microsecond=0) %}
+            {{ as_timestamp(t if t > l else t + timedelta(days=1)) }}
+          # Heutiger Sonnenuntergang. Ist er vorbei, nennt sun.sun nur den morgigen;
+          # der heutige liegt dann 24 h davor, verschoben um die Tagesaenderung aus
+          # Deklination und Zeitgleichung (auf Sekunden genau, die Abweichung zum
+          # Vortag allein betraegt bis zu zweieinhalb Minuten). 0 = nicht bestimmbar.
+          nh_untergang: >
+            {% set n = as_datetime(state_attr('sun.sun', 'next_setting') | default('', true)) %}
+            {% set breite = state_attr('zone.home', 'latitude') %}
+            {% set k = (as_local(n).date() - now().date()).days if n is not none else -1 %}
+            {% if k == 0 %}{{ as_timestamp(n) }}
+            {% elif k == 1 and breite is number %}
+              {% set phi = breite * pi / 180 %}
+              {% set ns = namespace(m=[]) %}
+              {% for d in [now(), as_local(n)] %}
+                {% set j = 366 if d.year % 4 == 0 and (d.year % 100 != 0 or d.year % 400 == 0) else 365 %}
+                {% set g = 2 * pi / j * ((d.strftime('%j') | int) - 0.75) %}
+                {% set eq = 229.18 * (0.000075 + 0.001868 * cos(g) - 0.032077 * sin(g) - 0.014615 * cos(2 * g) - 0.040849 * sin(2 * g)) %}
+                {% set de = 0.006918 - 0.399912 * cos(g) + 0.070257 * sin(g) - 0.006758 * cos(2 * g) + 0.000907 * sin(2 * g) - 0.002697 * cos(3 * g) + 0.00148 * sin(3 * g) %}
+                {% set x = cos(90.833 * pi / 180) / (cos(phi) * cos(de)) - tan(phi) * tan(de) %}
+                {% set ns.m = ns.m + [4 * acos([[x, -1] | max, 1] | min) * 180 / pi - eq] %}
+              {% endfor %}
+              {{ as_timestamp(n) - 86400 - (ns.m[1] - ns.m[0]) * 60 }}
+            {% else %}0{% endif %}
+          # Verpasst ist ein Termin nach dem letzten Lauf, der vor diesem lag. Marge 15 s
+          # fuer den geschaetzten Sonnenuntergang, 2 s fuer die Uhrzeit, ausser der Termin
+          # lag vor dem Anlegen (dann feuert sein Trigger heute nicht mehr). Eine Pruefung,
+          # deren Termin noch bevorsteht, feuert selbst; der eigene Trigger ist kein
+          # verpasster. Untereinander in zeitlicher Folge: erst die Wartung, dann der Abend.
+          nh_auftraege: >
+            {% set ns = namespace(a=[]) %}
+            {% set u = nh_untergang | float(0) %}
+            {% if u > 0 and nh_letzter < u - 15 and u <= nh_jetzt and trigger.id != 'halten_abrechnung' %}
+              {% set ns.a = ns.a + [{'aufgabe': 'halten_abrechnung', 'termin': u}] %}
+            {% endif %}
+            {% if u > 0 and nh_letzter < u + 1785 and u + 1815 <= nh_jetzt and trigger.id != 'sunset_check' %}
+              {% set ns.a = ns.a + [{'aufgabe': 'sunset_check', 'termin': u + 1800}] %}
+            {% endif %}
+            {% if (nh_wartung <= nh_jetzt - 2 or nh_gestartet >= nh_wartung + 1) and trigger.id != 'maintenance' %}
+              {% set ns.a = ns.a + [{'aufgabe': 'maintenance', 'termin': nh_wartung}] %}
+            {% endif %}
+            {% set ab = as_timestamp(today_at('00:00:30')) %}
+            {% if now().weekday() == 0 and nh_letzter < ab and (ab <= nh_jetzt - 2 or nh_gestartet >= ab + 1) and trigger.id != 'aufzeichnung_ablegen' %}
+              {% set ns.a = ns.a + [{'aufgabe': 'aufzeichnung_ablegen', 'termin': ab}] %}
+            {% endif %}
+            {{ ns.a | sort(attribute='termin') }}
+          nh_liste: >
+            {% set namen = {'halten_abrechnung': 'Abrechnung bei Sonnenuntergang', 'sunset_check': 'Prüfung 30 Minuten nach Sonnenuntergang',
+                            'maintenance': 'Wartung', 'aufzeichnung_ablegen': 'Wochenablage der Aufzeichnung'} %}
+            {% set ns = namespace(t=[]) %}
+            {% for a in nh_auftraege %}
+              {% set z = as_local(as_datetime(a.termin)) %}
+              {% set ns.t = ns.t + [namen[a.aufgabe] ~ (' vom ' ~ z.strftime('%d.%m.') if z.date() != now().date() else '') ~ ' um ' ~ z.strftime('%H:%M')] %}
+            {% endfor %}
+            {{ ns.t }}
+      - repeat:
+          for_each: "{{ nh_auftraege }}"
+          sequence:
+            - event: pv_optimizer_nachholen
+              event_data:
+                automation: "{{ this.entity_id }}"
+                aufgabe: "{{ repeat.item.aufgabe }}"
+                tag: "{{ as_local(as_datetime(repeat.item.termin)).strftime('%Y-%m-%d') }}"
+      - if:
+          - condition: template
+            value_template: "{{ nh_auftraege | length > 0 }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >-
+                {{ log_kopf }} Nachholen: {{ (nh_liste[:-1] | join(', ') ~ ' und ') if nh_liste | length > 1 else '' }}{{ nh_liste[-1] }} {{ 'werden' if nh_liste | length > 1 else 'wird' }} nachgeholt, da die Automation zu {{ 'diesen Zeitpunkten' if nh_liste | length > 1 else 'diesem Zeitpunkt' }} nicht lief.
+                {%- set l = as_local(as_datetime(nh_letzter)) %} (Letzter Lauf davor {{ l.strftime('%d.%m. ') if l.date() != now().date() else '' }}{{ l.strftime('%H:%M:%S') }}.)
+              entity_id: !input helper_logbook_dummy
+
+  # NEUSTART-EINLESEPAUSE
+  #
+  # Nach einem HA-Neustart melden Deye- und BMS-Entitaeten kurzzeitig
+  # 'unavailable'. Dieser Lauf wartet hier - im Modus 'queued' stauen sich
+  # gleichzeitig ausgeloeste Laeufe dahinter und finden danach saubere Werte
+  # vor. Danach wird der Lauf beendet: Zum Regeln waeren die Werte zwar da,
+  # aber der naechste regulaere Trigger uebernimmt das ohnehin.
+  - if:
+      - condition: trigger
+        id: ha_start
+    then:
+      - delay: "00:00:20"
+      - stop: "Neustart-Einlesepause beendet - Regelung übernimmt der nächste reguläre Lauf."
+  # Nachgeholte Laeufe warten ebenso: Stand der erste Lauf vor dem Neustart-Lauf,
+  # kaemen sie sonst vor dessen Pause an die Reihe.
+  - if:
+      - condition: template
+        value_template: "{{ trigger.platform == 'event' }}"
+    then:
+      - delay: "00:00:20"
+
   # AUFZEICHNUNG WOCHENWEISE ABLEGEN: Montags benennt shell_command aus dem
   # Package die laufende Datei nach der abgelaufenen ISO-Woche um; die naechste
   # Zeile legt sie neu an. Ein fehlender shell_command liesse den Lauf scheitern
@@ -864,7 +996,8 @@ action:
                   {% else %}
                     {{ [] }}
                   {% endif %}
-                tracking_heute: "{{ now().strftime('%Y-%m-%d') }}"
+                # Nachgeholt (nach einem Neustart) gilt der Tag des verpassten Termins.
+                tracking_heute: "{{ trigger.event.data.tag if trigger.platform == 'event' else now().strftime('%Y-%m-%d') }}"
                 tracking_war_voll: "{{ is_state(var_batterie_heute_voll, 'on') }}"
                 # Heutigen Tag anhaengen, wenn die Batterie voll war, auf 14 Eintraege
                 # begrenzt (input_text-Limit 255 Zeichen). Eine leere Liste bekommt ihn
@@ -2724,11 +2857,14 @@ action:
       # 5-Minuten-Raster zufaellig trifft, schreibt so keinen Halte-Wert.
       tages_max_soc: "{{ (states(var_max_soc_heute) | float(0)) if var_max_soc_heute != '' else aktueller_soc }}"
       entlaedt_nachhaltig: "{{ batterie_leistung > 100 and aktueller_soc < tages_max_soc - 0.5 }}"
+      # Angehoben wird nicht, solange die Batterie laedt: Die Grenze wirkt dann nicht,
+      # und mittags wandert der Plan mit dem Vorlauf-Vertrauen ueber eine 5-%-Stufe und zurueck.
       tou_schreiben: >
         {{ entlade_aktiv and not soc_fehlt
            and ((f_soc - tou_ist) | abs) >= 5
            and aktueller_soc <= ([f_soc, tou_ist] | max) + tou_schreib_vorlauf
            and (not halten_fall or entlaedt_nachhaltig)
+           and not (f_soc > tou_ist and batterie_leistung < -100)
            and not (f_soc < tou_ist and unter_register) }}
       # Wann die Batterie die Untergrenze erreicht: Energie ueber der nach diesem
       # Lauf wirksamen Grenze gegen das Verbrauchsprofil ab jetzt (laufender Slot
@@ -3387,12 +3523,12 @@ action:
           # einzige Stelle, die den Ladestrom fuer die Nacht auf Max oeffnet.
           # Faellt dieser einmalige Trigger aus (Reload/Neustart nach
           # Sonnenuntergang), bliebe das Register ueber Nacht gedrosselt. Hier als
-          # Sicherung nachziehen - nur bei echter Abweichung (sonst jede Nacht ein
-          # Log). Die Prio-Zweige greifen nachts ohnehin nicht.
+          # Sicherung nachziehen - nur nachts (bei Tag regelt die Kaskade, auch nach
+          # einer nachgeholten Wartung) und nur bei echter Abweichung (sonst jede Nacht ein Log).
           - if:
               - condition: template
                 value_template: >
-                  {{ ((aktueller_ladestrom | round(0)) - (max_ampere | round(0))) | abs >= 2 }}
+                  {{ not is_day and ((aktueller_ladestrom | round(0)) - (max_ampere | round(0))) | abs >= 2 }}
             then:
               - action: logbook.log
                 data:
