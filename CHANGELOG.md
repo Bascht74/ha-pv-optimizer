@@ -10,6 +10,14 @@ Logbuch-Meldung trägt ihn.
 
 ## [Unreleased]
 
+## [V7.5.1] - 2026-10-17
+
+### Fixed
+- The day's highest state of charge is stored rounded down to 0.1 %. A shadow BMS reports a dozen
+  decimals, and Home Assistant does not round an `input_number` to its step, so the helper showed
+  the raw sensor value. Rounded down, the comparison with the whole-percent target at sunset comes
+  out the same as with the raw value, and every log text shows the value rounded down.
+
 ## [V7.5.0] - 2026-10-17
 
 ### Added
@@ -1226,7 +1234,8 @@ Logbuch-Meldung trägt ihn.
 - The Deye availability check no longer reports an unassigned entity field as an outage,
   which would mask the actual cause.
 
-[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.5.0...HEAD
+[Unreleased]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.5.1...HEAD
+[V7.5.1]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.5.0...V7.5.1
 [V7.5.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.4.0...V7.5.0
 [V7.4.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.3.0...V7.4.0
 [V7.3.0]: https://github.com/Bascht74/ha-pv-optimizer/compare/V7.2.1...V7.3.0
