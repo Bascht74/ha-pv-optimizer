@@ -1,5 +1,5 @@
 blueprint:
-  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.5.0]"
+  name: "🌞 Master-Ladesteuerung: PV, Batterie & Wärmepumpe [V7.5.1]"
   description: >-
     Lädt die Batterie so, dass sie erst gegen Sonnenuntergang voll wird, und gibt vollen Strom
     frei, wenn die Zeit nicht reicht. Kappt Einspeisespitzen, plant die Entlade-Untergrenze der
@@ -721,7 +721,7 @@ action:
   # GLOBALE VARIABLEN FÜR DEN GESAMTEN ACTION-BLOCK
   # ====================================================================
   - variables:
-      bp_version: "[V7.5.0]"
+      bp_version: "[V7.5.1]"
       # Startzeit des Laufs: Registerwechsel danach markieren eine Entscheidung,
       # die eine eigene Aufzeichnungszeile bekommt.
       lauf_start: "{{ now().isoformat() }}"
@@ -3361,7 +3361,7 @@ action:
           name: "PV Optimizer"
           message: >-
             {{ log_kopf }} Entlade-Untergrenze: ToU-Programme 1–6 von {{ tou_ist | round(0) }} % auf {{ f_soc }} % gesetzt, da
-            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ ([f_roh, 100] | min) | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0) }} % und die Batterie deshalb gehalten wird
+            {%- if f_roh > aktueller_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % < Untergrenze {{ ([f_roh, 100] | min) | round(0) }} % bei Entladung {{ batterie_leistung | round(0) }} W unter den Tageshöchststand {{ tages_max_soc | round(0, 'floor') }} % und die Batterie deshalb gehalten wird
             {%- elif tou_ist > f_soc %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ bisheriges Register {{ tou_ist | round(0) }} % + {{ tou_schreib_vorlauf }} % Vorlauf und die neue Untergrenze {{ f_soc }} % liegt darunter
             {%- else %} Ladestand (SOC) {{ aktueller_soc | round(0) }} % ≤ Untergrenze {{ f_soc }} % + {{ tou_schreib_vorlauf }} % Vorlauf{% endif %}.
             {%- if soc_versatz %} Am Wechselrichter steht dafür {{ tou_schreibwert }} %, da sein eigener Ladestand (SOC) {{ soc_deye | round(0) }} % beträgt, {{ '%+.1f' | format(soc_versatz) }} % gegenüber dem Schatten-BMS.{% endif %}
@@ -3413,15 +3413,18 @@ action:
             {%- else %}{% set puffer = [ blockade_dyn_ueber_ges * (puffer_anteil | float(0.1)), puffer_kwh | float(1.0) ] | min %}{% set verf = blockade_dyn_ueber_ges - puffer %}{% set bedarf = (faktor_fallback | float(1.2)) * (freie_kwh + blockade_dyn_d_ges) %}{% set nk = 2 if (verf - bedarf) | abs < 0.1 else 1 %} der späteste Ladebeginn erreicht ist: Bedarf {{ bedarf | round(nk) }} kWh > Verfügbar {{ verf | round(nk) }} kWh ab der nächsten Halbstunde (Bedarf = freie Ladekapazität {{ freie_kwh | round(nk) }} kWh von {{ batterie_kapazitaet | round(1) }} kWh{% if blockade_dyn_d_ges > 0 %} + Nachladebedarf {{ blockade_dyn_d_ges | round(nk) }} kWh für Stunden mit Hausverbrauch über PV{% endif %} × Faktor {{ faktor_fallback }}; Verfügbar = Überschuss {{ blockade_dyn_ueber_ges | round(nk) }} kWh − Puffer {{ puffer | round(nk) }} kWh).{% endif %}
           entity_id: !input helper_logbook_dummy
 
+  # Ein Schatten-BMS liefert ein Dutzend Nachkommastellen, und input_number rundet
+  # nicht auf seinen step. Abgerundet auf 0,1 geht der Vergleich mit dem ganzzahligen
+  # Ziel-Ladestand aus wie mit dem Rohwert; angezeigt wird er ebenfalls abgerundet.
   - if:
       - condition: template
-        value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 and aktueller_soc > (states(var_max_soc_heute) | float(0)) }}"
+        value_template: "{{ var_max_soc_heute is string and var_max_soc_heute | length > 0 and (aktueller_soc | round(1, 'floor')) > (states(var_max_soc_heute) | float(0)) }}"
     then:
       - action: input_number.set_value
         target:
           entity_id: !input helper_max_soc_heute
         data:
-          value: "{{ aktueller_soc }}"
+          value: "{{ aktueller_soc | round(1, 'floor') }}"
 
   # VOLL: Ab 99 % gilt die Batterie fuer den Rest des Tages als voll; den
   # Ladestrom am oberen Ende nimmt das BMS selbst zurueck. Nur bei Tag, damit
@@ -3640,7 +3643,7 @@ action:
                   name: "PV Optimizer"
                   message: >-
                     {{ log_kopf }} Diagnose: Einspeisespitze überschätzt, die Morgen-Blockade lief heute, aber die Netzeinspeisung hat die Peak-Shaving-Schwelle {{ schwelle_peak_shaving | round(0) }} W nie überschritten; die zurückgehaltene Kapazität wurde nicht gebraucht.
-                    {%- if var_max_soc_heute != '' %} (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) | float(0) | round(0) }} %.){% endif %}
+                    {%- if var_max_soc_heute != '' %} (Informativ: höchster Tages-Ladestand (SOC) {{ states(var_max_soc_heute) | float(0) | round(0, 'floor') }} %.){% endif %}
                   entity_id: !input helper_logbook_dummy
 
           - if:

@@ -805,6 +805,36 @@ def test_nicht_voll_hinweis_bei_eingestelltem_ziel_100(blueprint, tag):
     assert len(hinweis) == 1 and "Batterie wurde heute nicht voll: höchster Tages-Ladestand (SOC) 95 % < 99 %. (Ziel-Ladestand 100 %" in hinweis[0], hinweis
 
 
+def _tageshoechststand(h, blueprint, ctx):
+    """Der Block auf oberster Ebene, der den hoechsten Ladestand des Tages fortschreibt."""
+    eid = standard_inputs(blueprint)["helper_max_soc_heute"]
+    block = next(st for st in blueprint["action"] if isinstance(st, dict) and "if" in st
+                 and "helper_max_soc_heute" in str(st.get("then")))
+    aktionen: list = []
+    if all(bedingung(h, b, ctx) for b in block["if"]):
+        _lauf(h, block["then"], ctx, aktionen)
+    return schreibt(aktionen, "input_number.set_value", eid)
+
+
+@pytest.mark.parametrize("deye, schatten, gespeichert, erwartet", [
+    (44, "44.4495582580566", 0.0, [44.4]),     # Schatten-BMS: abgerundet statt Rohwert
+    (44, "44.4495582580566", 44.4, []),        # gleicher Wert auf 0,1: kein erneutes Schreiben
+    (89, "89.96", 89.0, [89.9]),               # nicht auf 90 gerundet: das Ziel 90 % gilt nicht als erreicht
+    (59, None, 0.0, [59.0]),                   # ganzzahliger Wert des Wechselrichters unveraendert
+])
+def test_tageshoechststand_auf_ein_zehntel_abgerundet(blueprint, tag, deye, schatten, gespeichert, erwartet):
+    """
+    input_number rundet einen geschriebenen Wert nicht auf seinen step; ungerundet stuende
+    der Rohwert des Schatten-BMS im Helfer. Abgerundet gehen Vergleiche mit ganzen Prozent
+    aus wie mit dem Rohwert.
+    """
+    h = szenario(blueprint, zeit(tag, 12, 0), soc=deye, schatten_soc=schatten,
+                 zustands_overrides=_z(blueprint, "helper_max_soc_heute", str(gespeichert)))
+    ctx = h.auswerten()
+    assert ctx["aktueller_soc"] == float(schatten if schatten is not None else deye)
+    assert [float(w) for w in _tageshoechststand(h, blueprint, ctx)] == erwartet
+
+
 def _voll_marker(blueprint):
     """Der Block, der die Batterie ab 99 % fuer den Rest des Tages als voll markiert."""
     return next(s for s in blueprint["action"] if isinstance(s, dict) and "if" in s
@@ -1240,3 +1270,4 @@ def test_leere_100_prozent_liste_startet_mit_dem_ersten_tag(blueprint, tag, list
     meldungen = schreibt(aktionen, "logbook.log")
     assert len(meldungen) == (1 if not liste else 0)
     assert all(f"Liste mit {tage['heute']} begonnen" in str(m) for m in meldungen)
+
