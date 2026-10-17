@@ -3892,9 +3892,10 @@ action:
           - condition: template
             value_template: "{{ wp_boost_karenz_ok }}"
         sequence:
-          # Timer vor den Befehlen an die Wärmepumpe: Lehnt eine Cloud-Integration
-          # einen Befehl ab, endet der Lauf dort. Die Timer halten dann trotzdem
-          # Anlaufsperre und Laufzeit, statt dass der nächste Lauf neu startet.
+          # Timer und Meldung vor den Befehlen an die Wärmepumpe: Lehnt eine
+          # Cloud-Integration einen Befehl ab, endet der Lauf dort. Die Timer halten
+          # dann trotzdem Anlaufsperre und Laufzeit, statt dass jeder Lauf neu
+          # startet, und das Logbuch nennt den Grund für den gehaltenen Ladestrom.
           - action: timer.start
             target:
               entity_id: !input helper_timer_wp_anlauf
@@ -3905,6 +3906,15 @@ action:
               entity_id: !input helper_timer_wp_boost
             data:
               duration: !input duration_wp_laufzeit
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: >
+                {{ log_kopf }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Anlauf- und Laufzeit-Timer gestartet, Warmwasser-Ziel wird von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben{% if var_wp_hysterese_number != '' %} (Hysterese {{ var_wp_hysterese_pv }} K){% endif %},
+                {%- if real_export > schwelle_wp_boost %} da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C).
+                {%- else %} da Tagesüberschuss {{ ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(1) }} kWh ≥ Strom je Ladung {{ ww_energie_kwh | round(1) }} kWh, also auch ohne Einspeisespitze genug übrig (Tagesüberschuss = Restüberschuss {{ brutto_ueberschuss_rest | round(1) }} kWh − Puffer {{ puffer_fall_b | round(1) }} kWh − Bedarf der Batterie {{ benoetigt_kwh | round(1) }} kWh × Faktor {{ faktor_fallback }}; Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ [(var_wp_ziel_temp_pv - var_wp_hysterese_pv), var_wp_ziel_temp_normal] | min | round(1) }} °C; Batteriepuffer über der Entlade-Untergrenze {{ ww_puffer_kwh | round(1) }} kWh).
+                {%- endif %}
+              entity_id: !input helper_logbook_dummy
           - if:
               - condition: template
                 value_template: "{{ var_wp_hysterese_number != '' }}"
@@ -3940,15 +3950,6 @@ action:
               - action: button.press
                 target:
                   entity_id: "{{ var_wp_boost_button }}"
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: >
-                {{ log_kopf }} Wärmepumpen-Warmwasser-Boost (PV) ausgelöst: Warmwasser-Ziel von {{ var_wp_ziel_temp_normal }} °C auf {{ var_wp_ziel_temp_pv }} °C angehoben{% if var_wp_hysterese_number != '' %} (Hysterese {{ var_wp_hysterese_pv }} K){% endif %}. Anlauf- und Laufzeit-Timer gestartet,
-                {%- if real_export > schwelle_wp_boost %} da Netzeinspeisung {{ real_export | round(0) }} W > Schwelle {{ schwelle_wp_boost | round(0) }} W (Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ (var_wp_ziel_temp_pv - var_wp_hysterese_pv) | round(1) }} °C).
-                {%- else %} da Tagesüberschuss {{ ((brutto_ueberschuss_rest - puffer_fall_b) - benoetigt_kwh * faktor_fallback) | round(1) }} kWh ≥ Strom je Ladung {{ ww_energie_kwh | round(1) }} kWh, also auch ohne Einspeisespitze genug übrig (Tagesüberschuss = Restüberschuss {{ brutto_ueberschuss_rest | round(1) }} kWh − Puffer {{ puffer_fall_b | round(1) }} kWh − Bedarf der Batterie {{ benoetigt_kwh | round(1) }} kWh × Faktor {{ faktor_fallback }}; Warmwasser {{ ww_temp | round(1) }} °C < Startwert {{ [(var_wp_ziel_temp_pv - var_wp_hysterese_pv), var_wp_ziel_temp_normal] | min | round(1) }} °C; Batteriepuffer über der Entlade-Untergrenze {{ ww_puffer_kwh | round(1) }} kWh).
-                {%- endif %}
-              entity_id: !input helper_logbook_dummy
 
       - alias: "WP-BOOST: ENDE (Reset auf Normalwerte)"
         conditions:
@@ -4070,17 +4071,32 @@ action:
                        (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0))
                        and (var_wp_ziel_number == '' or (states(var_wp_ziel_number) | float(-1) | round(0)) == (var_wp_ziel_temp_normal | float(0) | round(0)))
                     ) }}
+          # Auch eine Einmal-Ladung ausschalten, die nach einem abgebrochenen
+          # Laufzeitende noch an ist. Der Eingang (Ziel noch auf dem PV-Wert) lässt
+          # eine in der App gestartete in Ruhe; erst nach dem Ziel, damit ein
+          # abgelehntes Aus den Reset nicht verhindert.
+          - variables:
+              einmal_ladung_an: "{{ (var_wp_boost_button | string).startswith('switch.') and is_state(var_wp_boost_button, 'on') }}"
           - action: logbook.log
             data:
               name: "PV Optimizer"
               message: >
-                {{ log_kopf }} Wärmepumpen-Watchdog (Sicherheits-Reset): Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt{% if var_wp_hysterese_number != '' %} (Hysterese {{ var_wp_hysterese_normal }} K){% endif %}, da beide Wärmepumpen-Timer inaktiv sind, das Ziel aber noch auf dem PV-Boost-Wert stand{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %} (Informativ: vermutlich hat die Wärmepumpe/ViCare den regulären Reset nicht übernommen oder ein Timer ging verloren, z. B. HA-Neustart).
+                {{ log_kopf }} Wärmepumpen-Watchdog (Sicherheits-Reset): Warmwasser-Ziel von {{ var_wp_ziel_temp_pv }} °C auf {{ var_wp_ziel_temp_normal }} °C zurückgestellt{% if var_wp_hysterese_number != '' %} (Hysterese {{ var_wp_hysterese_normal }} K){% endif %}, da beide Wärmepumpen-Timer inaktiv sind, das Ziel aber noch auf dem PV-Boost-Wert stand{% if (state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0)) != (var_wp_ziel_temp_normal | float(0) | round(0)) %} ACHTUNG: Die Wärmepumpe hat den Wert nicht übernommen, sie steht weiterhin auf {{ state_attr(var_wp_water_heater, 'temperature') | float(-1) | round(0) }} °C{% endif %} (Informativ: vermutlich hat die Wärmepumpe/ViCare den regulären Reset nicht übernommen oder ein Timer ging verloren, z. B. HA-Neustart).{% if einmal_ladung_an %} Einmal-Ladung wird ausgeschaltet, da ihr Schalter noch eingeschaltet ist.{% endif %}
               entity_id: !input helper_logbook_dummy
+          - if:
+              - condition: template
+                value_template: "{{ einmal_ladung_an }}"
+            then:
+              - action: switch.turn_off
+                continue_on_error: true
+                target:
+                  entity_id: "{{ var_wp_boost_button }}"
 
   # Eine Einmal-Ladung als Schalter bleibt an, bis die Anlage sie selbst beendet,
   # und heizt sonst über die Laufzeit hinaus. Eigene Gruppe, weil der ENDE-Zweig
-  # nach "WP-LAUFZEIT BEENDEN" nicht läuft. Nur wenn der Schalter noch an ist:
-  # Manche Cloud-Integrationen schicken das Aus ohne eigene Zustandsprüfung.
+  # nach "WP-LAUFZEIT BEENDEN" nicht läuft; bricht der Lauf vorher ab, schaltet
+  # der Watchdog nach. Hinter ENDE, weil dessen Schreiben den Zustand auffrischt;
+  # manche Cloud-Integrationen schicken das Aus ohne eigene Zustandsprüfung.
   - choose:
       - alias: "WP-BOOST: EINMAL-LADUNG AUS (Schalter am Laufzeitende)"
         conditions:
@@ -4091,15 +4107,15 @@ action:
               {{ var_wp_boost_aktiv and (var_wp_boost_button | string).startswith('switch.')
                  and is_state(var_wp_boost_button, 'on') }}
         sequence:
+          - action: logbook.log
+            data:
+              name: "PV Optimizer"
+              message: "{{ log_kopf }} Wärmepumpen-Einmal-Ladung wird ausgeschaltet, da ihr Schalter am Ende der Laufzeit noch eingeschaltet ist."
+              entity_id: !input helper_logbook_dummy
           - action: switch.turn_off
             continue_on_error: true
             target:
               entity_id: "{{ var_wp_boost_button }}"
-          - action: logbook.log
-            data:
-              name: "PV Optimizer"
-              message: "{{ log_kopf }} Wärmepumpen-Einmal-Ladung ausgeschaltet, da ihr Schalter am Ende der Laufzeit noch eingeschaltet war."
-              entity_id: !input helper_logbook_dummy
 
   # WP-LAUFZEIT KUERZEN (Warmwasser am Ziel)
   #

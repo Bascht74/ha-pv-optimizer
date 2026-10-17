@@ -924,12 +924,14 @@ def test_einmal_ladung_drueckt_den_button_oder_schaltet_ein(blueprint, tag, enti
 def test_boost_startet_die_timer_vor_den_befehlen_an_die_waermepumpe(blueprint, tag):
     """
     Lehnt eine Cloud-Integration einen Befehl ab, endet der Lauf dort. Laufen die
-    Timer dann schon, haelt Prio 2 den Strom fuer die anlaufende Pumpe, und der
-    naechste Lauf startet den Boost nicht ein zweites Mal.
+    Timer dann schon, haelt Prio 2 den Strom fest, das Logbuch nennt den Boost als
+    Grund, und der naechste Lauf startet ihn nicht ein zweites Mal.
     """
     ctx, aktionen = _boost_aktionen(blueprint, tag, {"wp_boost_button": SCHALTER})
     assert [(s, e) for s, e, _ in aktionen[:2]] == [("timer.start", ctx["var_timer_wp_anlauf"]),
                                                     ("timer.start", ctx["var_timer_wp_boost"])]
+    assert aktionen[2][0] == "logbook.log"
+    assert "wird von" in aktionen[2][2], "die Meldung steht vor dem Befehl, sie darf ihn nicht als erledigt melden"
 
 
 def test_ohne_hysterese_entitaet_aendert_der_boost_nur_das_ziel(blueprint, tag):
@@ -985,8 +987,8 @@ def test_schalter_wird_am_laufzeitende_ausgeschaltet(blueprint, tag, entitaet, z
     alias, aktionen = zweig_und_aktionen(h, blueprint, zweige=gruppe(blueprint, "WP-BOOST: EINMAL-LADUNG AUS"))
     assert (alias is not None) is schaltet_aus
     if schaltet_aus:
-        assert [(s, e) for s, e, _ in aktionen][0] == ("switch.turn_off", SCHALTER)
-        assert len(schreibt(aktionen, "logbook.log")) == 1
+        assert [s for s, _, _ in aktionen] == ["logbook.log", "switch.turn_off"]
+        assert aktionen[1][1] == SCHALTER
 
 
 def test_schalter_bleibt_ohne_laufzeitende_und_ohne_boost_unberuehrt(blueprint, tag):
