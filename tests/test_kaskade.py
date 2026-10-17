@@ -161,11 +161,11 @@ def wp_boost_watchdog(blueprint, tag):
 SCHALTER = "switch.fx_wp_boost_button"
 
 
-def wp_einmal_ladung_aus(blueprint, tag, zustand="on"):
+def wp_einmal_ladung_aus(blueprint, tag):
     """Die Laufzeit ist zu Ende, die Einmal-Ladung ist ein Schalter und steht noch auf an."""
     return szenario(blueprint, zeit(tag, 12, 0), trigger_id="wp_boost_ende",
                     input_overrides={"wp_boost_button": SCHALTER},
-                    zustands_overrides={SCHALTER: Zustand(SCHALTER, zustand)})
+                    zustands_overrides={SCHALTER: Zustand(SCHALTER, "on")})
 
 
 WEITERE_ZWEIGE = [
@@ -928,11 +928,8 @@ def test_boost_startet_die_timer_vor_den_befehlen_an_die_waermepumpe(blueprint, 
     naechste Lauf startet den Boost nicht ein zweites Mal.
     """
     ctx, aktionen = _boost_aktionen(blueprint, tag, {"wp_boost_button": SCHALTER})
-    dienste = [s for s, _, _ in aktionen]
-    erster_befehl = min(i for i, (s, e, _) in enumerate(aktionen)
-                        if s != "timer.start" and s != "logbook.log")
-    assert dienste[:2] == ["timer.start", "timer.start"]
-    assert erster_befehl == 2, dienste
+    assert [(s, e) for s, e, _ in aktionen[:2]] == [("timer.start", ctx["var_timer_wp_anlauf"]),
+                                                    ("timer.start", ctx["var_timer_wp_boost"])]
 
 
 def test_ohne_hysterese_entitaet_aendert_der_boost_nur_das_ziel(blueprint, tag):

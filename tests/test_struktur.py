@@ -139,6 +139,33 @@ def test_boost_start_verlangt_gueltigen_warmwasser_sensor(blueprint):
     raise AssertionError("WP-BOOST: START nicht gefunden")
 
 
+def test_hysterese_wird_nur_mit_entitaet_geschrieben(blueprint):
+    """
+    Das Hysterese-Feld ist optional. Ein Schreibvorgang ohne Waechter ginge mit
+    leerer Entitaet an Home Assistant und braeche den Lauf ab - auch in den
+    Zweigen mit repeat:, die der Kaskaden-Ausfuehrer nicht nachspielt.
+    """
+    gefunden, ungeschuetzt = [], []
+
+    def lauf(knoten, geschuetzt, pfad):
+        if isinstance(knoten, list):
+            for i, k in enumerate(knoten):
+                lauf(k, geschuetzt, f"{pfad}[{i}]")
+        elif isinstance(knoten, dict):
+            ziel = str((knoten.get("target") or {}).get("entity_id", ""))
+            if knoten.get("action") == "number.set_value" and "var_wp_hysterese_number" in ziel:
+                gefunden.append(pfad)
+                if not geschuetzt:
+                    ungeschuetzt.append(pfad)
+            schutz = geschuetzt or ("if" in knoten and "var_wp_hysterese_number != ''" in str(knoten["if"]))
+            for k, v in knoten.items():
+                lauf(v, schutz if k == "then" else geschuetzt, f"{pfad}.{k}")
+
+    lauf(blueprint["action"], False, "action")
+    assert len(gefunden) == 5, gefunden
+    assert ungeschuetzt == [], f"Hysterese ohne Waechter geschrieben: {ungeschuetzt}"
+
+
 def test_halbstundenzaehler_werden_zurueckgesetzt_nie_kalibriert(blueprint):
     """
     Nur utility_meter.reset setzt last_reset, an dem der naechste Lauf einen frischen Stand
